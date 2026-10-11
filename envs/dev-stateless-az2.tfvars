@@ -70,8 +70,11 @@ entra_reader_group_object_ids = []
 # the single small node; the landing zone audits the subscription with Azure Policy instead.
 azure_policy_enabled = false
 
+# Standard_D2als_v6: the smallest size with availability zones in swedencentral and quota in the
+# subscription - Standard_B2s has no zones there (AvailabilityZoneNotSupported), and the B-series v2
+# family has no quota. 2 vCPU, 4 GiB, amd64. A system node pool cannot run on Spot VMs.
 default_node_pool = {
-  vm_size             = "Standard_B2s"
+  vm_size             = "Standard_D2als_v6"
   availability_zones  = ["2"]
   enable_auto_scaling = false
   node_count          = 1
