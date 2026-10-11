@@ -146,6 +146,36 @@ jobs:
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
 
+      # The resource providers and the preview feature the configuration needs (README, "Prerequisites"),
+      # registered in the environment's subscription - an empty one from the landing zone has few of
+      # them. Idempotent: a registered provider is left alone. The feature waits until it is registered,
+      # then the provider is registered again, as AKS asks for a feature to take effect.
+      - name: Register resource providers
+        run: |
+          set -euo pipefail
+          providers="Microsoft.ContainerService Microsoft.KubernetesConfiguration Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.PolicyInsights"
+          for p in $providers; do
+            [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
+          done
+          feature=ManagedGatewayAPIPreview
+          if [ "$(az feature show --namespace Microsoft.ContainerService --name $feature --query properties.state -o tsv)" != Registered ]; then
+            az feature register --namespace Microsoft.ContainerService --name $feature -o none
+            for _ in $(seq 1 40); do
+              [ "$(az feature show --namespace Microsoft.ContainerService --name $feature --query properties.state -o tsv)" = Registered ] && break
+              sleep 30
+            done
+            az provider register -n Microsoft.ContainerService -o none
+          fi
+          for _ in $(seq 1 40); do
+            pending=""
+            for p in $providers; do
+              [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || pending="$pending $p"
+            done
+            [ -z "$pending" ] && exit 0
+            echo "Waiting for:$pending"; sleep 30
+          done
+          echo "::error::Not registered:$pending"; exit 1
+
       # The state lives in the environment's own subscription. Idempotent: a run that finds the account
       # changes nothing. Shared key access stays on: the backend reads the state with the account key.
       - name: Prepare the state storage
