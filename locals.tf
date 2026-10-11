@@ -75,6 +75,10 @@ locals {
     {
       cluster_name    = var.name
       azure_tenant_id = data.azurerm_client_config.current.tenant_id
+      # A double quote, for values that look like booleans or numbers: kustomize drops the quotes
+      # around "${var}", so a field that must be a string is written ${quote}${var}${quote} (Flux,
+      # "Post build substitution of numbers and booleans").
+      quote = "\""
     },
     # The cluster's Key Vault, and for each namespace with a share of it the identity that reads
     # that share: `key_vault_client_id_<namespace>`, the namespace's hyphens as underscores, since a
