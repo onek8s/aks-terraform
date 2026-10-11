@@ -105,7 +105,7 @@ default_node_pool = {
 managed_namespaces = {
   example = {
     flux = {
-      url         = "https://github.com/olljanat-ai/aks-fluxcd-example"
+      url         = "https://github.com/onek8s/aks-fluxcd-example"
       path        = "./apps"
       secret_name = "aks-fluxcd-example-git"
       # Read every minute, like the platform's repository.
@@ -115,7 +115,7 @@ managed_namespaces = {
 }
 
 flux_git_repository = {
-  url    = "https://github.com/olljanat-ai/aks-fluxcd-platform"
+  url    = "https://github.com/onek8s/aks-fluxcd-platform"
   branch = "main"
   path   = "./clusters/prototype-a"
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
