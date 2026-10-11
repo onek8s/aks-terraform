@@ -13,9 +13,7 @@ name: Cluster status
 #
 # Credentials: the same Azure identity and GitHub environment as Deploy - a service principal with
 # AZURE_CLIENT_SECRET, or GitHub OIDC without it.
-#
-# Besides by hand, it runs on a pull request that changes this file - so a change to what it reports
-# shows its own result - once the repository has its Azure identity (AZURE_CLIENT_ID).
+
 on:
   workflow_dispatch:
     inputs:
@@ -25,9 +23,6 @@ on:
         default: "aks-dev-stateless-az1"
         type: choice
         options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
-  pull_request:
-    paths:
-      - .github/workflows/cluster-status.yml
 
 permissions:
   contents: read
@@ -37,7 +32,6 @@ jobs:
   status:
     name: status ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
     runs-on: ubuntu-latest
-    if: vars.AZURE_CLIENT_ID != ''
     environment: dev
     env:
       # The clusters and their shared resources - the private zone among them - are all in one
