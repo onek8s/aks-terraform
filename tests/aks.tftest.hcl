@@ -3017,6 +3017,7 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_provider == "azure",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_private == "false",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.quote == "\"",
     ])
     error_message = "The platform Kustomization should be told the vault URL, each namespace's identity and where the zone is."
   }
