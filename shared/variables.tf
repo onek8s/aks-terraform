@@ -134,6 +134,17 @@ variable "dns_zone_name" {
   description = "The public Azure DNS zone every cluster of the environment publishes its hostnames in. Null for none."
 }
 
+variable "dns_zone_private" {
+  type        = bool
+  default     = false
+  description = "Whether dns_zone_name is an Azure Private DNS zone - provisioned and linked to the networks outside this configuration - rather than a public Azure DNS zone. global_hostnames need a public zone."
+  nullable    = false
+  validation {
+    condition     = !(var.dns_zone_private && var.dns_zone_create)
+    error_message = "A private zone is provisioned outside this configuration: dns_zone_create is for a public zone only."
+  }
+}
+
 variable "dns_zone_create" {
   type        = bool
   default     = true
@@ -147,22 +158,10 @@ variable "dns_zone_resource_group_name" {
   description = "Resource group of the public zone. Defaults to `resource_group_name`."
 }
 
-variable "internal_dns_zone_name" {
-  type        = string
-  default     = null
-  description = "The Azure Private DNS zone every cluster of the environment publishes its hostnames in privately. Null for none."
-}
-
 variable "virtual_network_name" {
   type        = string
   default     = null
-  description = "The existing network the clusters are in, which the private zone is linked to so that it resolves there."
-}
-
-variable "virtual_network_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of the network. Defaults to `resource_group_name`."
+  description = "Name of the clusters' network, created here with virtual_network_create."
 }
 
 variable "create_role_assignments" {

@@ -40,7 +40,6 @@ jobs:
       CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
       DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns
       DNS_ZONE: onek8s.lol
-      INTERNAL_DNS_ZONE: internal.onek8s.lol
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
       - name: Sign in to Azure (service principal)
@@ -80,8 +79,6 @@ jobs:
         run: |
           echo "== $DNS_ZONE"
           az network dns record-set list -g "$DNS_ZONE_RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
-          echo "== $INTERNAL_DNS_ZONE"
-          az network private-dns record-set list -g "$RESOURCE_GROUP" -z "$INTERNAL_DNS_ZONE" --query '[].{name: name, type: type, a: aRecords, txt: txtRecords}' --output json
 
       - name: Inside the cluster
         continue-on-error: true
@@ -125,7 +122,6 @@ jobs:
           kubectl get httproute -A -o yaml
           kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
           kubectl logs -n external-dns deploy/external-dns --tail=80
-          kubectl logs -n external-dns deploy/external-dns-internal --tail=80
           kubectl logs -n external-dns deploy/external-dns-public --tail=40
           kubectl get kustomization -n flux-system flux-webhook -o jsonpath="{.status.conditions}"; echo
           kubectl get helmrelease -n flux-system external-dns-public -o jsonpath="{.status.conditions}"; echo

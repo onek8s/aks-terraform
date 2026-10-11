@@ -1,7 +1,7 @@
 name: Renew Certificate
 
-# Issuance and renewal of the certificate the internal Gateway's listeners serve - `wildcard`, for
-# *.onek8s.lol and *.internal.onek8s.lol, which every listener serves - on the schedule and whenever
+# Issuance and renewal of the certificate the Gateway's listeners serve - `wildcard`, for
+# *.onek8s.lol, which every listener serves - on the schedule and whenever
 # this file changes on main, or the one given when run by hand:
 #
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> External Secrets --> Traefik
@@ -37,9 +37,8 @@ name: Renew Certificate
 #
 #   - Key Vault Certificates Officer and Key Vault Secrets Officer on the vault (or Key Vault
 #     Administrator) - the certificate, and the ACME account key beside it.
-#   - DNS Zone Contributor on the DNS zone - the `_acme-challenge` TXT records. The private zone's
-#     names are proven there too: internal.onek8s.lol is not delegated publicly, so Let's Encrypt
-#     looks up `_acme-challenge.internal.onek8s.lol` in the public zone.
+#   - DNS Zone Contributor on the DNS zone - the `_acme-challenge` TXT records. The zone has to be
+#     public for the DNS-01 challenge.
 on:
   schedule:
     # Monthly. A run with nothing to renew exits before ACME is contacted, so a run outside the
@@ -67,7 +66,7 @@ on:
       domains:
         description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
         required: false
-        default: "*.onek8s.lol,*.internal.onek8s.lol"
+        default: "*.onek8s.lol"
         type: string
       certificate_name:
         description: "The platform's <listener>_certificate_name; imported as ingress-gateway--<this>"
@@ -101,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol,*.internal.onek8s.lol","certificate_name":"wildcard"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.

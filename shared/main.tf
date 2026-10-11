@@ -185,13 +185,14 @@ resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
   }
 }
 
-# The zones every cluster of the environment publishes in. Each cluster's external-dns owns its own
-# records under its own name, so the clusters never touch each other's - and a hostname moves with
-# its workload. The registrar is pointed at the public zone's name servers (dns_zone_name_servers).
+# The one zone every cluster of the environment publishes in - public (Azure DNS) or private (Azure
+# Private DNS, dns_zone_private). Each cluster's external-dns owns its own records under its own name,
+# so the clusters never touch each other's - and a hostname moves with its workload.
 #
-# The public zone is created here only with dns_zone_create. Otherwise it exists already - onek8s.lol
-# is created once with the Azure CLI, outside every state, so that rebuilding an environment never
-# changes the name servers the registrar points at - and is only looked up.
+# The zone is provisioned outside this configuration and only looked up - onek8s.lol is created once
+# with the Azure CLI, outside every state, so that rebuilding an environment never changes the name
+# servers the registrar points at. A public zone can still be created here with dns_zone_create; the
+# registrar is then pointed at its name servers (dns_zone_name_servers).
 resource "azurerm_dns_zone" "this" {
   count = var.dns_zone_name != null && var.dns_zone_create ? 1 : 0
 
@@ -200,46 +201,21 @@ resource "azurerm_dns_zone" "this" {
 }
 
 data "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name != null && !var.dns_zone_create ? 1 : 0
+  count = var.dns_zone_name != null && !var.dns_zone_create && !var.dns_zone_private ? 1 : 0
+
+  name                = var.dns_zone_name
+  resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+}
+
+data "azurerm_private_dns_zone" "this" {
+  count = var.dns_zone_name != null && var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
   resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
 }
 
 locals {
-  dns_zone = one(concat(azurerm_dns_zone.this, data.azurerm_dns_zone.this))
-}
-
-resource "azurerm_private_dns_zone" "internal" {
-  count = var.internal_dns_zone_name == null ? 0 : 1
-
-  name                = var.internal_dns_zone_name
-  resource_group_name = local.resource_group_name
-}
-
-data "azurerm_virtual_network" "this" {
-  count = var.internal_dns_zone_name != null && var.virtual_network_name != null && !var.virtual_network_create ? 1 : 0
-
-  name                = var.virtual_network_name
-  resource_group_name = coalesce(var.virtual_network_resource_group_name, var.resource_group_name)
-}
-
-# The private zone resolves in the clusters' network, for every cluster in it.
-resource "azurerm_private_dns_zone_virtual_network_link" "internal" {
-  count = var.internal_dns_zone_name != null && var.virtual_network_name != null ? 1 : 0
-
-  name                  = "${var.environment}-shared"
-  private_dns_zone_name = azurerm_private_dns_zone.internal[0].name
-  resource_group_name   = local.resource_group_name
-  virtual_network_id    = one(concat(azurerm_virtual_network.this[*].id, data.azurerm_virtual_network.this[*].id))
-  registration_enabled  = false
-}
-
-check "internal_dns_zone_is_linked" {
-  assert {
-    condition     = var.internal_dns_zone_name == null || var.virtual_network_name != null
-    error_message = "The private zone ${coalesce(var.internal_dns_zone_name, "-")} is linked to no network, so nothing resolves its names. Set virtual_network_name."
-  }
+  dns_zone = one(concat(azurerm_dns_zone.this, data.azurerm_dns_zone.this, data.azurerm_private_dns_zone.this))
 }
 
 # Hostnames every cluster of the environment serves at once - hello.onek8s.lol on every stateless
@@ -253,7 +229,7 @@ check "internal_dns_zone_is_linked" {
 # certificate - on the path every cluster serves it on. A short TTL lets a client move to another
 # cluster soon after one goes away.
 locals {
-  global_hostnames = var.dns_zone_name == null ? {} : var.global_hostnames
+  global_hostnames = var.dns_zone_name == null || var.dns_zone_private ? {} : var.global_hostnames
   # Traffic Manager names are global: the zone and the environment make them unique.
   traffic_manager_prefix = "${replace(coalesce(var.dns_zone_name, "-"), ".", "-")}-${var.environment}"
   global_hostname_endpoints = merge([
@@ -261,6 +237,13 @@ locals {
       for endpoint in hostname.endpoints : "${name}/${endpoint}" => { name = name, target = endpoint }
     }
   ]...)
+}
+
+check "global_hostnames_need_a_public_zone" {
+  assert {
+    condition     = !var.dns_zone_private || length(var.global_hostnames) == 0
+    error_message = "global_hostnames are Traffic Manager CNAMEs, which a private zone cannot point at: none is created."
+  }
 }
 
 resource "azurerm_traffic_manager_profile" "global" {

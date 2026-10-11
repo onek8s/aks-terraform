@@ -168,38 +168,6 @@ run "rejects_a_namespace_whose_share_would_overlap_another" {
   expect_failures = [var.key_vault_namespaces]
 }
 
-run "the_zones_are_created_and_the_private_one_linked" {
-  command = plan
-
-  variables {
-    dns_zone_name                       = "contoso.com"
-    internal_dns_zone_name              = "internal.contoso.com"
-    virtual_network_name                = "vnet-aks-test"
-    virtual_network_resource_group_name = "rg-network"
-  }
-
-  assert {
-    condition = alltrue([
-      azurerm_dns_zone.this[0].name == "contoso.com",
-      azurerm_dns_zone.this[0].resource_group_name == "rg-aks-test",
-      azurerm_private_dns_zone.internal[0].resource_group_name == "rg-aks-test",
-      azurerm_private_dns_zone_virtual_network_link.internal[0].name == "test-shared",
-      azurerm_private_dns_zone_virtual_network_link.internal[0].virtual_network_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/vnet-aks-test",
-    ])
-    error_message = "Both zones should be created in the shared resource group, the private one linked to the clusters' network."
-  }
-}
-
-run "warns_about_a_private_zone_linked_to_nothing" {
-  command = plan
-
-  variables {
-    internal_dns_zone_name = "internal.contoso.com"
-  }
-
-  expect_failures = [check.internal_dns_zone_is_linked]
-}
-
 run "refuses_a_region_with_no_code" {
   command = plan
 
@@ -274,7 +242,6 @@ run "the_resource_group_and_the_network_can_be_created" {
     virtual_network_name          = "vnet-aks-test"
     virtual_network_address_space = ["172.20.0.0/22"]
     subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
-    internal_dns_zone_name        = "internal.contoso.com"
   }
 
   assert {
@@ -282,9 +249,8 @@ run "the_resource_group_and_the_network_can_be_created" {
       azurerm_resource_group.this[0].name == "rg-aks-test",
       azurerm_virtual_network.this[0].resource_group_name == "rg-aks-test",
       azurerm_subnet.this["snet-aks-nodes"].address_prefixes[0] == "172.20.0.0/23",
-      length(data.azurerm_virtual_network.this) == 0,
     ])
-    error_message = "The resource group, the network and its subnet should be created, and the network not looked up."
+    error_message = "The resource group, the network and its subnet should be created."
   }
 }
 
@@ -332,4 +298,25 @@ run "a_team_namespace_gets_the_webhook_token_in_its_share" {
     condition     = azurerm_key_vault_secret.flux_github_webhook_namespace["example"].name == "example--github-webhook-token"
     error_message = "The example namespace should get the webhook token in its own share of the vault."
   }
+}
+
+run "a_private_zone_is_looked_up_and_gets_no_traffic_manager" {
+  command = plan
+
+  variables {
+    dns_zone_name                = "contoso.com"
+    dns_zone_private             = true
+    dns_zone_create              = false
+    dns_zone_resource_group_name = "rg-dns"
+    global_hostnames = {
+      hello = { endpoints = ["public-aks-test-a.contoso.com"] }
+    }
+  }
+
+  assert {
+    condition     = length(data.azurerm_private_dns_zone.this) == 1 && length(data.azurerm_dns_zone.this) == 0 && length(azurerm_traffic_manager_profile.global) == 0
+    error_message = "A private zone should be looked up in Azure Private DNS, and get no Traffic Manager CNAME."
+  }
+
+  expect_failures = [check.global_hostnames_need_a_public_zone]
 }

@@ -89,11 +89,9 @@ locals {
       dns_zone_name                = var.dns_zone_name
       dns_zone_resource_group_name = local.dns_zone_resource_group_name
       dns_zone_subscription_id     = split("/", local.dns_zone_id)[2]
-    },
-    var.internal_dns_zone_name == null ? {} : {
-      internal_dns_zone_name                = var.internal_dns_zone_name
-      internal_dns_zone_resource_group_name = local.internal_dns_zone_resource_group_name
-      internal_dns_zone_subscription_id     = split("/", local.internal_dns_zone_id)[2]
+      # Whether the zone is public or private, and the external-dns provider that writes it.
+      dns_zone_private = tostring(var.dns_zone_private)
+      dns_provider     = var.dns_zone_private ? "azure-private-dns" : "azure"
     },
     local.external_dns_enabled ? { dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id } : {},
     # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
@@ -141,20 +139,15 @@ locals {
   # the Flux repository, which has to use exactly these names and namespaces: a federated credential
   # trusts one subject and nothing else. Every namespace with a share of the Key Vault reads it as a
   # service account of this name.
-  key_vault_service_account             = "key-vault"
-  external_dns_service_account          = "system:serviceaccount:external-dns:external-dns"
-  external_dns_internal_service_account = "system:serviceaccount:external-dns:external-dns-internal"
+  key_vault_service_account    = "key-vault"
+  external_dns_service_account = "system:serviceaccount:external-dns:external-dns"
 
-  # The public DNS zone, whether looked up or created here. Null when no zone is named.
+  # The DNS zone, public or private, whether looked up or created here. Null when no zone is named.
   dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
-  dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id))
+  dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id, data.azurerm_private_dns_zone.zone[*].id))
 
-  # The private zone, likewise. Null when no zone is named.
-  internal_dns_zone_resource_group_name = coalesce(var.internal_dns_zone_resource_group_name, var.resource_group_name)
-  internal_dns_zone_id                  = one(concat(data.azurerm_private_dns_zone.internal[*].id, azurerm_private_dns_zone.internal[*].id))
-
-  # external-dns, and the identity it writes as, are there for either zone.
-  external_dns_enabled = var.dns_zone_name != null || var.internal_dns_zone_name != null
+  # external-dns, and the identity it writes as, are there for the zone.
+  external_dns_enabled = var.dns_zone_name != null
 
   # The Key Vault is there for a cluster that names one: its own, created here, or the environment's
   # shared one, created by shared/ and looked up - see key_vault_create.
