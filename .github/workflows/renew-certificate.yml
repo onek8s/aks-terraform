@@ -7,7 +7,7 @@ name: Renew Certificate
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> External Secrets --> Traefik
 #
 # The certificate is imported into the cluster's Key Vault as `ingress-gateway--<name>` - the share of
-# the vault that belongs to ingress-gateway (README, "Key Vault"). olljanat-ai/aks-fluxcd-platform
+# the vault that belongs to ingress-gateway (README, "Key Vault"). onek8s/aks-fluxcd-platform
 # reads it from there with an ExternalSecret (infrastructure/certificates/gateway-tls.yaml) that
 # unpacks the secret behind the certificate as a PKCS#12 bundle, and turns it into the
 # `kubernetes.io/tls` Secret the listeners name. So two things here are not free to change:
@@ -20,8 +20,8 @@ name: Renew Certificate
 # interval); nothing in the cluster is restarted or redeployed.
 #
 # The vault, the DNS zone and their resource groups are not configuration here: they are read out of
-# the variables file that created them - for `prototype`, the environment's shared resources in
-# shared/envs/prototype.tfvars, which both of its clusters use; for any other, the cluster's own
+# the variables file that names them - for `dev`, the environment's shared resources in
+# shared/envs/dev.tfvars, which all of its clusters use; for any other, the cluster's own
 # envs/<environment>.tfvars.
 #
 # Key Vault is also the only state this workflow keeps. Nothing is carried between runs on disk: the
@@ -30,9 +30,10 @@ name: Renew Certificate
 # new one. That secret's name has no `--` in it, so it belongs to no namespace and no namespace's
 # identity can read it.
 #
-# Credentials: a service principal, given as the repository (or GitHub environment) variables
-# AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and the secret AZURE_CLIENT_SECRET, plus
-# the variable LETSENCRYPT_EMAIL. The principal needs, granted outside this repository:
+# Credentials: the repository (or GitHub environment) variables AZURE_CLIENT_ID, AZURE_TENANT_ID and
+# AZURE_SUBSCRIPTION_ID - a service principal with the secret AZURE_CLIENT_SECRET, or an identity
+# federated with the GitHub environment (OIDC) without it - plus the variable LETSENCRYPT_EMAIL. The
+# identity needs, granted outside this repository:
 #
 #   - Key Vault Certificates Officer and Key Vault Secrets Officer on the vault (or Key Vault
 #     Administrator) - the certificate, and the ACME account key beside it.
@@ -54,15 +55,15 @@ on:
     branches: [main]
     paths:
       - .github/workflows/renew-certificate.yml
-      - shared/envs/prototype.tfvars
+      - shared/envs/dev.tfvars
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment whose Key Vault and DNS zone to use: shared/envs/prototype.tfvars, or envs/<environment>.tfvars"
+        description: "Environment whose Key Vault and DNS zone to use: shared/envs/dev.tfvars, or envs/<environment>.tfvars"
         required: true
-        default: "prototype"
+        default: "dev"
         type: choice
-        options: [prototype, prototype-automatic, prototype-prd-economy]
+        options: [dev]
       domains:
         description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
         required: false
@@ -87,11 +88,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write # GitHub OIDC, when there is no client secret
 
 jobs:
   renew:
-    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'prototype' }})
+    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'dev' }})
     runs-on: ubuntu-latest
+    # Not before the repository has its Azure identity.
+    if: vars.AZURE_CLIENT_ID != ''
     # The schedule (and a push) renews every certificate the platform's listeners serve; a run by
     # hand, the one it is given. A certificate that fails does not hold back the others.
     strategy:
@@ -101,26 +105,23 @@ jobs:
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
-    environment: ${{ inputs.environment || 'prototype' }}
+    environment: ${{ inputs.environment || 'dev' }}
     concurrency:
       # One issuance at a time per environment - the certificates of one run take turns, and share
       # one ACME account - and never cancel a run mid-order, it would leave the DNS-01 TXT records
       # behind.
-      group: renew-certificate-${{ inputs.environment || 'prototype' }}
+      group: renew-certificate-${{ inputs.environment || 'dev' }}
       cancel-in-progress: false
     env:
-      TF_ENV: ${{ inputs.environment || 'prototype' }}
+      TF_ENV: ${{ inputs.environment || 'dev' }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      # lego's azuredns provider reads its credentials from AZURE_* directly. The zone's name, resource
-      # group and subscription are set too (see "Resolve the environment"), so it goes straight to the
-      # zone instead of searching for it.
-      AZURE_AUTH_METHOD: env
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      # lego's azuredns provider signs in as the Azure CLI does, after "Log in to Azure" - whichever
+      # way that was. The zone's name, resource group and subscription are set too (see "Resolve the
+      # environment"), so it goes straight to the zone instead of searching for it.
+      AZURE_AUTH_METHOD: cli
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       # Certificate identity and renewal policy. The `ingress-gateway--` prefix is what puts the
       # certificate in ingress-gateway's share of the vault, where its SecretStore reads it.
@@ -146,7 +147,6 @@ jobs:
           [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
           [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
           [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
-          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
           [ -n "$ACME_EMAIL" ] || missing="$missing LETSENCRYPT_EMAIL"
           if [ -n "$missing" ]; then
             echo "::error::Missing repository variables/secrets:$missing" >&2
@@ -162,8 +162,8 @@ jobs:
         run: |
           set -euo pipefail
           file="envs/${TF_ENV}.tfvars"
-          # The prototype environment's vault and zones are its shared resources, not a cluster's.
-          [ "$TF_ENV" != "prototype" ] || file="shared/envs/prototype.tfvars"
+          # The dev environment's vault and zones are its shared resources, not a cluster's.
+          [ "$TF_ENV" != "dev" ] || file="shared/envs/dev.tfvars"
           tfvar() {
             sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$file" | head -n 1
           }
@@ -188,7 +188,8 @@ jobs:
           echo "Key Vault: $vault"
           echo "DNS zone:  $zone (resource group $zone_rg)"
 
-      - name: Log in to Azure
+      - name: Log in to Azure (service principal)
+        if: env.ARM_CLIENT_SECRET != ''
         run: |
           set -euo pipefail
           az login --service-principal \
@@ -197,6 +198,14 @@ jobs:
             --tenant "$ARM_TENANT_ID" \
             --output none
           az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      - name: Log in to Azure (GitHub OIDC)
+        if: env.ARM_CLIENT_SECRET == ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
 
       # A missing certificate and an expiring one are the same case: issue. Anything else that goes
       # wrong talking to the vault is not - a denied read must fail the run rather than silently

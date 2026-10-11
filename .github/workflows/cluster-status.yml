@@ -1,7 +1,6 @@
 name: Cluster status
 
-# Reports, read-only, what a prototype cluster - aks-prototype-a or aks-prototype-b, chosen by the
-# `cluster` input - is doing, for when something Flux deploys does
+# Reports, read-only, what a cluster of the dev environment - chosen by the `cluster` input - is doing, for when something Flux deploys does
 # not come up and nobody at hand has a kubeconfig. Started by hand. It changes nothing.
 #
 #   - the cluster's Kubernetes version and its managed Gateway API CRD bundle;
@@ -12,47 +11,55 @@ name: Cluster status
 #     needs the principal to hold a Kubernetes RBAC role on the cluster (Azure Kubernetes Service RBAC
 #     Reader at least); without one it is reported as forbidden and the rest still runs.
 #
-# Credentials: the same service principal and GitHub environment as Deploy prototype.
-#
-# Besides by hand, it runs on a pull request that changes this file - so a change to what it reports
-# shows its own result.
+# Credentials: the same Azure identity and GitHub environment as Deploy - a service principal with
+# AZURE_CLIENT_SECRET, or GitHub OIDC without it.
+
 on:
   workflow_dispatch:
     inputs:
       cluster:
         description: "The cluster to report on"
         required: true
-        default: "aks-prototype-a"
+        default: "aks-dev-stateless-az1"
         type: choice
-        options: [aks-prototype-a, aks-prototype-b]
-  pull_request:
-    paths:
-      - .github/workflows/cluster-status.yml
+        options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
 
 permissions:
   contents: read
+  id-token: write # GitHub OIDC, when there is no client secret
 
 jobs:
   status:
-    name: status ${{ inputs.cluster || 'aks-prototype-a' }}
+    name: status ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
     runs-on: ubuntu-latest
-    environment: prototype
+    environment: dev
     env:
-      # The clusters and their shared resources - the zones among them - are all in one group.
-      RESOURCE_GROUP: rg-aks-prototype
-      CLUSTER: ${{ inputs.cluster || 'aks-prototype-a' }}
+      # The clusters and their shared resources - the private zone among them - are all in one
+      # group; the public zone, created outside Terraform, is in a group of its own.
+      RESOURCE_GROUP: rg-aks-dev
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns
       DNS_ZONE: onek8s.lol
       INTERNAL_DNS_ZONE: internal.onek8s.lol
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
-      - name: Sign in to Azure
+      - name: Sign in to Azure (service principal)
+        if: env.AZURE_CLIENT_SECRET != ''
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           az login --service-principal --username "$AZURE_CLIENT_ID" --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
           az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+
+      - name: Sign in to Azure (GitHub OIDC)
+        if: env.AZURE_CLIENT_SECRET == ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Cluster
         run: |
@@ -72,7 +79,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "== $DNS_ZONE"
-          az network dns record-set list -g "$RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
+          az network dns record-set list -g "$DNS_ZONE_RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
           echo "== $INTERNAL_DNS_ZONE"
           az network private-dns record-set list -g "$RESOURCE_GROUP" -z "$INTERNAL_DNS_ZONE" --query '[].{name: name, type: type, a: aRecords, txt: txtRecords}' --output json
 
@@ -82,14 +89,12 @@ jobs:
         # could not schedule (`az aks command invoke` needs one). The principal signs in with Entra ID
         # through kubelogin, and needs a Kubernetes RBAC role on the cluster - Azure Kubernetes
         # Service RBAC Reader at least - or every command below comes back forbidden.
-        env:
-          AAD_SERVICE_PRINCIPAL_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AAD_SERVICE_PRINCIPAL_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           sudo az aks install-cli --only-show-errors >/dev/null
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          kubelogin convert-kubeconfig -l spn
+          # The Azure CLI's sign-in, whichever way it was made.
+          kubelogin convert-kubeconfig -l azurecli
           # Report everything, whatever one command says.
           set +e -x
           kubectl version

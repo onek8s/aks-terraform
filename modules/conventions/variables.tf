@@ -14,5 +14,5 @@ variable "key_vault_namespaces" {
 variable "environment" {
   type        = string
   default     = null
-  description = "The environment, such as `prototype`, for the names of its shared resources. Null for none."
+  description = "The environment, such as `dev`, for the names of its shared resources. Null for none."
 }
