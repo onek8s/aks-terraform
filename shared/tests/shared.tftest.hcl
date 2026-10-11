@@ -31,6 +31,12 @@ mock_provider "azurerm" {
       principal_id = "11111111-1111-1111-1111-111111111111"
     }
   }
+  mock_data "azurerm_dns_zone" {
+    defaults = {
+      name                = "contoso.com"
+      resource_group_name = "rg-dns"
+    }
+  }
   mock_resource "azurerm_private_dns_zone" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/internal.contoso.com"
@@ -204,18 +210,108 @@ run "refuses_a_region_with_no_code" {
   expect_failures = [azurerm_user_assigned_identity.key_vault]
 }
 
-run "a_registry_is_created_with_push_for_the_deployer" {
+run "a_registry_is_created_and_builds_its_images" {
   command = plan
 
   variables {
     container_registry_name = "acrtestshared"
+    container_registry_builds = {
+      "aks-hello:0.2.0" = {
+        repository = "https://github.com/onek8s/aks-hello.git"
+        commit     = "0123456789abcdef0123456789abcdef01234567"
+      }
+    }
   }
 
   assert {
     condition = alltrue([
       azurerm_container_registry.this[0].admin_enabled == false,
-      azurerm_role_assignment.container_registry_push[0].role_definition_name == "AcrPush",
+      azurerm_container_registry_task.build["aks-hello:0.2.0"].name == "aks-hello-0_2_0",
+      one(azurerm_container_registry_task.build["aks-hello:0.2.0"].docker_step).context_path == "https://github.com/onek8s/aks-hello.git#0123456789abcdef0123456789abcdef01234567",
+      contains(one(azurerm_container_registry_task.build["aks-hello:0.2.0"].docker_step).image_names, "aks-hello:0.2.0"),
     ])
-    error_message = "The registry should have no admin user, and the deploying principal AcrPush on it."
+    error_message = "The registry should have no admin user, and build aks-hello:0.2.0 from the pinned commit."
+  }
+}
+
+run "refuses_a_build_of_a_branch" {
+  command = plan
+
+  variables {
+    container_registry_name = "acrtestshared"
+    container_registry_builds = {
+      "aks-hello:0.2.0" = {
+        repository = "https://github.com/onek8s/aks-hello.git"
+        commit     = "main"
+      }
+    }
+  }
+
+  expect_failures = [var.container_registry_builds]
+}
+
+run "an_existing_public_zone_is_looked_up" {
+  command = plan
+
+  variables {
+    dns_zone_name                = "contoso.com"
+    dns_zone_create              = false
+    dns_zone_resource_group_name = "rg-dns"
+  }
+
+  assert {
+    condition     = length(azurerm_dns_zone.this) == 0 && data.azurerm_dns_zone.this[0].resource_group_name == "rg-dns"
+    error_message = "With dns_zone_create = false the public zone should be looked up in its own resource group, not created."
+  }
+}
+
+run "the_resource_group_and_the_network_can_be_created" {
+  command = plan
+
+  variables {
+    resource_group_create         = true
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
+    internal_dns_zone_name        = "internal.contoso.com"
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_resource_group.this[0].name == "rg-aks-test",
+      azurerm_virtual_network.this[0].resource_group_name == "rg-aks-test",
+      azurerm_subnet.this["snet-aks-nodes"].address_prefixes[0] == "172.20.0.0/23",
+      length(data.azurerm_virtual_network.this) == 0,
+    ])
+    error_message = "The resource group, the network and its subnet should be created, and the network not looked up."
+  }
+}
+
+run "a_global_hostname_is_a_traffic_manager_profile_over_the_clusters" {
+  command = plan
+
+  variables {
+    dns_zone_name                = "contoso.com"
+    dns_zone_create              = false
+    dns_zone_resource_group_name = "rg-dns"
+    global_hostnames = {
+      hello = {
+        endpoints   = ["public-aks-test-a.contoso.com", "public-aks-test-b.contoso.com"]
+        health_path = "/healthz"
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_traffic_manager_profile.global["hello"].name == "contoso-com-test-hello",
+      azurerm_traffic_manager_profile.global["hello"].traffic_routing_method == "Weighted",
+      azurerm_traffic_manager_profile.global["hello"].monitor_config[0].path == "/healthz",
+      one(azurerm_traffic_manager_profile.global["hello"].monitor_config[0].custom_header).value == "hello.contoso.com",
+      azurerm_traffic_manager_external_endpoint.global["hello/public-aks-test-b.contoso.com"].target == "public-aks-test-b.contoso.com",
+      azurerm_dns_cname_record.global["hello"].name == "hello",
+    ])
+    error_message = "hello.contoso.com should be a CNAME to a weighted profile over both clusters, probed as hello.contoso.com."
   }
 }

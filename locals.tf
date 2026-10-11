@@ -37,6 +37,14 @@ locals {
             syncIntervalInSeconds  = namespace.flux.sync_interval_seconds
             retryIntervalInSeconds = namespace.flux.sync_interval_seconds
             wait                   = true
+            # The few facts of the cluster a team's manifests may use, as `${...}` post-build
+            # variables: which cluster it is, so an app can say where it runs. Nothing secret, and
+            # nothing a team could use to reach beyond its namespace.
+            postBuild = {
+              substitute = {
+                cluster_name = var.name
+              }
+            }
           }
         }
         namespace  = name
@@ -195,7 +203,7 @@ locals {
   system_assigned_identity = local.is_automatic && !local.byo_network
 
   # The environment a cluster belongs to, from its name - <what it is>-<environment>-<which one> - for
-  # the names of the environment's shared resources: `aks-prototype-a` is in `prototype`.
+  # the names of the environment's shared resources: `aks-dev-stateless-az1` is in `dev`.
   environment = length(local.name_segments) < 2 ? var.name : local.name_segments[1]
 
   # The principal the cluster acts as towards Azure: the identity created here, or its own.
@@ -283,7 +291,7 @@ locals {
   location_code = module.conventions.location_code
   # `id-<region code>-<environment>-<function>`, worked out from the cluster name and the region
   # rather than stated per environment. A cluster name reads <what it is>-<environment>-<which one>,
-  # so `aks-prototype-a` in swedencentral is run by `id-sec-prototype-aks-a`: the environment
+  # so `aks-dev-stateless-az1` in swedencentral is run by `id-sec-dev-aks-stateless-az1`: the environment
   # moves to the front of the function, and everything past it distinguishes the cluster from its
   # siblings in the same environment. A name with nothing to split has no environment to lift out,
   # and becomes `id-<region code>-<name>`.

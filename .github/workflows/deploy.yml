@@ -1,44 +1,47 @@
-name: Deploy prototype
+name: Deploy
 
-# Plans, and on request applies, one of the prototype environment's three Terraform stacks, chosen by
-# the `stack` input. Started by hand (or called by another workflow): choose `plan` to see what would change, `apply` to change
-# it. An apply plans first and applies exactly that plan, so what the log shows is what was done.
+# Plans, and on request applies, one of the dev environment's Terraform stacks, chosen by the `stack`
+# input. Started by hand (or called by another workflow): choose `plan` to see what would change,
+# `apply` to change it. An apply plans first and applies exactly that plan, so what the log shows is
+# what was done.
 #
-#   prototype-shared   shared/ with shared/envs/prototype.tfvars: the Key Vault, the namespaces'
-#                      shared identities and the DNS zones both clusters use. Applied first.
-#   prototype-a        the repository root with envs/prototype-a.tfvars: cluster aks-prototype-a.
-#   prototype-b        the repository root with envs/prototype-b.tfvars: cluster aks-prototype-b.
+#   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the network, the
+#                        Key Vault, the namespaces' shared identities, the container registry and its
+#                        images, the private zone and hello.onek8s.lol's Traffic Manager. Applied first.
+#   dev-stateless-az1    the repository root with envs/dev-stateless-az1.tfvars: aks-dev-stateless-az1.
+#   dev-stateless-az2    the repository root with envs/dev-stateless-az2.tfvars: aks-dev-stateless-az2.
+#   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
+#                        not deployed for now).
 #
 # Each stack has a state of its own - so a cluster can be destroyed and built again without touching
-# the shared resources or the other cluster - in the azurerm backend of its terraform.tf, as
-# `<stack>.tfstate`. The storage account is not in the repository, so it is given here through
-# variables:
+# the shared resources or the other clusters - in the azurerm backend of its terraform.tf, as
+# `<stack>.tfstate` in the `tfstate` container of the storage account named by the variables
 #
-#   TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT   where the `tfstate` container is.
+#   TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT
+#
+# in sub-aks-dev itself, so a lab reset of the OneK8s build tenant (azure-landing-zone) takes the
+# state with the resources. The first run creates the account when it is missing. The backend reads
+# the state with the account's key, which it looks up with the run's Azure identity.
 #
 # A run that finds the state empty stops before planning unless `allow_empty_state` is set: an empty
 # state behind an existing cluster means the backend settings are wrong, and a plan against it would
 # try to create everything again.
 #
-# Credentials: the same service principal as the Renew Certificate workflow - the repository (or
-# `prototype` GitHub environment) variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID and the
-# secret AZURE_CLIENT_SECRET. Terraform's providers and the backend read them as ARM_*; the backend
-# reads the state with Entra ID rather than a storage account key. The principal needs, granted
-# outside this repository, what the configuration manages - Contributor and User Access
-# Administrator (or Owner) on the resource groups it touches, the latter also for the clusters'
-# `Portable disks` role definitions - and Storage Blob Data Contributor on the state container.
-#
-# The optional secret FLUX_GIT_HTTPS_KEY is passed as flux_git_credentials.https_key, for a private
-# flux_git_repository of a cluster; without it Flux reads the repository anonymously.
+# Credentials: the `dev` GitHub environment's (or the repository's) variables AZURE_CLIENT_ID,
+# AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID. With the secret AZURE_CLIENT_SECRET they are a service
+# principal; without it, an identity federated with this repository's `dev` environment (GitHub OIDC,
+# nothing secret stored). The identity needs Owner on sub-aks-dev - the configuration creates role
+# assignments for the clusters' identities - and the public zone's resource group, rg-onek8s-dns, is
+# in the same subscription.
 on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "prototype-shared (apply first), or a cluster: prototype-a, prototype-b"
+        description: "dev-shared (apply first), or a cluster: dev-stateless-az1, dev-stateless-az2, dev-stateful"
         required: true
-        default: "prototype-a"
+        default: "dev-shared"
         type: choice
-        options: [prototype-shared, prototype-a, prototype-b]
+        options: [dev-shared, dev-stateless-az1, dev-stateless-az2, dev-stateful]
       action:
         description: "plan shows the changes; apply makes them"
         required: true
@@ -50,7 +53,7 @@ on:
         required: false
         default: false
         type: boolean
-  # The same, from another workflow - one that applies prototype-shared and then a cluster.
+  # The same, from another workflow - one that applies dev-shared and then the clusters.
   workflow_call:
     inputs:
       stack:
@@ -66,6 +69,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # GitHub OIDC, when there is no client secret
 
 env:
   # Keep in step with pr.yml.
@@ -77,9 +81,9 @@ jobs:
   deploy:
     name: ${{ inputs.action }} ${{ inputs.stack }}
     runs-on: ubuntu-latest
-    # The `prototype` GitHub environment, for all three stacks: its protection rules (required
-    # reviewers, branches) hold the run, and its variables and secrets win over the repository's.
-    environment: prototype
+    # The `dev` GitHub environment, for every stack: its protection rules (required reviewers,
+    # branches) hold the run, and its variables and secrets win over the repository's.
+    environment: dev
     concurrency:
       # One run at a time against a state; never cancel one mid-apply. The backend's blob lease
       # protects the state as well, but a queued run is clearer than a failed lock.
@@ -87,15 +91,16 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: ${{ inputs.stack == 'prototype-shared' && 'shared' || '.' }}
+        working-directory: ${{ endsWith(inputs.stack, '-shared') && 'shared' || '.' }}
     env:
       TF_STACK: ${{ inputs.stack }}
       # The variables file, relative to the stack's directory.
-      VAR_FILE: ${{ inputs.stack == 'prototype-shared' && 'envs/prototype.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
+      VAR_FILE: ${{ inputs.stack == 'dev-shared' && 'envs/dev.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_USE_OIDC: ${{ secrets.AZURE_CLIENT_SECRET == '' }}
       TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
       FLUX_GIT_HTTPS_KEY: ${{ secrets.FLUX_GIT_HTTPS_KEY }}
@@ -113,30 +118,58 @@ jobs:
           [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
           [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
           [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
-          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
           [ -n "$TF_STATE_RESOURCE_GROUP" ] || missing="$missing TF_STATE_RESOURCE_GROUP"
           [ -n "$TF_STATE_STORAGE_ACCOUNT" ] || missing="$missing TF_STATE_STORAGE_ACCOUNT"
           if [ -n "$missing" ]; then
             echo "::error::Missing repository variables/secrets:$missing" >&2
-            echo "See the header of .github/workflows/deploy-prototype.yml." >&2
+            echo "See the header of .github/workflows/deploy.yml." >&2
             exit 1
           fi
 
       # HCL object syntax, as the variable's description asks. GitHub masks the secret in the log.
       - name: Pass the Flux credentials
-        if: env.FLUX_GIT_HTTPS_KEY != '' && inputs.stack != 'prototype-shared'
+        if: env.FLUX_GIT_HTTPS_KEY != '' && !endsWith(inputs.stack, '-shared')
         run: |
           echo "TF_VAR_flux_git_credentials={ https_key = \"$FLUX_GIT_HTTPS_KEY\" }" >> "$GITHUB_ENV"
 
-      # terraform.tf sets use_oidc on the backend; with a client secret set, the secret is what it
-      # authenticates with. use_azuread_auth reads the blob with that identity, not an account key.
+      - name: Log in to Azure (service principal)
+        if: env.ARM_CLIENT_SECRET != ''
+        run: |
+          az login --service-principal --username "$ARM_CLIENT_ID" --password "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" --output none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      - name: Log in to Azure (GitHub OIDC)
+        if: env.ARM_CLIENT_SECRET == ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      # The state lives in the environment's own subscription. Idempotent: a run that finds the account
+      # changes nothing. Shared key access stays on: the backend reads the state with the account key.
+      - name: Prepare the state storage
+        run: |
+          set -euo pipefail
+          if ! az storage account show -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" -o none 2>/dev/null; then
+            location="$(sed -nE 's/^location[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$VAR_FILE" | head -n 1)"
+            az group create -n "$TF_STATE_RESOURCE_GROUP" -l "$location" -o none
+            az storage account create -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" -l "$location" \
+              --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+            az storage account blob-service-properties update -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" \
+              --enable-versioning true --enable-delete-retention true --delete-retention-days 7 -o none
+          fi
+          key="$(az storage account keys list -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" --query '[0].value' -o tsv)"
+          az storage container create --name tfstate --account-name "$TF_STATE_STORAGE_ACCOUNT" --account-key "$key" -o none
+
+      # The backend looks the account key up with the run's identity (use_oidc in terraform.tf, or
+      # the client secret when there is one).
       - name: Initialize
         run: |
           set -euo pipefail
           args=(
             -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP"
             -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT"
-            -backend-config="use_azuread_auth=true"
             -backend-config="key=${TF_STACK}.tfstate"
           )
           terraform init "${args[@]}"

@@ -60,7 +60,7 @@ Name of the existing virtual network the cluster is attached to, together with `
 Leave both unset for a cluster that brings no network at all: AKS then creates and manages a virtual
 network for it inside the node resource group, and every bring-your-own subnet here stays empty. The
 cluster is then reachable only from that network, which the node resource group lockdown makes hard
-to peer or link - see the README. `envs/prototype-automatic.tfvars` is on that arrangement.
+to peer or link - see the README. An AKS Automatic cluster with no network of its own is on that arrangement.
 DESCRIPTION
 
   validation {
@@ -94,7 +94,7 @@ Name of the existing subnet used for API Server VNet Integration. The subnet mus
 Leave it unset for a cluster whose API server is not joined to the network. Microsoft documents the
 subnet as required for an AKS Automatic cluster in an existing virtual network, so Terraform warns
 about that combination rather than refusing it - unless the integration is turned off deliberately
-through `api_server_vnet_integration_enabled`, which is what `envs/prototype-automatic.tfvars` does.
+through `api_server_vnet_integration_enabled`, which is what an AKS Automatic cluster on the network AKS manages does.
 DESCRIPTION
 
   # Naming a subnet for an API server that is not joined to the network says two different things at

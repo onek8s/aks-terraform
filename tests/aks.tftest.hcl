@@ -1074,7 +1074,7 @@ run "warns_about_automatic_without_api_server_vnet_integration" {
 }
 
 # Turning the integration off is a decision rather than an omission, so the warning above goes with
-# it. This is what envs/prototype-automatic.tfvars asks for.
+# it. This is what an AKS Automatic cluster on the network AKS manages asks for.
 run "automatic_with_vnet_integration_turned_off_is_not_warned_about" {
   command = plan
 
@@ -1153,7 +1153,7 @@ run "the_integration_is_off_by_default_without_a_subnet_to_join" {
 # Clusters that bring no network
 # ----------------------------------------------------------------------------------------------
 
-# What envs/prototype-automatic.tfvars asks for: no virtual network, no subnets, nothing to look up
+# What an AKS Automatic cluster on the network AKS manages asks for: no virtual network, no subnets, nothing to look up
 # and nothing to grant. AKS creates the network inside the node resource group instead.
 run "a_cluster_without_a_network_looks_nothing_up_and_grants_nothing" {
   command = plan
@@ -2002,6 +2002,10 @@ run "a_tenant_syncs_its_own_repository_into_its_own_namespace" {
   assert {
     condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.path == "./apps"
     error_message = "The Kustomization should apply the configured path."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.postBuild.substitute == { cluster_name = var.name }
+    error_message = "The team's manifests should get the cluster's name, and nothing else, as a post-build variable."
   }
   assert {
     condition = (

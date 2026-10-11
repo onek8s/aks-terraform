@@ -1,7 +1,7 @@
 variable "environment" {
   type        = string
   description = <<DESCRIPTION
-The environment these resources are shared by, such as `prototype`: the clusters named
+The environment these resources are shared by, such as `dev`: the clusters named
 `aks-<environment>-<which one>`. Part of the shared identities' names, which the clusters work out
 from their own names - see modules/conventions.
 DESCRIPTION
@@ -21,7 +21,35 @@ variable "location" {
 
 variable "resource_group_name" {
   type        = string
-  description = "Name of the existing resource group the shared resources are created in - the clusters' resource group."
+  description = "Name of the resource group the shared resources are created in - the clusters' resource group. It exists already, unless resource_group_create."
+  nullable    = false
+}
+
+variable "resource_group_create" {
+  type        = bool
+  default     = false
+  description = "Whether to create resource_group_name here - for an environment that starts from an empty subscription."
+  nullable    = false
+}
+
+variable "virtual_network_create" {
+  type        = bool
+  default     = false
+  description = "Whether to create the clusters' network, virtual_network_name, here in resource_group_name - with virtual_network_address_space and the subnets of `subnets`. Otherwise it exists already."
+  nullable    = false
+}
+
+variable "virtual_network_address_space" {
+  type        = list(string)
+  default     = []
+  description = "Address space of the network virtual_network_create creates."
+  nullable    = false
+}
+
+variable "subnets" {
+  type        = map(string)
+  default     = {}
+  description = "The subnets of the network virtual_network_create creates: name => address prefix. The clusters name theirs in node_subnet_name."
   nullable    = false
 }
 
@@ -95,6 +123,19 @@ variable "dns_zone_name" {
   description = "The public Azure DNS zone every cluster of the environment publishes its hostnames in. Null for none."
 }
 
+variable "dns_zone_create" {
+  type        = bool
+  default     = true
+  description = "Whether to create dns_zone_name here. False looks up a zone that exists already - one created outside Terraform, so that its name servers outlive every state."
+  nullable    = false
+}
+
+variable "dns_zone_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of the public zone. Defaults to `resource_group_name`."
+}
+
 variable "internal_dns_zone_name" {
   type        = string
   default     = null
@@ -131,7 +172,8 @@ variable "container_registry_name" {
   default     = null
   description = <<DESCRIPTION
 Name of the environment's Azure Container Registry, created here: the images the clusters run, which
-each cluster pulls as its kubelet identity - nothing is stored to read it with. Registry names are
+each cluster pulls as its kubelet identity - nothing is stored to read it with. The images get there
+through container_registry_builds. Registry names are
 global, 5 to 50 letters and digits. Null for none.
 DESCRIPTION
 
@@ -139,4 +181,42 @@ DESCRIPTION
     condition     = var.container_registry_name == null || can(regex("^[a-zA-Z0-9]{5,50}$", coalesce(var.container_registry_name, "-")))
     error_message = "container_registry_name must be 5 to 50 letters and digits."
   }
+}
+
+variable "container_registry_builds" {
+  type = map(object({
+    repository = string
+    commit     = string
+    dockerfile = optional(string, "Dockerfile")
+    folder     = optional(string)
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+Images the registry builds itself, keyed by `<repository>:<tag>` in the registry: the Git `repository`
+it reads anonymously - a public one - at `commit`, with `dockerfile` in `folder` (the root by
+default). A build runs when its entry is added or changed, so releasing is adding a tag.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for build in values(var.container_registry_builds) : can(regex("^[0-9a-f]{40}$", build.commit))])
+    error_message = "A build's commit must be a full 40-character commit ID, so a tag always means the same source."
+  }
+}
+
+variable "global_hostnames" {
+  type = map(object({
+    endpoints   = list(string)
+    health_path = optional(string, "/")
+    ttl         = optional(number, 10)
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+Hostnames in dns_zone_name that every listed cluster serves at once, keyed by the name below the zone
+(`hello` for hello.onek8s.lol): an Azure Traffic Manager profile each, weighting the `endpoints` -
+each cluster's own public hostname, such as `public-aks-dev-stateless-az1.onek8s.lol` - alike and
+leaving out one whose probe of `health_path` fails, and a CNAME of the hostname to it. The clusters'
+external-dns have to leave the hostname alone.
+DESCRIPTION
+  nullable    = false
 }
