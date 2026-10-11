@@ -1,0 +1,92 @@
+name: Flux webhooks
+
+# Points GitHub's push webhooks at the Flux receivers of every running cluster, so a merge reaches the
+# clusters at once instead of at the next poll:
+#
+#   onek8s/aks-fluxcd-platform  -> Receiver flux-system/github  (GitRepository platform)
+#   onek8s/aks-fluxcd-example   -> Receiver example/github      (the team's GitRepository example)
+#
+# one webhook per repository and cluster, to https://<flux_webhook_hostname><receiver path>. The
+# hostname is the platform's convention, flux-webhook-<cluster without aks->.<dns_zone_name>; the path
+# is the one notification-controller serves a Receiver on, /hook/sha256(token + name + namespace).
+# The token is shared/'s, read from the vault (`flux-system--github-webhook-token`), and is each
+# webhook's secret. Webhooks to a Flux receiver of a cluster that no longer runs are deleted.
+#
+# Runs after every successful Deploy, by hand, and when this file changes on main.
+#
+# Credentials: the Azure identity of Deploy (GitHub environment `dev`) reads the token; the secret
+# GH_WEBHOOK_TOKEN - or the organization's GH_OWNER - manages the repositories' webhooks
+# (Webhooks: read and write on both repositories).
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/flux-webhooks.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: flux-webhooks
+  cancel-in-progress: false
+
+jobs:
+  webhooks:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      RESOURCE_GROUP: rg-aks-dev
+      VARS: shared/envs/dev.tfvars
+      RECEIVERS: |
+        onek8s/aks-fluxcd-platform github flux-system
+        onek8s/aks-fluxcd-example github example
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sync the webhooks
+        env:
+          GH_TOKEN: ${{ secrets.GH_WEBHOOK_TOKEN || secrets.GH_OWNER }}
+        run: |
+          set -euo pipefail
+          tfvar() { sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$VARS" | head -n 1; }
+          vault="$(tfvar key_vault_name)"; zone="$(tfvar dns_zone_name)"
+          token="$(az keyvault secret show --vault-name "$vault" --name flux-system--github-webhook-token --query value -o tsv)"
+          echo "::add-mask::$token"
+          clusters="$(az aks list -g "$RESOURCE_GROUP" --query "[?powerState.code=='Running'].name" -o tsv)"
+          echo "Running clusters: $(echo $clusters)"
+          while read -r repo name namespace; do
+            [ -n "$repo" ] || continue
+            path="/hook/$(printf '%s%s%s' "$token" "$name" "$namespace" | sha256sum | cut -d' ' -f1)"
+            want=""
+            for cluster in $clusters; do want="$want https://flux-webhook-${cluster#aks-}.${zone}${path}"; done
+            existing="$(gh api "repos/$repo/hooks" --jq '.[] | "\(.id) \(.config.url)"')"
+            for url in $want; do
+              id="$(awk -v u="$url" '$2 == u {print $1}' <<<"$existing")"
+              body="$(jq -n --arg url "$url" --arg secret "$token" \
+                '{active: true, events: ["push"], config: {url: $url, content_type: "json", secret: $secret, insecure_ssl: "0"}}')"
+              if [ -n "$id" ]; then
+                gh api -X PATCH "repos/$repo/hooks/$id" --input - <<<"$body" >/dev/null; echo "updated $repo -> ${url%/hook/*}"
+              else
+                gh api -X POST "repos/$repo/hooks" --input - <<<"$(jq '. + {name: "web"}' <<<"$body")" >/dev/null; echo "created $repo -> ${url%/hook/*}"
+              fi
+            done
+            # Webhooks to Flux receivers that are no longer wanted: another path, or a cluster that is gone.
+            while read -r id url; do
+              [ -n "$id" ] || continue
+              case "$url" in https://flux-webhook-*/hook/*) ;; *) continue ;; esac
+              grep -qxF "$url" <(tr ' ' '\n' <<<"$want") || { gh api -X DELETE "repos/$repo/hooks/$id"; echo "deleted $repo -> ${url%/hook/*}"; }
+            done <<<"$existing"
+          done <<<"$RECEIVERS"

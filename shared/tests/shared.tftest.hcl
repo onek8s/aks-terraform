@@ -315,3 +315,21 @@ run "a_global_hostname_is_a_traffic_manager_profile_over_the_clusters" {
     error_message = "hello.contoso.com should be a CNAME to a weighted profile over both clusters, probed as hello.contoso.com."
   }
 }
+
+run "a_team_namespace_gets_the_webhook_token_in_its_share" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      flux-system = {}
+      example     = {}
+    }
+    flux_github_webhook            = true
+    flux_github_webhook_namespaces = ["example"]
+  }
+
+  assert {
+    condition     = azurerm_key_vault_secret.flux_github_webhook_namespace["example"].name == "example--github-webhook-token"
+    error_message = "The example namespace should get the webhook token in its own share of the vault."
+  }
+}

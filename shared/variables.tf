@@ -117,6 +117,17 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "flux_github_webhook_namespaces" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Team namespaces whose own Flux Receiver reconciles the team's repository on a GitHub push: the same
+token is put in each one's share of the vault as `<namespace>--github-webhook-token`. Each needs a
+share in `key_vault_namespaces`; `flux_github_webhook` has to be on.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "dns_zone_name" {
   type        = string
   default     = null

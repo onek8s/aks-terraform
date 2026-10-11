@@ -54,6 +54,9 @@ key_vault_namespaces = {
 
 # The token every cluster's Flux webhook receiver checks GitHub's deliveries against.
 flux_github_webhook = true
+# ... and the `example` team's Receiver, for its own repository (aks-fluxcd-platform,
+# tenants/example/webhook.yaml).
+flux_github_webhook_namespaces = ["example"]
 
 # The public zone exists already: created once with the Azure CLI in rg-onek8s-dns, outside every
 # state, and delegated at the registrar (azure-landing-zone, docs/deployment.md, step 3b). The private
