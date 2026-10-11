@@ -63,23 +63,20 @@ These must exist before running Terraform:
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
-- The public **Azure DNS zone** the Gateway's hostnames are published in - only where
-  `dns_zone_name` names it, and not when `dns_zone_create` has it created here. See [Certificates and DNS](#certificates-and-dns). The Key Vault is not a
-  prerequisite: it is created here - see [Key Vault](#key-vault).
-- The **Azure Private DNS zone** the same hostnames are published in privately - only where
-  `internal_dns_zone_name` names it, and not when `internal_dns_zone_create` has it created here
-  (and linked to the virtual network). An existing one has to be linked to the networks that
-  should resolve it already.
+- The one **DNS zone** the Gateway's hostnames are published in, provisioned outside this
+  configuration - a public Azure DNS zone, or with `dns_zone_private` an Azure Private DNS zone already
+  linked to the networks that should resolve it - only where `dns_zone_name` names it. (A public zone
+  can also be created here with `dns_zone_create`.) See [Certificates and DNS](#certificates-and-dns).
+  The Key Vault is not a prerequisite: it is created here - see [Key Vault](#key-vault).
 
 A cluster on the network AKS manages needs none of the network pieces: it names a resource group and
 nothing else about the existing estate. The `dev` clusters (`envs/dev-*.tfvars`) need all of them -
-the resource group, the network and the private zone from `shared/`, the public zone from
+the resource group and the network from `shared/`, the public zone `onek8s.lol` from
 `rg-onek8s-dns`.
 
 The identity running Terraform needs `Contributor` on the resource group and, unless
 `create_role_assignments = false`, permission to create role assignments on the subnets and the
-private DNS zone - and role definitions on the resource group, for `portable_disks_enabled`. Linking a private zone created here (`internal_dns_zone_create`) to the network
-also takes `Microsoft.Network/virtualNetworks/join/action` on it - `Network Contributor` has it.
+private DNS zone - and role definitions on the resource group, for `portable_disks_enabled`.
 
 Every cluster runs the managed Gateway API CRDs, which are in **preview**. The subscription needs the
 preview feature registered first:
@@ -587,10 +584,9 @@ deploys, each acting as an identity created here:
   picked up within the hour.
 
   Every listener serves one wildcard certificate, `ingress-gateway--wildcard`
-  (`*.onek8s.lol` and `*.internal.onek8s.lol`), issued and renewed by the
+  (`*.onek8s.lol`), issued and renewed by the
   [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with the
-  DNS-01 challenge solved in the environment's `dns_zone_name` - the private zone's names too, since
-  their `_acme-challenge` records go in the public zone above it - imported into its
+  DNS-01 challenge solved in the environment's public `dns_zone_name` - imported into its
   `key_vault_name`, both read from the variables file that creates them - `shared/envs/dev.tfvars`
   for `dev`, `envs/<environment>.tfvars` for any other. It runs monthly for `dev`,
   and whenever the workflow changes on `main`, and renews when fewer than 30 days are left; run it
@@ -600,25 +596,18 @@ deploys, each acting as an identity created here:
   `Key Vault Secrets Officer` on the vault and `DNS Zone Contributor` on the zone. The Let's Encrypt
   account key is kept in the vault beside the certificate, as `letsencrypt-account-key` - a name in
   no namespace's share. Other certificates can still be imported by hand by an admin group.
-- **DNS**: with `dns_zone_name` set, `<cluster identity>-dns` is federated with
-  `external-dns/external-dns` and granted `DNS Zone Contributor` on the zone. external-dns keeps an A
-  record per listener hostname, pointing at the Gateway's internal load balancer IP. The zone is
+- **DNS**: one zone, `dns_zone_name`, public or private (`dns_zone_private`). `<cluster
+  identity>-dns` is federated with `external-dns/external-dns` and granted `DNS Zone Contributor` on
+  a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told which
+  (`dns_zone_private`, and the external-dns provider in `dns_provider`: `azure` or
+  `azure-private-dns`). external-dns keeps a record per listener hostname, pointing at the Gateway's
+  address. The zone is
   looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise - or, with
   `dns_zone_create = true`, created there. A created zone answers nothing until the domain's
   registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
-  (`terraform output dns_zone_name_servers`). **The zone answers with a private address**: a public zone then tells anyone who asks
-  the internal IP of the Gateway, which only resolves to something reachable from inside the network.
-- **Private DNS**: with `internal_dns_zone_name` set, the same identity is also federated with
-  `external-dns/external-dns-internal` - a second external-dns release, since its Azure provider
-  writes public or private zones, never both - and granted `Private DNS Zone Contributor` on that
-  Azure Private DNS zone. It keeps the same A records for the listener hostnames in that zone, and
-  they resolve only in the networks the zone is linked to. The zone is looked up in
-  `resource_group_name` unless `internal_dns_zone_resource_group_name` says otherwise - or, with
-  `internal_dns_zone_create = true`, created there and linked to the cluster's virtual network
-  (which takes one: a cluster on the network AKS manages has nothing to link it to, and Terraform
-  warns). In `dev` the zone is `internal.onek8s.lol`, a subdomain of the public zone:
-  inside the network it is answered by the private zone, outside by nothing. The wildcard certificate
-  covers its hostnames as well.
+  (`terraform output dns_zone_name_servers`). A private zone is never created here: it is
+  provisioned and linked to the networks outside, and the Let's Encrypt DNS-01 challenge needs a
+  public zone for the certificate's names. In `dev` the zone is the public `onek8s.lol`.
 
 ## Key Vault
 
@@ -685,7 +674,7 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | Resource group and network | `rg-aks-dev`, `vnet-aks-dev` with the nodes' subnet `snet-aks-nodes` (`resource_group_create`, `virtual_network_create`) | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name` |
 | Key Vault | `kv-onek8s-dev-shared`, with every grant on it - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false` |
 | What a namespace reads the vault as | `id-sec-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
-| DNS zones | `onek8s.lol` looked up in `rg-onek8s-dns` (`dns_zone_create = false`); `internal.onek8s.lol` created, linked to the network | Looked up: `dns_zone_name` and `internal_dns_zone_name`, without `*_create`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on both zones, and owns its own records in them (`txtOwnerId`) |
+| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`) | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
 | Hostnames every cluster serves | `global_hostnames`: `hello.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the stateless clusters' public addresses alike and leaves out one whose probe fails | Each cluster serves the hostname on its public Gateway; its external-dns leaves the record alone |
@@ -760,7 +749,7 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | --- | --- |
 | `key_vault_url`, `key_vault_client_id_<namespace>` | The vault of `key_vault_name`, and for each namespace with a share of it the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_ingress_gateway`. |
 | `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
-| `internal_dns_zone_name`, `internal_dns_zone_resource_group_name`, `internal_dns_zone_subscription_id` | The private zone of `internal_dns_zone_name`. |
+| `dns_zone_private`, `dns_provider` | Whether the zone is private (`"true"` / `"false"`), and the external-dns provider that writes it: `azure` or `azure-private-dns`. |
 | `dns_identity_client_id` | The identity external-dns writes either zone as. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 

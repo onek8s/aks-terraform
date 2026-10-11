@@ -32,13 +32,13 @@ node_subnet_name     = "snet-aks-nodes"
 key_vault_name   = "kv-onek8s-dev-shared"
 key_vault_create = false
 
-# SHARED. The zones the Gateway's hostnames are published in, looked up here. The public one,
-# onek8s.lol, lives in rg-onek8s-dns, created once outside Terraform; the private one is shared/'s.
-# This cluster's external-dns gets an identity of its own, granted on both zones, and owns its own
-# records in them; the Flux repository is told where they are.
+# SHARED. The one zone the Gateway's hostnames are published in, onek8s.lol - public, provisioned
+# outside Terraform in rg-onek8s-dns. This cluster's external-dns gets an identity of its own,
+# granted on the zone, and owns its own records in it; the Flux repository is told where it is and
+# whether it is public or private (dns_zone_private).
 dns_zone_name                = "onek8s.lol"
+dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
-internal_dns_zone_name       = "internal.onek8s.lol"
 
 # The disks of the platform's `portable-disk` StorageClass go to resource_group_name rather than the
 # node resource group, so they outlive this cluster. The cluster identity is granted a role of its

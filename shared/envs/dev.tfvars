@@ -58,13 +58,14 @@ flux_github_webhook = true
 # tenants/example/webhook.yaml).
 flux_github_webhook_namespaces = ["example"]
 
-# The public zone exists already: created once with the Azure CLI in rg-onek8s-dns, outside every
-# state, and delegated at the registrar (azure-landing-zone, docs/deployment.md, step 3b). The private
-# zone is created here and linked to the clusters' network.
+# The one zone the environment publishes in: public, so every hostname resolves on the internet. It
+# exists already - created once with the Azure CLI in rg-onek8s-dns, outside every state, and
+# delegated at the registrar (azure-landing-zone, docs/deployment.md, step 3b). dns_zone_private =
+# true would make it an Azure Private DNS zone, provisioned and linked outside this configuration.
 dns_zone_name                = "onek8s.lol"
+dns_zone_private             = false
 dns_zone_create              = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
-internal_dns_zone_name       = "internal.onek8s.lol"
 
 # hello.onek8s.lol, served by every stateless cluster at once: DNS hands out one cluster or the other,
 # and the page says which one answered. Each endpoint is a cluster's public address, published by its

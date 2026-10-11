@@ -45,11 +45,13 @@ data "azurerm_subnet" "api_server" {
   virtual_network_name = var.virtual_network_name
 }
 
-# The public zone the Gateway's hostnames are published in. Either it exists already, like the
-# network, and the cluster is only given access to it - or, with dns_zone_create, it is created here,
-# and the domain's registrar is pointed at the name servers the dns_zone_name_servers output lists.
+# The one zone the Gateway's hostnames are published in: public, in Azure DNS, or private, in Azure
+# Private DNS (dns_zone_private) - for a domain that only resolves inside the networks the zone is
+# linked to. It exists already and is provisioned outside this configuration - the cluster is only
+# given access to it - or, for a public zone only, it is created here with dns_zone_create, and the
+# domain's registrar is pointed at the name servers the dns_zone_name_servers output lists.
 data "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name != null && !var.dns_zone_create ? 1 : 0
+  count = var.dns_zone_name != null && !var.dns_zone_create && !var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
   resource_group_name = local.dns_zone_resource_group_name
@@ -62,32 +64,11 @@ resource "azurerm_dns_zone" "this" {
   resource_group_name = local.dns_zone_resource_group_name
 }
 
-# The private zone the Gateway's hostnames are also published in, for names that only exist inside
-# the network. Like the public zone it is either looked up or created here; a zone created here is
-# linked to the cluster's network, so the nodes - and everything else in the network - resolve it.
-# An existing zone is expected to be linked already, to whichever networks should see it.
-data "azurerm_private_dns_zone" "internal" {
-  count = var.internal_dns_zone_name != null && !var.internal_dns_zone_create ? 1 : 0
+data "azurerm_private_dns_zone" "zone" {
+  count = var.dns_zone_name != null && var.dns_zone_private ? 1 : 0
 
-  name                = var.internal_dns_zone_name
-  resource_group_name = local.internal_dns_zone_resource_group_name
-}
-
-resource "azurerm_private_dns_zone" "internal" {
-  count = var.internal_dns_zone_name != null && var.internal_dns_zone_create ? 1 : 0
-
-  name                = var.internal_dns_zone_name
-  resource_group_name = local.internal_dns_zone_resource_group_name
-}
-
-resource "azurerm_private_dns_zone_virtual_network_link" "internal" {
-  count = var.internal_dns_zone_name != null && var.internal_dns_zone_create && local.byo_network ? 1 : 0
-
-  name                  = var.name
-  private_dns_zone_name = azurerm_private_dns_zone.internal[0].name
-  resource_group_name   = local.internal_dns_zone_resource_group_name
-  virtual_network_id    = data.azurerm_virtual_network.this[0].id
-  registration_enabled  = false
+  name                = var.dns_zone_name
+  resource_group_name = local.dns_zone_resource_group_name
 }
 
 data "azurerm_private_dns_zone" "this" {
@@ -380,7 +361,7 @@ resource "azurerm_role_assignment" "entra_reader" {
 
 # The identity external-dns publishes the Gateway's hostnames as, federated with the Kubernetes
 # service accounts that act as it - one per zone, see local.external_dns_service_account and
-# local.external_dns_internal_service_account. Named after the cluster identity with what it does
+# Named after the cluster identity with what it does
 # appended, and created only for a zone that is named. The identities that read Key Vault, one per
 # namespace, are in key_vault.tf.
 #
@@ -408,28 +389,7 @@ resource "azurerm_role_assignment" "external_dns" {
 
   principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
   scope                = local.dns_zone_id
-  role_definition_name = "DNS Zone Contributor"
-  principal_type       = "ServicePrincipal"
-}
-
-# The private zone is written by a second external-dns release - its Azure provider handles public
-# or private zones, never both - as the same identity, through a service account of its own.
-resource "azurerm_federated_identity_credential" "external_dns_internal" {
-  count = var.internal_dns_zone_name == null ? 0 : 1
-
-  name                      = "aks-${var.name}-internal"
-  user_assigned_identity_id = azurerm_user_assigned_identity.external_dns[0].id
-  audience                  = ["api://AzureADTokenExchange"]
-  issuer                    = module.aks.oidc_issuer_profile_issuer_url
-  subject                   = local.external_dns_internal_service_account
-}
-
-resource "azurerm_role_assignment" "external_dns_internal" {
-  count = var.create_role_assignments && var.internal_dns_zone_name != null ? 1 : 0
-
-  principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
-  scope                = local.internal_dns_zone_id
-  role_definition_name = "Private DNS Zone Contributor"
+  role_definition_name = var.dns_zone_private ? "Private DNS Zone Contributor" : "DNS Zone Contributor"
   principal_type       = "ServicePrincipal"
 }
 
@@ -560,13 +520,6 @@ check "flux_github_webhook_has_a_vault_and_a_repository" {
   assert {
     condition     = !var.flux_github_webhook || local.flux_github_webhook_enabled
     error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${local.key_vault_enabled ? "no flux_git_repository to reconcile" : "no key_vault_name to keep its token in"}: no token is created."
-  }
-}
-
-check "internal_dns_zone_is_linked" {
-  assert {
-    condition     = !var.internal_dns_zone_create || local.byo_network
-    error_message = "${var.name} creates the private zone ${coalesce(var.internal_dns_zone_name, "of internal_dns_zone_name")} but brings no virtual network to link it to, so nothing resolves its names. Attach the cluster to an existing network (virtual_network_name), or link the zone to the network AKS creates by hand."
   }
 }
 
