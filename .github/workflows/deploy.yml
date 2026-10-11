@@ -33,6 +33,9 @@ name: Deploy
 # nothing secret stored). The identity needs Owner on sub-aks-dev - the configuration creates role
 # assignments for the clusters' identities - and the public zone's resource group, rg-onek8s-dns, is
 # in the same subscription.
+#
+# The Flux repositories (onek8s/aks-fluxcd-platform, onek8s/aks-fluxcd-example) are public and read
+# without a credential: no Git token is passed to Flux, so none can go stale.
 on:
   workflow_dispatch:
     inputs:
@@ -103,7 +106,6 @@ jobs:
       ARM_USE_OIDC: ${{ secrets.AZURE_CLIENT_SECRET == '' }}
       TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
       TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
-      FLUX_GIT_HTTPS_KEY: ${{ secrets.FLUX_GIT_HTTPS_KEY }}
     steps:
       - uses: actions/checkout@v7
 
@@ -125,12 +127,6 @@ jobs:
             echo "See the header of .github/workflows/deploy.yml." >&2
             exit 1
           fi
-
-      # HCL object syntax, as the variable's description asks. GitHub masks the secret in the log.
-      - name: Pass the Flux credentials
-        if: env.FLUX_GIT_HTTPS_KEY != '' && !endsWith(inputs.stack, '-shared')
-        run: |
-          echo "TF_VAR_flux_git_credentials={ https_key = \"$FLUX_GIT_HTTPS_KEY\" }" >> "$GITHUB_ENV"
 
       - name: Log in to Azure (service principal)
         if: env.ARM_CLIENT_SECRET != ''
