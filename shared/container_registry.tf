@@ -43,9 +43,10 @@ resource "azurerm_container_registry_task" "build" {
     push_enabled         = true
     # The task's classic builder sets no platform arguments of its own, unlike BuildKit. A Dockerfile
     # that cross-compiles - its build stage on the host's amd64, publishing for the target, its
-    # runtime stage `FROM --platform=$TARGETPLATFORM` - reads the target from these, as it would
+    # runtime stage `FROM --platform=$TARGETPLATFORM` - reads the platforms from these, as it would
     # under BuildKit. A Dockerfile that ignores them builds for amd64.
     arguments = {
+      BUILDPLATFORM  = "linux/amd64"
       TARGETARCH     = each.value.architecture
       TARGETPLATFORM = "linux/${each.value.architecture}"
     }
