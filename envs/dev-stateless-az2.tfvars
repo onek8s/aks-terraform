@@ -66,9 +66,11 @@ api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 entra_admin_group_object_ids  = []
 entra_reader_group_object_ids = []
 
-# No Azure Policy add-on: its Gatekeeper alone asks for 360m CPU and 868Mi of memory, a fifth of
-# the single small node; the landing zone audits the subscription with Azure Policy instead.
-azure_policy_enabled = false
+# The Azure Policy add-on (OneK8s design section 14): Gatekeeper evaluates the policies that
+# onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy) and reports the
+# cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory, more
+# than one small node has left, so the system pool scales out to a second node when they need it.
+azure_policy_enabled = true
 
 # Standard_D2als_v6: the smallest size with availability zones in swedencentral and quota in the
 # subscription - Standard_B2s has no zones there (AvailabilityZoneNotSupported), and the B-series v2
@@ -76,8 +78,10 @@ azure_policy_enabled = false
 default_node_pool = {
   vm_size             = "Standard_D2als_v6"
   availability_zones  = ["2"]
-  enable_auto_scaling = false
+  enable_auto_scaling = true
   node_count          = 1
+  min_count           = 1
+  max_count           = 2 # room for the Azure Policy add-on
 }
 
 # The `example` team. Its own Flux configuration deploys stateless/ of onek8s/aks-fluxcd-example into
