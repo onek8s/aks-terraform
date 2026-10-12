@@ -206,7 +206,9 @@ variable "container_registry_builds" {
   description = <<DESCRIPTION
 Images the registry builds itself, keyed by `<repository>:<tag>` in the registry: the Git `repository`
 it reads anonymously - a public one - at `commit`, with `dockerfile` in `folder` (the root by
-default), for the `architecture` of the nodes that run it - `amd64` by default, or `arm64`. A build
+default), for the `architecture` of the nodes that run it - `amd64` by default, or `arm64`, which the
+Dockerfile receives as TARGETARCH and TARGETPLATFORM (and BUILDPLATFORM, linux/amd64) and has
+to cross-compile for. A build
 runs when its entry is added or changed, so releasing is adding a tag.
 DESCRIPTION
   nullable    = false

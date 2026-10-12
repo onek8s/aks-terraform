@@ -26,10 +26,12 @@ resource "azurerm_container_registry_task" "build" {
   name                  = replace(replace(replace(each.key, "/", "-"), ":", "-"), ".", "_")
   container_registry_id = azurerm_container_registry.this[0].id
 
-  # The architecture of the clusters' nodes: an image runs only on the one it was built for.
+  # The task always runs on its own amd64 host: an arm64 task would run the build under emulation,
+  # where the .NET compiler crashes. The architecture of the clusters' nodes - an image runs only on
+  # the one it was built for - reaches the Dockerfile as build arguments below.
   platform {
     os           = "Linux"
-    architecture = each.value.architecture
+    architecture = "amd64"
   }
 
   docker_step {
@@ -39,6 +41,15 @@ resource "azurerm_container_registry_task" "build" {
     context_access_token = "-" # required by the provider; a public repository is read without one
     image_names          = [each.key]
     push_enabled         = true
+    # The task's classic builder sets no platform arguments of its own, unlike BuildKit. A Dockerfile
+    # that cross-compiles - its build stage on the host's amd64, publishing for the target, its
+    # runtime stage `FROM --platform=$TARGETPLATFORM` - reads the platforms from these, as it would
+    # under BuildKit. A Dockerfile that ignores them builds for amd64.
+    arguments = {
+      BUILDPLATFORM  = "linux/amd64"
+      TARGETARCH     = each.value.architecture
+      TARGETPLATFORM = "linux/${each.value.architecture}"
+    }
   }
 
   lifecycle {
