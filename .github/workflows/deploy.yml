@@ -7,7 +7,7 @@ name: Deploy
 #
 #   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the network, the
 #                        Key Vault, the namespaces' shared identities, the container registry and its
-#                        images, the private zone and hello.onek8s.lol's Traffic Manager. Applied first.
+#                        images and hello.onek8s.lol's Traffic Manager. Applied first.
 #   dev-stateless-az1    the repository root with envs/dev-stateless-az1.tfvars: aks-dev-stateless-az1.
 #   dev-stateless-az2    the repository root with envs/dev-stateless-az2.tfvars: aks-dev-stateless-az2.
 #   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
