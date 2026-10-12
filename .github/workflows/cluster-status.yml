@@ -74,6 +74,13 @@ jobs:
             --query '{kubernetesVersion: kubernetesVersion, currentKubernetesVersion: currentKubernetesVersion, provisioningState: provisioningState, powerState: powerState.code, ingressProfile: ingressProfile, autoUpgrade: autoUpgradeProfile}' \
             --output json
 
+      # What the region's vCPU quotas leave for another cell and for NAP's next nodes.
+      - name: vCPU quota
+        run: |
+          az vm list-usage -l "$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query location -o tsv)" \
+            --query "[?currentValue > \`0\` || contains(name.value, 'Regional') || contains(name.value, 'lowPriority')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
+            --output table
+
       - name: Flux configuration
         run: |
           id=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id --output tsv)
