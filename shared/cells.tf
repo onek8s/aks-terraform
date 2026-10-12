@@ -66,6 +66,9 @@ locals {
         "${key}/kubelet-from-system" = { subnet = key, priority = 100, protocol = "Tcp", ports = ["10250"], sources = [local.cell_subnets["${subnet.cell}/snet-system"].prefix] }
         "${key}/cilium-health"       = { subnet = key, priority = 110, protocol = "Tcp", ports = ["4240"], sources = local.cell_node_prefixes[subnet.cell] }
         "${key}/icmp"                = { subnet = key, priority = 120, protocol = "Icmp", ports = ["*"], sources = local.cell_node_prefixes[subnet.cell] }
+        # CoreDNS, which runs on the system pool, for what queries it from a node's own address - the
+        # ACNS DNS proxy forwarding a pod's query.
+        "${key}/dns" = { subnet = key, priority = 125, protocol = "*", ports = ["53"], sources = local.cell_node_prefixes[subnet.cell] }
         # Azure CNI Overlay keeps the pod addresses between nodes; which pod may reach which is
         # Cilium's to decide.
         "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = [var.cell_pod_cidr] }
