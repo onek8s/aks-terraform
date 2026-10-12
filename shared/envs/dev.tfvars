@@ -43,7 +43,7 @@ container_registry_builds = {
   # For the clusters' Arm64 nodes
   "aks-hello:0.2.1" = {
     repository   = "https://github.com/onek8s/aks-hello.git"
-    commit       = "7d68f5b90885187c4478d89ff8d557fac208cf9f"
+    commit       = "3cd7d6ce696d44e32b705e10163c98dd42067a3e"
     architecture = "arm64"
   }
 }
