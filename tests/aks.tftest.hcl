@@ -3145,6 +3145,105 @@ run "portable_disks_are_left_ungranted_when_grants_are_made_elsewhere" {
   }
 }
 
+# ----------------------------------------------------------------------------------------------
+# Node auto provisioning
+# ----------------------------------------------------------------------------------------------
+
+run "node_auto_provisioning_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = local.node_auto_provisioning == false
+    error_message = "Node auto provisioning should be off unless asked for."
+  }
+}
+
+run "node_auto_provisioning_grants_the_network_and_tells_flux_where_the_nodes_go" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["2"]
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = local.node_auto_provisioning
+    error_message = "node_auto_provisioning_enabled should turn node auto provisioning on for a Base cluster."
+  }
+  assert {
+    condition     = keys(azurerm_role_assignment.network_contributor) == ["virtual_network"]
+    error_message = "Node auto provisioning should grant Network Contributor on the whole virtual network."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.nap_subnet_id == data.azurerm_subnet.node[0].id,
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.nap_availability_zone == "swedencentral-2",
+    ])
+    error_message = "The Flux repository should be told the node subnet and the cell's availability zone."
+  }
+}
+
+run "node_auto_provisioning_keeps_a_narrower_scope_it_is_given_but_warns" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    network_role_assignment_scope  = "subnet"
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+  }
+
+  expect_failures = [check.node_auto_provisioning_network_role_assignment_scope]
+}
+
+run "node_auto_provisioning_without_one_availability_zone_warns" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+  }
+
+  expect_failures = [check.node_auto_provisioning_has_a_subnet_and_a_zone]
+}
+
+run "node_auto_provisioning_refuses_the_cluster_autoscaler" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones  = ["1"]
+      enable_auto_scaling = true
+      max_count           = 3
+    }
+  }
+
+  expect_failures = [var.node_auto_provisioning_enabled]
+}
+
+run "node_auto_provisioning_needs_cilium_overlay" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    network_profile = {
+      network_policy    = "azure"
+      network_dataplane = "azure"
+    }
+  }
+
+  expect_failures = [var.node_auto_provisioning_enabled]
+}
+
 run "a_cluster_on_the_shared_vault_only_federates_the_shared_identities" {
   command = plan
 

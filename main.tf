@@ -263,6 +263,15 @@ module "aks" {
     }
   }
   network_profile = var.network_profile
+  # Node auto provisioning (Karpenter) for the zone nodes - see node_auto_provisioning_enabled. AKS's
+  # default NodePools stay off: every NAP node belongs to a zone NodePool of the Flux repository,
+  # and nothing is created for a pod that no NodePool takes - the ones the system pool runs, say.
+  # Not sent for AKS Automatic, which decides this itself, nor for a cluster without it, which is
+  # left on the `Manual` mode Azure defaults to.
+  node_provisioning_profile = local.node_auto_provisioning ? {
+    default_node_pools = "None"
+    mode               = "Auto"
+  } : null
   sku = {
     name = var.sku_name
     tier = var.sku_tier
@@ -480,6 +489,26 @@ check "automatic_network_role_assignment_scope" {
   assert {
     condition     = !local.is_automatic || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
     error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
+  }
+}
+
+# The same for node auto provisioning on a Base cluster: the zone NodePools create their nodes
+# outside every node pool the subnet assignments were made for.
+check "node_auto_provisioning_network_role_assignment_scope" {
+  assert {
+    condition     = !local.node_auto_provisioning || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
+    error_message = "${var.name} runs node auto provisioning with Network Contributor on its subnets only. Microsoft documents the whole virtual network as the scope NAP needs; nodes may fail to join. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
+  }
+}
+
+# The zone NodePools of the Flux repository read the subnet and the availability zone from the
+# cluster's settings (nap_subnet_id, nap_availability_zone). Without them the variables are
+# substituted as nothing, Azure is handed an empty subnet or zone, and every NodePool is refused or
+# never ready - so a cell that cannot say either is worth a word before it is built.
+check "node_auto_provisioning_has_a_subnet_and_a_zone" {
+  assert {
+    condition     = !local.node_auto_provisioning || (local.byo_network && length(coalesce(var.default_node_pool.availability_zones, [])) == 1)
+    error_message = "${var.name} runs node auto provisioning, but ${local.byo_network ? "its system pool is not in exactly one availability zone" : "it brings no network of its own"}, so the Flux repository is not told ${local.byo_network ? "nap_availability_zone" : "nap_subnet_id"} for its zone NodePools. A stateless cell is one availability zone in an existing network: set default_node_pool.availability_zones to one zone and name virtual_network_name and node_subnet_name."
   }
 }
 

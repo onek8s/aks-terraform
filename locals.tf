@@ -101,6 +101,13 @@ locals {
     # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
     # portable_disks_enabled.
     var.portable_disks_enabled ? { portable_disk_resource_group_name = var.resource_group_name } : {},
+    # Where node auto provisioning puts the zone nodes: the subnet of every zone's AKSNodeClass, and
+    # the availability zone of the cell - its system pool's one zone, as Kubernetes spells it
+    # (`swedencentral-1`) - that every zone NodePool requires. See node_auto_provisioning_enabled.
+    local.node_auto_provisioning && local.byo_network ? { nap_subnet_id = data.azurerm_subnet.node[0].id } : {},
+    local.node_auto_provisioning && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
+      nap_availability_zone = "${var.location}-${var.default_node_pool.availability_zones[0]}"
+    } : {},
   )
 
   # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
@@ -504,11 +511,15 @@ locals {
   fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)
   is_automatic   = var.sku_name == "Automatic"
 
+  # Node auto provisioning on a Base cluster - AKS Automatic runs it regardless and is sent nothing.
+  node_auto_provisioning = var.node_auto_provisioning_enabled && !local.is_automatic
+
   # AKS Automatic provisions its own node pools through node autoprovisioning, which Microsoft
   # documents as needing Network Contributor on the whole virtual network - an assignment on the
   # subnets the cluster was handed is not enough, because the pools it creates are not limited to
-  # them. A Base cluster joins only the subnets named here, so it keeps the narrower grant.
-  network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic ? "virtual_network" : "subnet")
+  # them. So does a Base cluster with node auto provisioning turned on. Any other Base cluster joins
+  # only the subnets named here, so it keeps the narrower grant.
+  network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic || local.node_auto_provisioning ? "virtual_network" : "subnet")
 
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
