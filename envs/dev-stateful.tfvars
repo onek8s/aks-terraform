@@ -101,6 +101,9 @@ managed_namespaces = {
       path = "./apps"
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
+      substitute = {
+        zone_domain = "ext-fi.dev.onek8s.lol"
+      }
     }
   }
 }

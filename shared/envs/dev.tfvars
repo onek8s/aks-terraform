@@ -120,8 +120,8 @@ dns_zone_resource_group_name = "rg-onek8s-dns"
 global_hostnames = {
   "hello.ext-fi.dev" = {
     endpoints = [
-      "hello-dev-stateless-az1.ext-fi.dev.onek8s.lol",
-      "hello-dev-stateless-az2.ext-fi.dev.onek8s.lol",
+      "hello-aks-dev-stateless-az1.ext-fi.dev.onek8s.lol",
+      "hello-aks-dev-stateless-az2.ext-fi.dev.onek8s.lol",
     ]
     health_path = "/healthz"
   }
