@@ -26,6 +26,11 @@ on:
         default: "aks-dev-stateless-az1"
         type: choice
         options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
+      node_iptables:
+        description: "Also dump every node's iptables rules (creates a debug pod per node)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -180,3 +185,19 @@ jobs:
           kubectl describe pods -n ext-fi-example | tail -n 60
           kubectl get events -n ext-fi-example --sort-by=.lastTimestamp | tail -n 30
           kubectl get events -n flux-system --sort-by=.lastTimestamp | tail -n 40
+
+      - name: Node iptables rules
+        if: inputs.node_iptables
+        continue-on-error: true
+        run: |
+          set +e
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubectl get nodes -o json | jq -r '.items[] | "\(.metadata.name) \(.metadata.labels | with_entries(select(.key | test("ebpf|iptables|acns"))))  \(.metadata.annotations | with_entries(select(.key | test("ebpf|iptables|acns"))))"'
+          for node in $(kubectl get nodes -o name | sed 's#node/##'); do
+            echo "== $node"
+            pod="$(kubectl debug "node/$node" -n kube-system --profile=sysadmin --image=mcr.microsoft.com/azurelinux/base/core:3.0 -q -o jsonpath='{.metadata.name}' -- chroot /host sh -c 'iptables-save; echo ---; ip6tables-save' 2>&1)"
+            echo "pod: $pod"
+            kubectl -n kube-system wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=120s >/dev/null
+            kubectl -n kube-system logs "$pod" | grep -vE '^#|^:|^COMMIT|^\*' | head -n 200
+            kubectl -n kube-system delete pod "$pod" --wait=false >/dev/null
+          done
