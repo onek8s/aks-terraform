@@ -8,8 +8,9 @@ name: vCPU quota
 # approves small vCPU increases itself; one it does not approve is reported as failed, with the
 # reason, and needs a support request.
 #
-# Credentials: the same Azure identity and GitHub environment as Deploy; it needs
-# Microsoft.Quota/quotas/write on the subscription (Contributor, or Quota Request Operator).
+# Credentials: the organisation secret AZURE_OWNER - the service principal JSON (clientId,
+# clientSecret, tenantId) of an owner, since Deploy's identity may not request quotas. The
+# subscription is the dev environment's, AZURE_SUBSCRIPTION_ID.
 
 on:
   workflow_dispatch:
@@ -37,7 +38,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   quota:
@@ -47,11 +47,19 @@ jobs:
     env:
       LOCATION: ${{ inputs.location }}
     steps:
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign in to Azure (owner)
+        env:
+          AZURE_OWNER: ${{ secrets.AZURE_OWNER }}
+          SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "$AZURE_OWNER" ] || { echo "::error::The AZURE_OWNER secret is not available to this repository"; exit 1; }
+          client_id="$(jq -r '.clientId // .appId' <<<"$AZURE_OWNER")"
+          secret="$(jq -r '.clientSecret // .password' <<<"$AZURE_OWNER")"
+          tenant="$(jq -r '.tenantId // .tenant' <<<"$AZURE_OWNER")"
+          echo "::add-mask::$secret"
+          az login --service-principal -u "$client_id" -p "$secret" --tenant "$tenant" --only-show-errors -o none
+          az account set --subscription "$SUBSCRIPTION_ID"
 
       - name: Raise the quotas
         env:
