@@ -108,6 +108,8 @@ jobs:
     # hand, the one it is given. A certificate that fails does not hold back the others.
     strategy:
       fail-fast: false
+      # One certificate at a time: they share one ACME account, whose key the first run stores.
+      max-parallel: 1
       matrix:
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"platform-gateway--wildcard"},{"domains":"*.int-fi.dev.onek8s.lol","certificate_name":"int-fi-gateway--wildcard"},{"domains":"*.int-se.dev.onek8s.lol","certificate_name":"int-se-gateway--wildcard"},{"domains":"*.ext-fi.dev.onek8s.lol","certificate_name":"ext-fi-gateway--wildcard"},{"domains":"*.ext-se.dev.onek8s.lol","certificate_name":"ext-se-gateway--wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
@@ -115,10 +117,10 @@ jobs:
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
     environment: ${{ inputs.environment || 'dev' }}
     concurrency:
-      # One issuance at a time per environment - the certificates of one run take turns, and share
-      # one ACME account - and never cancel a run mid-order, it would leave the DNS-01 TXT records
-      # behind.
-      group: renew-certificate-${{ inputs.environment || 'dev' }}
+      # One issuance at a time per certificate - the certificates of one run take turns through
+      # max-parallel, since a group holds one running and one pending job and cancels the rest - and
+      # never cancel a run mid-order, it would leave the DNS-01 TXT records behind.
+      group: renew-certificate-${{ inputs.environment || 'dev' }}-${{ matrix.certificate_name }}
       cancel-in-progress: false
     env:
       TF_ENV: ${{ inputs.environment || 'dev' }}
