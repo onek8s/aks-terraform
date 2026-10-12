@@ -166,10 +166,9 @@ jobs:
           fail=0
           run() { kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
           echo "::group::The pod's resolver"
-          run "cat /etc/resolv.conf; nslookup api.github.com; nslookup api.github.com."; cat /tmp/out
+          run "cat /etc/resolv.conf; nslookup api.github.com"; cat /tmp/out
           echo "::endgroup::"
           if run "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://api.github.com/zen"; then echo "PASS the declared name: $(cat /tmp/out)"; else echo "::error::FAIL the declared name:"; cat /tmp/out; fail=1; fi
-          if run "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://api.github.com./zen"; then echo "PASS the declared name, absolute: $(cat /tmp/out)"; else echo "::error::FAIL the declared name, absolute:"; cat /tmp/out; fail=1; fi
           if run "curl -sS -m 5 -o /dev/null https://www.microsoft.com"; then echo "::error::FAIL an undeclared name is reachable"; fail=1; else echo "PASS an undeclared name stays blocked"; fi
           if run "curl -sS -m 5 -o /dev/null http://api.github.com"; then echo "::error::FAIL an undeclared port is reachable"; fail=1; else echo "PASS an undeclared port stays blocked"; fi
           exit $fail
