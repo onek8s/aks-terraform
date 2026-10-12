@@ -67,15 +67,16 @@ entra_reader_group_object_ids = []
 # cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory.
 azure_policy_enabled = true
 
-# Standard_D4pls_v6: one Arm64 node (Azure Cobalt 100), 4 vCPU and 8 GiB, with availability zones.
+# Standard_D4pls_v5: one Arm64 node (Ampere Altra), 4 vCPU and 8 GiB, with availability zones.
 # Two vCPU are not enough: the platform's pods ask for about 1600m of the 1900m a 2-vCPU node has,
-# and the Azure Policy add-on for 360m more. Arm64 is the cheapest 4-vCPU size here - 0.132 USD an
-# hour against 0.172 for Standard_D4als_v6 (amd64) in swedencentral - and every image the clusters
-# run is published for linux/arm64. A node pool cannot change its architecture: moving a cluster
+# and the Azure Policy add-on for 360m more. Arm64 is cheaper than amd64 here - 0.146 USD an hour
+# against 0.172 for Standard_D4als_v6 in swedencentral - and every image the clusters run is
+# published for linux/arm64. Standard_D4pls_v6 (Cobalt 100, 0.132) had no capacity in the zone
+# (OverconstrainedZonalAllocationRequest). A node pool cannot change its architecture: moving a cluster
 # between amd64 and arm64 means building it again (the Deploy workflow's destroy, then apply). A
 # system node pool cannot run on Spot VMs.
 default_node_pool = {
-  vm_size             = "Standard_D4pls_v6"
+  vm_size             = "Standard_D4pls_v5"
   enable_auto_scaling = false
   node_count          = 1
 }
