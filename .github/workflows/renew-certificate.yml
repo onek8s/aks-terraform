@@ -117,11 +117,9 @@ jobs:
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
     environment: ${{ inputs.environment || 'dev' }}
     concurrency:
-      # One issuance at a time per environment - the certificates of one run take turns, and share
-      # one ACME account - and never cancel a run mid-order, it would leave the DNS-01 TXT records
-      # behind.
-      # Per certificate: a group holds one running and one pending job and cancels the rest, so the
-      # certificates of one run must not share it.
+      # One issuance at a time per certificate - the certificates of one run take turns through
+      # max-parallel, since a group holds one running and one pending job and cancels the rest - and
+      # never cancel a run mid-order, it would leave the DNS-01 TXT records behind.
       group: renew-certificate-${{ inputs.environment || 'dev' }}-${{ matrix.certificate_name }}
       cancel-in-progress: false
     env:
