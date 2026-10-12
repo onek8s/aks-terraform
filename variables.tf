@@ -1185,6 +1185,38 @@ DESCRIPTION
   }
 }
 
+variable "node_auto_provisioning_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether the cluster runs [node auto provisioning][nap] (NAP, the AKS-managed Karpenter) for the
+nodes of its isolation zones (OneK8s design section 4). AKS installs Karpenter and its `NodePool`
+and `AKSNodeClass` CRDs; the `NodePool`s themselves - two per zone, on-demand and spot, amd64 and
+arm64 - are the Flux repository's, so AKS's own default `NodePool`s are turned off
+(`defaultNodePools = None`) and no node is created until a `NodePool` there asks for one. The
+system node pool stays a classic node pool, sized by `default_node_pool`.
+
+Needs Azure CNI Overlay with the Cilium dataplane and no cluster autoscaler on any node pool. The
+cluster identity is granted Network Contributor on the whole virtual network unless
+`network_role_assignment_scope` says otherwise, and the Flux repository is told the node subnet and
+the system pool's availability zone (`nap_subnet_id`, `nap_availability_zone`) for its
+`AKSNodeClass`es and `NodePool`s. Ignored for AKS Automatic, which provisions its nodes this way
+already.
+
+[nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || !var.default_node_pool.enable_auto_scaling
+    error_message = "node_auto_provisioning_enabled cannot be combined with default_node_pool.enable_auto_scaling: AKS refuses node auto provisioning on a cluster that runs the cluster autoscaler on any node pool."
+  }
+  validation {
+    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || (var.network_profile.network_plugin == "azure" && var.network_profile.network_plugin_mode == "overlay" && var.network_profile.network_dataplane == "cilium")
+    error_message = "node_auto_provisioning_enabled needs Azure CNI Overlay powered by Cilium: network_profile.network_plugin = \"azure\", network_plugin_mode = \"overlay\" and network_dataplane = \"cilium\"."
+  }
+}
+
 variable "container_registry_name" {
   type        = string
   default     = null

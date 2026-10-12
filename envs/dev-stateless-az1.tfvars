@@ -86,6 +86,16 @@ default_node_pool = {
   node_count          = 1
 }
 
+# Node auto provisioning (NAP, the AKS-managed Karpenter) for the isolation zones' nodes - OneK8s
+# design section 4. AKS runs Karpenter and none of its own default NodePools; the platform
+# repository's clusters/dev-stateless-az1 defines two NodePools per zone - int-fi, int-se, ext-fi,
+# ext-se, each on-demand and spot, amd64 and arm64 - in this cell's availability zone and the node
+# subnet above. Each zone's nodes are tainted for the zone, and nothing in the lab runs in a zone
+# yet: aks-hello and the platform stay on the system pool, so no NAP node is created and the cell
+# costs what it did. The cluster identity is granted Network Contributor on vnet-aks-dev instead of
+# the node subnet, as NAP needs.
+node_auto_provisioning_enabled = true
+
 # The `example` team. Its own Flux configuration deploys stateless/ of onek8s/aks-fluxcd-example into
 # it - the apps of apps/ that keep no state, aks-hello but not boot-log - from a public repository,
 # read without a credential, and its apps publish themselves through the shared Gateway. It keeps

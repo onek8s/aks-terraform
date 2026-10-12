@@ -33,7 +33,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. Side by side in one resource group and network, on the environment's [shared resources](#shared-resources), so workloads can be moved between them. The two stateless clusters - no persistent storage at all (`persistent_storage_enabled = false`), nodes in availability zone 1 and 2 - both serve `hello.onek8s.lol`. The stateful one is defined but not deployed for now. |
+| `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. Side by side in one resource group and network, on the environment's [shared resources](#shared-resources), so workloads can be moved between them. The two stateless clusters - no persistent storage at all (`persistent_storage_enabled = false`), nodes in availability zone 1 and 2, with [node auto provisioning](#node-auto-provisioning) for the isolation zones - both serve `hello.onek8s.lol`. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -716,6 +716,33 @@ defaults to true - with its namespaces' identities named after it
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
 [traefik]: https://doc.traefik.io/traefik/reference/install-configuration/providers/kubernetes/kubernetes-gateway/
 
+## Node auto provisioning
+
+`node_auto_provisioning_enabled = true` turns on [node auto provisioning][nap] (NAP) - Karpenter,
+run by AKS - for the nodes of the isolation zones (the design's
+[node pools](https://onek8s.github.io/docs/04-node-pools.html)). The `dev` stateless clusters turn it
+on. What it sends, and what it leaves to others:
+
+- `nodeProvisioningProfile` `mode = Auto`, `defaultNodePools = None`. AKS installs Karpenter and the
+  `NodePool` / `AKSNodeClass` CRDs, but none of its own `default` and `system-surge` NodePools, so
+  no NAP node exists that a zone `NodePool` did not ask for. The system pool stays the classic node
+  pool of `default_node_pool`, and a pod that runs there today - aks-hello, the platform's
+  controllers - stays there: none of them tolerates a zone's taint, so no `NodePool` takes them.
+- The `NodePool`s and `AKSNodeClass`es are onek8s/aks-fluxcd-platform's (`infrastructure/node-pools`):
+  two per zone, on-demand and spot, amd64 and arm64. They are told the node subnet and the cell's
+  availability zone as `nap_subnet_id` and `nap_availability_zone`, so the cell has to be one zone in
+  an existing network - a check warns otherwise.
+- The cluster identity gets Network Contributor on the whole virtual network rather than on the node
+  subnet, as Microsoft documents NAP to need; a check warns when `network_role_assignment_scope`
+  narrows it back.
+- Refused with the cluster autoscaler on the system pool, and without Azure CNI Overlay powered by
+  Cilium - the two things AKS refuses NAP for. Ignored for AKS Automatic, which runs NAP regardless.
+
+Turning it on for an existing cluster is an update in place. To turn it off again, delete the zone
+`NodePool`s first, so that their nodes are drained and removed, then set it back to `false`.
+
+[nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
+
 ## GitOps with Flux
 
 A cluster can sync its main configuration from one Git repository through [Flux][flux]. Name the
@@ -754,6 +781,7 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
 | `dns_zone_private`, `dns_provider` | Whether the zone is private (`"true"` / `"false"`), and the external-dns provider that writes it: `azure` or `azure-private-dns`. |
 | `dns_identity_client_id` | The identity external-dns writes either zone as. |
+| `nap_subnet_id`, `nap_availability_zone` | With `node_auto_provisioning_enabled`: the node subnet every zone's `AKSNodeClass` puts its nodes in, and the system pool's one availability zone as Kubernetes spells it (`swedencentral-1`), which every zone `NodePool` requires. See [Node auto provisioning](#node-auto-provisioning). |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 
 A variable the cluster has no value for - those of a vault or zone that is not named - is left out rather than sent empty. They apply to what `path` holds itself; the repository passes them
