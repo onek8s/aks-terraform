@@ -140,7 +140,7 @@ only recoverable if an earlier version survives.
 
 The `dev` environment is deployed from GitHub: the [Deploy](.github/workflows/deploy.yml) workflow,
 started by hand, plans one of its stacks - `dev-shared` (`shared/`), `dev-stateless-az1`,
-`dev-stateless-az2` or `dev-stateful` - and, when run with `apply`, applies that plan. Each stack has its state as `<stack>.tfstate`. It runs in the
+`dev-stateless-az2` or `dev-stateful` - and, when run with `apply`, applies that plan; `destroy` deletes a cluster stack (never `dev-shared`), for a change a cluster cannot take in place, such as moving its nodes between amd64 and arm64. Each stack has its state as `<stack>.tfstate`. It runs in the
 `dev` GitHub environment, signs in as the identity of the `AZURE_*` variables - a service principal
 with the `AZURE_CLIENT_SECRET` secret, or GitHub OIDC without it - and keeps the state in the
 storage account of the variables `TF_STATE_RESOURCE_GROUP` and `TF_STATE_STORAGE_ACCOUNT`, in

@@ -68,20 +68,21 @@ entra_reader_group_object_ids = []
 
 # The Azure Policy add-on (OneK8s design section 14): Gatekeeper evaluates the policies that
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy) and reports the
-# cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory, more
-# than one small node has left, so the system pool scales out to a second node when they need it.
+# cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory.
 azure_policy_enabled = true
 
-# Standard_D2als_v6: the smallest size with availability zones in swedencentral and quota in the
-# subscription - Standard_B2s has no zones there (AvailabilityZoneNotSupported), and the B-series v2
-# family has no quota. 2 vCPU, 4 GiB, amd64. A system node pool cannot run on Spot VMs.
+# Standard_D4pls_v6: one Arm64 node (Azure Cobalt 100), 4 vCPU and 8 GiB, with availability zones.
+# Two vCPU are not enough: the platform's pods ask for about 1600m of the 1900m a 2-vCPU node has,
+# and the Azure Policy add-on for 360m more. Arm64 is the cheapest 4-vCPU size here - 0.132 USD an
+# hour against 0.172 for Standard_D4als_v6 (amd64) in swedencentral - and every image the clusters
+# run is published for linux/arm64. A node pool cannot change its architecture: moving a cluster
+# between amd64 and arm64 means building it again (the Deploy workflow's destroy, then apply). A
+# system node pool cannot run on Spot VMs.
 default_node_pool = {
-  vm_size             = "Standard_D2als_v6"
+  vm_size             = "Standard_D4pls_v6"
   availability_zones  = ["2"]
-  enable_auto_scaling = true
+  enable_auto_scaling = false
   node_count          = 1
-  min_count           = 1
-  max_count           = 2 # room for the Azure Policy add-on
 }
 
 # The `example` team. Its own Flux configuration deploys stateless/ of onek8s/aks-fluxcd-example into

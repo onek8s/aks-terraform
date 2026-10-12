@@ -3,7 +3,9 @@ name: Deploy
 # Plans, and on request applies, one of the dev environment's Terraform stacks, chosen by the `stack`
 # input. Started by hand (or called by another workflow): choose `plan` to see what would change,
 # `apply` to change it. An apply plans first and applies exactly that plan, so what the log shows is
-# what was done.
+# what was done. `destroy` deletes a cluster stack the same way - plan first, then exactly that - for
+# a change a cluster cannot take in place, such as its nodes' architecture: destroy, then apply with
+# allow_empty_state. dev-shared is never destroyed from here.
 #
 #   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the network, the
 #                        Key Vault, the namespaces' shared identities, the container registry and its
@@ -46,11 +48,11 @@ on:
         type: choice
         options: [dev-shared, dev-stateless-az1, dev-stateless-az2, dev-stateful]
       action:
-        description: "plan shows the changes; apply makes them"
+        description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true
         default: "plan"
         type: choice
-        options: [plan, apply]
+        options: [plan, apply, destroy]
       allow_empty_state:
         description: "Continue with an empty state (a first deployment only)"
         required: false
@@ -190,6 +192,12 @@ jobs:
 
       # The backend looks the account key up with the run's identity (use_oidc in terraform.tf, or
       # the client secret when there is one).
+      - name: Refuse to destroy the shared resources
+        if: inputs.action == 'destroy' && endsWith(inputs.stack, '-shared')
+        run: |
+          echo "::error::${TF_STACK} holds what every cluster shares; it is not destroyed from this workflow." >&2
+          exit 1
+
       - name: Initialize
         run: |
           set -euo pipefail
@@ -217,7 +225,9 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          terraform plan -var-file="$VAR_FILE" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
+          destroy=()
+          if [ "${{ inputs.action }}" = destroy ]; then destroy=(-destroy); fi
+          terraform plan -var-file="$VAR_FILE" "${destroy[@]}" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
           code=${PIPESTATUS[0]}
           set -e
           # 0: no changes, 2: changes, anything else: an error.
@@ -228,7 +238,7 @@ jobs:
           esac
 
       - name: Apply
-        if: inputs.action == 'apply' && steps.plan.outputs.changes == 'true'
+        if: (inputs.action == 'apply' || inputs.action == 'destroy') && steps.plan.outputs.changes == 'true'
         run: terraform apply -no-color tfplan
 
       - name: Summary
