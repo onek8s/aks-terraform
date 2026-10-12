@@ -71,10 +71,10 @@ jobs:
         run: |
           set -euo pipefail
           az provider register --namespace Microsoft.Quota --wait --only-show-errors
-          az extension add --name quota --only-show-errors --yes
           scope="/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Compute/locations/$LOCATION"
           usage="$(az vm list-usage -l "$LOCATION" -o json)"
           fail=0
+          raised=""
           while IFS='=' read -r label target; do
             [ -n "$label" ] || continue
             label="$(echo "$label" | xargs)"
@@ -84,17 +84,38 @@ jobs:
             limit="$(jq -r '.limit' <<<"$row")"
             used="$(jq -r '.currentValue' <<<"$row")"
             if [ "$limit" -ge "$target" ]; then echo "OK $label ($name): $used used of $limit, target $target"; continue; fi
-            echo "Raising $label ($name): $used used of $limit, to $target"
-            if out="$(az quota update --resource-name "$name" --scope "$scope" \
-                  --limit-object value="$target" limit-object-type=LimitValue --resource-type dedicated \
-                  --only-show-errors -o json 2>&1)"; then
-              echo "$out" | jq -r '"  \(.properties.limit.value // .limit.value // "?") - \(.properties.provisioningState // .provisioningState // "submitted")"' 2>/dev/null || echo "$out"
+            echo "Requesting $label ($name): $used used of $limit, to $target"
+            body="$(jq -nc --arg n "$name" --argjson v "$target" '{properties: {limit: {limitObjectType: "LimitValue", value: $v}, name: {value: $n}}}')"
+            if out="$(az rest --method put --url "https://management.azure.com$scope/providers/Microsoft.Quota/quotas/$name?api-version=2023-02-01" \
+                  --body "$body" --only-show-errors 2>&1)"; then
+              raised="$raised $name=$target"
             else
               echo "::error::$label: $out"; fail=1
             fi
           done <<<"$TARGETS"
+
+          # The requests are asynchronous: wait until the limits show them, or Azure turns one down.
+          for _ in $(seq 1 40); do
+            [ -n "$raised" ] || break
+            usage="$(az vm list-usage -l "$LOCATION" -o json)"
+            pending=""
+            for pair in $raised; do
+              name="${pair%%=*}"; target="${pair#*=}"
+              limit="$(jq -r --arg n "$name" '[.[] | select(.name.value == $n)][0].limit' <<<"$usage")"
+              [ "$limit" -ge "$target" ] || pending="$pending $pair"
+            done
+            raised="$pending"
+            [ -z "$raised" ] && break
+            sleep 15
+          done
+          if [ -n "$raised" ]; then
+            echo "::error::Not raised yet:$raised. The latest quota requests:"
+            az rest --method get --url "https://management.azure.com$scope/providers/Microsoft.Quota/quotaRequests?api-version=2023-02-01" \
+              --query "value[0:6].{state: properties.provisioningState, message: properties.message, submitted: properties.requestSubmitTime, values: properties.value[].{name: name.value, limit: limit.value, state: provisioningState, message: message}}" -o json || true
+            fail=1
+          fi
           echo
           az vm list-usage -l "$LOCATION" \
-            --query "[?contains(name.value, 'ores') || contains(name.value, 'DPSv6') || contains(name.value, 'DALv6') || contains(name.value, 'Dalv6') || contains(name.value, 'Dpsv6')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
+            --query "[?contains(name.value, 'ores') || contains(name.value, 'Dalv6') || contains(name.value, 'Dpsv6')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
             --output table
           exit $fail
