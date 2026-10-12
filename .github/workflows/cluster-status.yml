@@ -195,7 +195,7 @@ jobs:
           kubectl get nodes -o json | jq -r '.items[] | "\(.metadata.name) \(.metadata.labels | with_entries(select(.key | test("ebpf|iptables|acns"))))  \(.metadata.annotations | with_entries(select(.key | test("ebpf|iptables|acns"))))"'
           for node in $(kubectl get nodes -o name | sed 's#node/##'); do
             echo "== $node"
-            pod="$(kubectl debug "node/$node" -n kube-system --profile=sysadmin --image=mcr.microsoft.com/azurelinux/base/core:3.0 -q -o jsonpath='{.metadata.name}' -- chroot /host sh -c 'iptables-save; echo ---; ip6tables-save' 2>&1)"
+            pod="$(kubectl debug "node/$node" -n kube-system --profile=sysadmin --image=mcr.microsoft.com/azurelinux/base/core:3.0 -- chroot /host sh -c 'iptables-save; echo ---; ip6tables-save' 2>&1 | sed -nE 's/.*debugging pod ([^ ]+).*/\1/p')"
             echo "pod: $pod"
             kubectl -n kube-system wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --timeout=120s >/dev/null
             kubectl -n kube-system logs "$pod" | grep -vE '^#|^:|^COMMIT|^\*' | head -n 200
