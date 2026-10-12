@@ -6,6 +6,7 @@ name: Cluster status
 #   - the cluster's Kubernetes version and its managed Gateway API CRD bundle;
 #   - the Flux configuration's compliance and the status of every object it reconciles;
 #   - the records in the DNS zone;
+#   - the container registry's image builds: the latest runs, and the log of the latest failed one;
 #   - the Azure Policy add-on: whether it is on, and the compliance the cluster reports to the
 #     subscription's policy assignments (onek8s/azure-landing-zone, stacks/aks-policy);
 #   - through `az aks command invoke`, the Gateways and HTTPRoutes and their status, the Flux
@@ -94,6 +95,18 @@ jobs:
           az policy state list --resource "$id" --filter "complianceState eq 'NonCompliant'" \
             --query '[].{assignment: policyAssignmentName, definition: policyDefinitionReferenceId || policyDefinitionName}' \
             --top 100 --output table
+
+      - name: Registry builds
+        continue-on-error: true
+        run: |
+          registry=$(az acr list -g "$RESOURCE_GROUP" --query '[0].name' --output tsv)
+          az acr task list-runs -r "$registry" --top 10 \
+            --query '[].{run: runId, task: task, status: status, platform: platform.architecture, started: startTime}' --output table
+          failed=$(az acr task list-runs -r "$registry" --run-status Failed --top 1 --query '[0].runId' --output tsv)
+          if [ -n "$failed" ]; then
+            echo "== log of $failed"
+            az acr task logs -r "$registry" --run-id "$failed" | tail -n 80
+          fi
 
       - name: DNS records
         continue-on-error: true
