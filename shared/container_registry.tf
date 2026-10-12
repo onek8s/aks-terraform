@@ -26,9 +26,10 @@ resource "azurerm_container_registry_task" "build" {
   name                  = replace(replace(replace(each.key, "/", "-"), ":", "-"), ".", "_")
   container_registry_id = azurerm_container_registry.this[0].id
 
+  # The architecture of the clusters' nodes: an image runs only on the one it was built for.
   platform {
     os           = "Linux"
-    architecture = "amd64"
+    architecture = each.value.architecture
   }
 
   docker_step {

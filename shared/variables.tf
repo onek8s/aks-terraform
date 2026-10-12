@@ -196,22 +196,29 @@ DESCRIPTION
 
 variable "container_registry_builds" {
   type = map(object({
-    repository = string
-    commit     = string
-    dockerfile = optional(string, "Dockerfile")
-    folder     = optional(string)
+    repository   = string
+    commit       = string
+    dockerfile   = optional(string, "Dockerfile")
+    folder       = optional(string)
+    architecture = optional(string, "amd64")
   }))
   default     = {}
   description = <<DESCRIPTION
 Images the registry builds itself, keyed by `<repository>:<tag>` in the registry: the Git `repository`
 it reads anonymously - a public one - at `commit`, with `dockerfile` in `folder` (the root by
-default). A build runs when its entry is added or changed, so releasing is adding a tag.
+default), for the `architecture` of the nodes that run it - `amd64` by default, or `arm64`. A build
+runs when its entry is added or changed, so releasing is adding a tag.
 DESCRIPTION
   nullable    = false
 
   validation {
     condition     = alltrue([for build in values(var.container_registry_builds) : can(regex("^[0-9a-f]{40}$", build.commit))])
     error_message = "A build's commit must be a full 40-character commit ID, so a tag always means the same source."
+  }
+
+  validation {
+    condition     = alltrue([for build in values(var.container_registry_builds) : contains(["amd64", "arm64"], build.architecture)])
+    error_message = "A build's architecture must be amd64 or arm64."
   }
 }
 

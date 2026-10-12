@@ -6,6 +6,8 @@ name: Cluster status
 #   - the cluster's Kubernetes version and its managed Gateway API CRD bundle;
 #   - the Flux configuration's compliance and the status of every object it reconciles;
 #   - the records in the DNS zone;
+#   - the Azure Policy add-on: whether it is on, and the compliance the cluster reports to the
+#     subscription's policy assignments (onek8s/azure-landing-zone, stacks/aks-policy);
 #   - through `az aks command invoke`, the Gateways and HTTPRoutes and their status, the Flux
 #     Kustomizations and HelmReleases, and the recent logs of Traefik and external-dns. This part
 #     needs the principal to hold a Kubernetes RBAC role on the cluster (Azure Kubernetes Service RBAC
@@ -74,6 +76,25 @@ jobs:
             --query '{complianceState: properties.complianceState, errorMessage: properties.errorMessage, sourceSyncedCommitId: properties.sourceSyncedCommitId, statuses: properties.statuses}' \
             --output json
 
+      - name: Azure Policy
+        continue-on-error: true
+        # The add-on syncs the assignments every 15 minutes and reports back after its next audit
+        # run, so a cluster whose add-on was just turned on shows no Kubernetes results for a while.
+        run: |
+          id=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id --output tsv)
+          echo "== add-on"
+          az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query 'addonProfiles.azurepolicy' --output json
+          echo "== assignments on the subscription"
+          az policy assignment list --query '[].{name: name, enforcementMode: enforcementMode}' --output table
+          echo "== compliance of the cluster, by assignment"
+          az policy state summarize --resource "$id" \
+            --query 'policyAssignments[].{assignment: policyAssignmentId, nonCompliantResources: results.nonCompliantResources, nonCompliantPolicies: results.nonCompliantPolicies}' \
+            --output table
+          echo "== non-compliant policies of the cluster"
+          az policy state list --resource "$id" --filter "complianceState eq 'NonCompliant'" \
+            --query '[].{assignment: policyAssignmentName, definition: policyDefinitionReferenceId || policyDefinitionName}' \
+            --top 100 --output table
+
       - name: DNS records
         continue-on-error: true
         run: |
@@ -98,6 +119,10 @@ jobs:
           kubectl get nodes -o wide
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide
+          kubectl get pods -n kube-system -l app=azure-policy -o wide
+          kubectl get pods -n gatekeeper-system -o wide
+          kubectl get constrainttemplates
+          kubectl logs -n kube-system -l app=azure-policy --tail=40 --prefix
           kubectl get resourcequota -A
           kubectl get pods -A -o 'custom-columns=NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase,CPU:.spec.containers[*].resources.requests.cpu,MEM:.spec.containers[*].resources.requests.memory'
           kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath="{.metadata.annotations}"; echo

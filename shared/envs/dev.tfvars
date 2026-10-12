@@ -40,6 +40,12 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "901b314408bb7aad2633e2f16798e17af57b3fd9"
   }
+  # For the clusters' Arm64 nodes
+  "aks-hello:0.2.1" = {
+    repository   = "https://github.com/onek8s/aks-hello.git"
+    commit       = "7d68f5b90885187c4478d89ff8d557fac208cf9f"
+    architecture = "arm64"
+  }
 }
 
 # Every namespace with a share of the vault in any of the clusters: the platform's ingress-gateway
