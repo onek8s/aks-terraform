@@ -3414,8 +3414,8 @@ run "a_cell_gets_acns_with_fqdn_policies_and_ebpf_host_routing" {
     error_message = "ACNS should be on, with Hubble and FQDN policies."
   }
   assert {
-    condition     = azapi_update_resource.ebpf_host_routing[0].body.properties.networkProfile.advancedNetworking.performance.accelerationMode == "BpfVeth"
-    error_message = "eBPF host routing should be written onto the cluster."
+    condition     = local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
+    error_message = "eBPF host routing should be in the cluster's create request."
   }
 }
 
@@ -3423,7 +3423,7 @@ run "acns_stays_off_unless_asked_for" {
   command = plan
 
   assert {
-    condition     = !can(local.network_profile.advanced_networking) && length(azapi_update_resource.ebpf_host_routing) == 0
+    condition     = !can(local.network_profile.advanced_networking)
     error_message = "No ACNS and no eBPF host routing without advanced_networking."
   }
 }
