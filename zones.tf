@@ -13,6 +13,12 @@ locals {
         enabled                   = var.advanced_networking.fqdn_policies
         advanced_network_policies = var.advanced_networking.fqdn_policies ? "FQDN" : "None"
       }
+      # eBPF host routing. Sent with the cluster's create request: AKS refuses to turn it on for a
+      # running cluster ("User-installed iptables rules found"), even one whose only iptables rules
+      # are its own - so changing it means building the cell again (section 16: drain, rebuild).
+      performance = {
+        acceleration_mode = var.advanced_networking.ebpf_host_routing ? "BpfVeth" : "None"
+      }
     }
   })
 
@@ -20,38 +26,6 @@ locals {
 
   # Whether the system pool keeps everything but the platform's controllers off it.
   system_pool_critical_addons_only = anytrue([for taint in coalesce(var.default_node_pool.node_taints, []) : startswith(taint, "CriticalAddonsOnly")])
-}
-
-# eBPF host routing - ACNS `accelerationMode: BpfVeth` - which the module has no input for. Written
-# onto the cluster after the module has created it, the way `az aks update
-# --acns-datapath-acceleration-mode BpfVeth` does: a read of the cluster, this property merged in,
-# and the whole written back. A later update through the module that leaves it out shows up here as a
-# change in the next plan, and is put back.
-resource "azapi_update_resource" "ebpf_host_routing" {
-  count = local.ebpf_host_routing ? 1 : 0
-
-  resource_id = module.aks.resource_id
-  type        = "Microsoft.ContainerService/managedClusters@${local.aks_api_version}"
-  body = {
-    properties = {
-      networkProfile = {
-        advancedNetworking = {
-          enabled = true
-          performance = {
-            accelerationMode = "BpfVeth"
-          }
-        }
-      }
-    }
-  }
-
-  # AKS runs one operation on a cluster at a time; this one rolls every node.
-  depends_on = [module.aks, azapi_resource.maintenance_configuration]
-
-  timeouts {
-    create = "90m"
-    update = "90m"
-  }
 }
 
 check "ebpf_host_routing_needs_azure_linux_or_ubuntu_on_every_node" {

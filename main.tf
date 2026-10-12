@@ -158,8 +158,9 @@ resource "time_sleep" "role_assignment_propagation" {
 }
 
 module "aks" {
-  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
-  version = "0.8.3"
+  # The Azure Verified Module 0.8.3, vendored with one input added - eBPF host routing at creation,
+  # see modules/avm-managedcluster/VENDORED.md.
+  source = "./modules/avm-managedcluster"
 
   location  = var.location
   name      = var.name
