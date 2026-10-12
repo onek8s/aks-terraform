@@ -1,0 +1,100 @@
+name: vCPU quota
+
+# Raises the dev subscription's compute quotas in a region to what the dev cells need, through the
+# Azure Quota API. Started by hand. Two stateless cells take, each, a 4-vCPU system node (Dalv6) and
+# a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a surge node while they upgrade.
+#
+# A quota only ever goes up here: a limit already at or above its target is left as it is. Azure
+# approves small vCPU increases itself; one it does not approve is reported as failed, with the
+# reason, and needs a support request.
+#
+# Credentials: the organisation secret AZURE_OWNER - the service principal JSON (clientId,
+# clientSecret, tenantId) of an owner, since Deploy's identity may not request quotas. The
+# subscription is the dev environment's, AZURE_SUBSCRIPTION_ID.
+
+on:
+  workflow_dispatch:
+    inputs:
+      location:
+        description: "The region"
+        required: true
+        default: "swedencentral"
+      regional:
+        description: "Total Regional vCPUs"
+        required: true
+        default: "32"
+      dpsv6:
+        description: "Standard Dpsv6 Family vCPUs"
+        required: true
+        default: "24"
+      dalv6:
+        description: "Standard Dalv6 Family vCPUs"
+        required: true
+        default: "16"
+      low_priority:
+        description: "Total Regional Low-priority vCPUs (spot)"
+        required: true
+        default: "8"
+
+permissions:
+  contents: read
+
+jobs:
+  quota:
+    name: vCPU quota ${{ inputs.location }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      LOCATION: ${{ inputs.location }}
+    steps:
+      - name: Sign in to Azure (owner)
+        env:
+          AZURE_OWNER: ${{ secrets.AZURE_OWNER }}
+          SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "$AZURE_OWNER" ] || { echo "::error::The AZURE_OWNER secret is not available to this repository"; exit 1; }
+          client_id="$(jq -r '.clientId // .appId' <<<"$AZURE_OWNER")"
+          secret="$(jq -r '.clientSecret // .password' <<<"$AZURE_OWNER")"
+          tenant="$(jq -r '.tenantId // .tenant' <<<"$AZURE_OWNER")"
+          echo "::add-mask::$secret"
+          az login --service-principal -u "$client_id" -p "$secret" --tenant "$tenant" --only-show-errors -o none
+          az account set --subscription "$SUBSCRIPTION_ID"
+
+      - name: Raise the quotas
+        env:
+          TARGETS: |
+            Total Regional vCPUs=${{ inputs.regional }}
+            Standard Dpsv6 Family vCPUs=${{ inputs.dpsv6 }}
+            standard Dalv6 Family vCPUs=${{ inputs.dalv6 }}
+            Total Regional Low-priority vCPUs=${{ inputs.low_priority }}
+        run: |
+          set -euo pipefail
+          az provider register --namespace Microsoft.Quota --wait --only-show-errors
+          az extension add --name quota --only-show-errors --yes
+          scope="/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Compute/locations/$LOCATION"
+          usage="$(az vm list-usage -l "$LOCATION" -o json)"
+          fail=0
+          while IFS='=' read -r label target; do
+            [ -n "$label" ] || continue
+            label="$(echo "$label" | xargs)"
+            row="$(jq -c --arg l "$label" '[.[] | select((.localName // .name.localizedValue) | ascii_downcase == ($l | ascii_downcase))][0]' <<<"$usage")"
+            if [ "$row" = null ]; then echo "::error::No quota named '$label' in $LOCATION"; fail=1; continue; fi
+            name="$(jq -r '.name.value' <<<"$row")"
+            limit="$(jq -r '.limit' <<<"$row")"
+            used="$(jq -r '.currentValue' <<<"$row")"
+            if [ "$limit" -ge "$target" ]; then echo "OK $label ($name): $used used of $limit, target $target"; continue; fi
+            echo "Raising $label ($name): $used used of $limit, to $target"
+            if out="$(az quota update --resource-name "$name" --scope "$scope" \
+                  --limit-object value="$target" limit-object-type=LimitValue --resource-type dedicated \
+                  --only-show-errors -o json 2>&1)"; then
+              echo "$out" | jq -r '"  \(.properties.limit.value // .limit.value // "?") - \(.properties.provisioningState // .provisioningState // "submitted")"' 2>/dev/null || echo "$out"
+            else
+              echo "::error::$label: $out"; fail=1
+            fi
+          done <<<"$TARGETS"
+          echo
+          az vm list-usage -l "$LOCATION" \
+            --query "[?contains(name.value, 'ores') || contains(name.value, 'DPSv6') || contains(name.value, 'DALv6') || contains(name.value, 'Dalv6') || contains(name.value, 'Dpsv6')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
+            --output table
+          exit $fail
