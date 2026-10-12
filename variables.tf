@@ -324,12 +324,11 @@ variable "dns_zone_name" {
   description = <<DESCRIPTION
 Name of the DNS zone the cluster publishes its Gateway hostnames in, for example `contoso.com` - a
 public Azure DNS zone, or an Azure Private DNS zone with `dns_zone_private`; an existing one, unless
-`dns_zone_create` is set. external-dns, deployed through
-Flux, keeps an A record in it for every hostname a Gateway listener serves, pointing at the Gateway's address - the private IP of the Azure
-internal load balancer in front of Traefik, so the names resolve publicly to an address only
-reachable from inside the network. An
-identity is created for it here, federated with its Kubernetes service account and granted
-`DNS Zone Contributor` on the zone. Leave it unset and nothing is published.
+`dns_zone_create` is set. external-dns, deployed through Flux, keeps a record in it for every
+hostname a Gateway listener serves, pointing at the address of the load balancer in front of Traefik
+- a public one for a public zone, an internal one for a private zone. An identity is created for it
+here, federated with its Kubernetes service account and granted on the zone. Leave it unset and
+nothing is published.
 DESCRIPTION
 }
 
@@ -338,15 +337,16 @@ variable "dns_zone_private" {
   default     = false
   description = <<DESCRIPTION
 Whether the zone of `dns_zone_name` is an Azure Private DNS zone - a domain that resolves only inside
-the networks the zone is linked to, provisioned and linked outside this configuration - rather than a
-public Azure DNS zone. external-dns writes it with its `azure-private-dns` provider instead of
-`azure`, and is granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`. The Flux
-repository is told which (`dns_zone_private`, `dns_provider`).
+the networks the zone is linked to - rather than a public Azure DNS zone: the one switch between the
+two, set alike here and in shared/, which creates a private zone and links it to the clusters'
+network. external-dns writes it with its `azure-private-dns` provider instead of `azure`, and is
+granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`; Traefik's load balancer is
+internal. The Flux repository is told which (`dns_zone_private`, `dns_provider`).
 DESCRIPTION
   nullable    = false
   validation {
     condition     = !(var.dns_zone_private && var.dns_zone_create)
-    error_message = "A private zone is provisioned outside this configuration: dns_zone_create is for a public zone only."
+    error_message = "A private zone is created and linked to the clusters' network by shared/ (dns_zone_create there): dns_zone_create here is for a public zone only."
   }
 }
 

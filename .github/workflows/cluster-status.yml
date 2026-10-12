@@ -5,7 +5,7 @@ name: Cluster status
 #
 #   - the cluster's Kubernetes version and its managed Gateway API CRD bundle;
 #   - the Flux configuration's compliance and the status of every object it reconciles;
-#   - the records in the public and the private DNS zone;
+#   - the records in the DNS zone;
 #   - through `az aks command invoke`, the Gateways and HTTPRoutes and their status, the Flux
 #     Kustomizations and HelmReleases, and the recent logs of Traefik and external-dns. This part
 #     needs the principal to hold a Kubernetes RBAC role on the cluster (Azure Kubernetes Service RBAC
@@ -34,8 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     env:
-      # The clusters and their shared resources - the private zone among them - are all in one
-      # group; the public zone, created outside Terraform, is in a group of its own.
+      # The clusters and their shared resources are all in one group; the public zone, created
+      # outside Terraform, is in a group of its own.
       RESOURCE_GROUP: rg-aks-dev
       CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
       DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns

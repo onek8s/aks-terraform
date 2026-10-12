@@ -63,10 +63,11 @@ These must exist before running Terraform:
   See [AKS Automatic](#aks-automatic) for the rest of what that SKU needs.
 - A **private DNS zone** named `privatelink.<region>.azmk8s.io`, linked to the virtual network.
   Only needed while the cluster is private.
-- The one **DNS zone** the Gateway's hostnames are published in, provisioned outside this
-  configuration - a public Azure DNS zone, or with `dns_zone_private` an Azure Private DNS zone already
-  linked to the networks that should resolve it - only where `dns_zone_name` names it. (A public zone
-  can also be created here with `dns_zone_create`.) See [Certificates and DNS](#certificates-and-dns).
+- The one **DNS zone** the Gateway's hostnames are published in - a public Azure DNS zone, or with
+  `dns_zone_private` an Azure Private DNS zone - only where `dns_zone_name` names it. [`shared/`](shared/)
+  creates either (a private one linked to the clusters' network), or it is provisioned outside
+  Terraform; a public zone can also be created here with `dns_zone_create`. See
+  [Certificates and DNS](#certificates-and-dns).
   The Key Vault is not a prerequisite: it is created here - see [Key Vault](#key-vault).
 
 A cluster on the network AKS manages needs none of the network pieces: it names a resource group and
@@ -605,9 +606,11 @@ deploys, each acting as an identity created here:
   looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise - or, with
   `dns_zone_create = true`, created there. A created zone answers nothing until the domain's
   registrar delegates to it: set the domain's NS records to the `dns_zone_name_servers` output
-  (`terraform output dns_zone_name_servers`). A private zone is never created here: it is
-  provisioned and linked to the networks outside, and the Let's Encrypt DNS-01 challenge needs a
-  public zone for the certificate's names. In `dev` the zone is the public `onek8s.lol`.
+  (`terraform output dns_zone_name_servers`). A private zone is not created by a cluster: `shared/`
+  creates it with `dns_zone_private = true` and `dns_zone_create = true` and links it to the
+  clusters' network, so choosing between the two is that one setting, alike in `shared/` and in
+  every cluster. The Let's Encrypt DNS-01 challenge needs a public zone for the certificate's names,
+  and so do `global_hostnames`. In `dev` the zone is the public `onek8s.lol`, the only domain.
 
 ## Key Vault
 
@@ -674,7 +677,7 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | Resource group and network | `rg-aks-dev`, `vnet-aks-dev` with the nodes' subnet `snet-aks-nodes` (`resource_group_create`, `virtual_network_create`) | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name` |
 | Key Vault | `kv-onek8s-dev-shared`, with every grant on it - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false` |
 | What a namespace reads the vault as | `id-sec-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
-| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`) | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
+| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
 | Hostnames every cluster serves | `global_hostnames`: `hello.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the stateless clusters' public addresses alike and leaves out one whose probe fails | Each cluster serves the hostname on its public Gateway; its external-dns leaves the record alone |

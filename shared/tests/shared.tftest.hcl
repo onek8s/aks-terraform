@@ -39,7 +39,7 @@ mock_provider "azurerm" {
   }
   mock_resource "azurerm_private_dns_zone" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/internal.contoso.com"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/privateDnsZones/contoso.com"
     }
   }
 }
@@ -319,4 +319,53 @@ run "a_private_zone_is_looked_up_and_gets_no_traffic_manager" {
   }
 
   expect_failures = [check.global_hostnames_need_a_public_zone]
+}
+
+run "a_private_zone_created_here_is_linked_to_the_clusters_network" {
+  command = plan
+
+  variables {
+    dns_zone_name                 = "contoso.com"
+    dns_zone_private              = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_create        = true
+    virtual_network_address_space = ["172.20.0.0/22"]
+  }
+
+  assert {
+    condition = alltrue([
+      length(azurerm_dns_zone.this) == 0,
+      azurerm_private_dns_zone.this[0].name == "contoso.com",
+      azurerm_private_dns_zone_virtual_network_link.this[0].private_dns_zone_name == "contoso.com",
+      azurerm_private_dns_zone_virtual_network_link.this[0].registration_enabled != true,
+      length(data.azurerm_virtual_network.this) == 0,
+    ])
+    error_message = "A private zone created here should be linked to the network created here, and no public zone created."
+  }
+}
+
+run "a_private_zone_on_an_existing_network_links_that_network" {
+  command = plan
+
+  variables {
+    dns_zone_name        = "contoso.com"
+    dns_zone_private     = true
+    virtual_network_name = "vnet-aks-test"
+  }
+
+  assert {
+    condition     = length(data.azurerm_virtual_network.this) == 1 && data.azurerm_virtual_network.this[0].name == "vnet-aks-test" && length(azurerm_private_dns_zone_virtual_network_link.this) == 1
+    error_message = "A private zone should be linked to the existing network, looked up by name."
+  }
+}
+
+run "a_private_zone_without_a_network_resolves_nowhere" {
+  command = plan
+
+  variables {
+    dns_zone_name    = "contoso.com"
+    dns_zone_private = true
+  }
+
+  expect_failures = [check.a_created_private_zone_has_a_network_to_resolve_in]
 }

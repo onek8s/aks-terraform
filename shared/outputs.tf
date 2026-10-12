@@ -20,7 +20,7 @@ output "key_vault_identities" {
 }
 
 output "dns_zone_name_servers" {
-  description = "Name servers of the public zone, for the domain's NS records at its registrar. Null without a zone."
+  description = "Name servers of the public zone, for the domain's NS records at its registrar. Null without a zone or with a private one."
   value       = try(local.dns_zone.name_servers, null)
 }
 

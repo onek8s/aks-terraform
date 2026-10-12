@@ -189,15 +189,46 @@ resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
 # Private DNS, dns_zone_private). Each cluster's external-dns owns its own records under its own name,
 # so the clusters never touch each other's - and a hostname moves with its workload.
 #
-# The zone is provisioned outside this configuration and only looked up - onek8s.lol is created once
-# with the Azure CLI, outside every state, so that rebuilding an environment never changes the name
-# servers the registrar points at. A public zone can still be created here with dns_zone_create; the
-# registrar is then pointed at its name servers (dns_zone_name_servers).
+# Either is created here with dns_zone_create, or looked up. dev's onek8s.lol is public and looked up:
+# it was created once with the Azure CLI, outside every state, so that rebuilding the environment never
+# changes the name servers the registrar points at. A public zone created here is delegated by
+# pointing the registrar at its name servers (dns_zone_name_servers); a private one is linked to the
+# clusters' network, so that its names resolve in every cluster of the environment and nowhere else.
 resource "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name != null && var.dns_zone_create ? 1 : 0
+  count = var.dns_zone_name != null && var.dns_zone_create && !var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
   resource_group_name = coalesce(var.dns_zone_resource_group_name, local.resource_group_name)
+}
+
+resource "azurerm_private_dns_zone" "this" {
+  count = var.dns_zone_name != null && var.dns_zone_create && var.dns_zone_private ? 1 : 0
+
+  name                = var.dns_zone_name
+  resource_group_name = coalesce(var.dns_zone_resource_group_name, local.resource_group_name)
+}
+
+data "azurerm_virtual_network" "this" {
+  count = length(azurerm_private_dns_zone.this) == 1 && !var.virtual_network_create && var.virtual_network_name != null ? 1 : 0
+
+  name                = var.virtual_network_name
+  resource_group_name = local.resource_group_name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "this" {
+  count = length(azurerm_private_dns_zone.this) == 1 && var.virtual_network_name != null ? 1 : 0
+
+  name                  = var.virtual_network_name
+  resource_group_name   = azurerm_private_dns_zone.this[0].resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.this[0].name
+  virtual_network_id    = one(concat(azurerm_virtual_network.this[*].id, data.azurerm_virtual_network.this[*].id))
+}
+
+check "a_created_private_zone_has_a_network_to_resolve_in" {
+  assert {
+    condition     = !(var.dns_zone_private && var.dns_zone_create) || var.virtual_network_name != null
+    error_message = "The private zone ${coalesce(var.dns_zone_name, "-")} is created without virtual_network_name, so it is linked to no network and its names resolve nowhere."
+  }
 }
 
 data "azurerm_dns_zone" "this" {
@@ -208,14 +239,14 @@ data "azurerm_dns_zone" "this" {
 }
 
 data "azurerm_private_dns_zone" "this" {
-  count = var.dns_zone_name != null && var.dns_zone_private ? 1 : 0
+  count = var.dns_zone_name != null && !var.dns_zone_create && var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
   resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
 }
 
 locals {
-  dns_zone = one(concat(azurerm_dns_zone.this, data.azurerm_dns_zone.this, data.azurerm_private_dns_zone.this))
+  dns_zone = one(concat(azurerm_dns_zone.this, azurerm_private_dns_zone.this, data.azurerm_dns_zone.this, data.azurerm_private_dns_zone.this))
 }
 
 # Hostnames every cluster of the environment serves at once - hello.onek8s.lol on every stateless

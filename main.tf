@@ -47,9 +47,10 @@ data "azurerm_subnet" "api_server" {
 
 # The one zone the Gateway's hostnames are published in: public, in Azure DNS, or private, in Azure
 # Private DNS (dns_zone_private) - for a domain that only resolves inside the networks the zone is
-# linked to. It exists already and is provisioned outside this configuration - the cluster is only
-# given access to it - or, for a public zone only, it is created here with dns_zone_create, and the
-# domain's registrar is pointed at the name servers the dns_zone_name_servers output lists.
+# linked to. It exists already - shared/ creates it, or it was provisioned outside Terraform - and the
+# cluster is only given access to it; or, for a public zone only, it is created here with
+# dns_zone_create, and the domain's registrar is pointed at the name servers the
+# dns_zone_name_servers output lists.
 data "azurerm_dns_zone" "this" {
   count = var.dns_zone_name != null && !var.dns_zone_create && !var.dns_zone_private ? 1 : 0
 
@@ -512,10 +513,6 @@ check "entra_groups_are_granted_somewhere" {
   }
 }
 
-# A private zone created here is linked to the cluster's network so that it resolves there. A cluster
-# on the network AKS manages has none to link it to - its network is created with the cluster, in
-# the node resource group - and the hostnames published in the zone resolve nowhere until someone
-# links it by hand.
 check "flux_github_webhook_has_a_vault_and_a_repository" {
   assert {
     condition     = !var.flux_github_webhook || local.flux_github_webhook_enabled

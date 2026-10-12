@@ -131,31 +131,32 @@ DESCRIPTION
 variable "dns_zone_name" {
   type        = string
   default     = null
-  description = "The public Azure DNS zone every cluster of the environment publishes its hostnames in. Null for none."
+  description = "The DNS zone every cluster of the environment publishes its hostnames in - public, or private with dns_zone_private. Null for none."
 }
 
 variable "dns_zone_private" {
   type        = bool
   default     = false
-  description = "Whether dns_zone_name is an Azure Private DNS zone - provisioned and linked to the networks outside this configuration - rather than a public Azure DNS zone. global_hostnames need a public zone."
+  description = <<DESCRIPTION
+Whether dns_zone_name is an Azure Private DNS zone, whose names resolve only in the clusters' network
+it is linked to, rather than a public Azure DNS zone. The one switch between the two: the clusters
+say the same in their own `dns_zone_private`. global_hostnames and the Let's Encrypt DNS-01 challenge
+need a public zone.
+DESCRIPTION
   nullable    = false
-  validation {
-    condition     = !(var.dns_zone_private && var.dns_zone_create)
-    error_message = "A private zone is provisioned outside this configuration: dns_zone_create is for a public zone only."
-  }
 }
 
 variable "dns_zone_create" {
   type        = bool
   default     = true
-  description = "Whether to create dns_zone_name here. False looks up a zone that exists already - one created outside Terraform, so that its name servers outlive every state."
+  description = "Whether to create dns_zone_name here - a private zone together with its link to virtual_network_name. False looks up a zone that exists already: one created outside Terraform, so that its name servers outlive every state."
   nullable    = false
 }
 
 variable "dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the public zone. Defaults to `resource_group_name`."
+  description = "Resource group of the zone. Defaults to `resource_group_name`."
 }
 
 variable "virtual_network_name" {
