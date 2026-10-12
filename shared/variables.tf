@@ -70,6 +70,7 @@ DESCRIPTION
 
 variable "key_vault_namespaces" {
   type = map(object({
+    zone = optional(string)
     writers = optional(list(object({
       principal_id   = string
       principal_type = optional(string, "Group")
@@ -82,10 +83,19 @@ named `<namespace>--<name>`, and reads them as the identity `id-<region>-<enviro
 cluster federates the identity with its namespace's `key-vault` service account - so a namespace
 with a share in a cluster has to be listed here.
 
+`zone` puts the namespace's share in that isolation zone's vault (zone_key_vault_names) - an
+application's namespace, or its zone's gateway; without one it is in key_vault_name, the platform
+vault - `flux-system`, say.
+
 `writers` manage the namespace's secrets and no others: `Key Vault Secrets Officer` under the same
 condition. Object IDs, not names.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = alltrue([for share in values(var.key_vault_namespaces) : share.zone == null || contains(keys(var.zone_key_vault_names), coalesce(share.zone, "-"))])
+    error_message = "A namespace's zone must be one of zone_key_vault_names."
+  }
 
   validation {
     condition     = alltrue([for namespace in keys(var.key_vault_namespaces) : !strcontains(namespace, "--")])
@@ -236,6 +246,93 @@ Hostnames in dns_zone_name that every listed cluster serves at once, keyed by th
 each cluster's own public hostname, such as `public-aks-dev-stateless-az1.onek8s.lol` - alike and
 leaving out one whose probe of `health_path` fails, and a CNAME of the hostname to it. The clusters'
 external-dns have to leave the hostname alone.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "key_vault_purge_protection_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether key_vault_name has purge protection. Needed once the vault holds the clusters'
+customer-managed keys: Azure refuses a disk encryption set over a key from a vault without it. A
+vault with it cannot be purged, so its name stays taken for 90 days after it is deleted - Terraform
+recovers it instead when it is created again.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "zone_key_vault_names" {
+  type        = map(string)
+  default     = {}
+  description = <<DESCRIPTION
+One Key Vault per isolation zone - OneK8s design section 6 - keyed by the zone (`int-fi`): the
+secrets of the zone's applications. A namespace's share is in its zone's vault (key_vault_namespaces,
+`zone`). Key Vault names are global.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for name in values(var.zone_key_vault_names) : can(regex("^[a-zA-Z](-?[a-zA-Z0-9])+$", name)) && length(name) >= 3 && length(name) <= 24])
+    error_message = "A zone vault's name must be 3 to 24 letters, digits and single hyphens, starting with a letter and ending with a letter or digit."
+  }
+}
+
+variable "isolation_zones" {
+  type = map(object({
+    exposure = string
+    index    = number
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+The isolation zones - OneK8s design, "Isolation zone" - keyed by name (`int-fi`, `ext-se`):
+`exposure` `int` (reached from the corporate network) or `ext` (from the internet), and `index`, the
+zone's /24 in each cell's address space (1 to 15; 0 is the system pool's). A zone's index never
+changes once it is in use - a new country's zones take new ones.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for zone in values(var.isolation_zones) : contains(["int", "ext"], zone.exposure)])
+    error_message = "An isolation zone's exposure must be int or ext."
+  }
+  validation {
+    condition     = length(distinct([for zone in values(var.isolation_zones) : zone.index])) == length(var.isolation_zones)
+    error_message = "Two isolation zones cannot share an index."
+  }
+}
+
+variable "cells" {
+  type = map(object({
+    address_space = string
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+The stateless cells' networks, keyed by the cell (`dev-stateless-az1`, the cluster's name without
+`aks-`): `vnet-<cell>` with `address_space`, a /20, laid out as cells.tf describes - `snet-system`
+for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for cell in values(var.cells) : can(cidrsubnet(cell.address_space, 4, 15)) && tonumber(split("/", cell.address_space)[1]) == 20])
+    error_message = "A cell's address_space must be a /20."
+  }
+}
+
+variable "cell_pod_cidr" {
+  type        = string
+  default     = "100.201.0.0/16"
+  description = "The clusters' overlay pod range (their network_profile.pod_cidr), which the cells' NSGs let in between nodes."
+  nullable    = false
+}
+
+variable "internal_dns_zones" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Azure Private DNS zones for the internal zones' names - `int-fi.dev.onek8s.lol` - created here and
+linked to every cell's network, so they resolve inside the cells and nowhere else.
 DESCRIPTION
   nullable    = false
 }

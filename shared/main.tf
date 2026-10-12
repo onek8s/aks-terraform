@@ -75,7 +75,10 @@ locals {
 }
 
 # The vault, on the Azure RBAC permission model - access policies know no conditions - and reached
-# over its public endpoint, authenticated with Entra ID.
+# over its public endpoint, authenticated with Entra ID. With isolation zones it is the environment's
+# platform vault (OneK8s design sections 13 and 18): the gateways' certificates, the clusters'
+# customer-managed keys and the platform's own secrets, while the applications' secrets live in their
+# zone's vault below.
 resource "azurerm_key_vault" "this" {
   location                   = var.location
   name                       = var.key_vault_name
@@ -83,9 +86,37 @@ resource "azurerm_key_vault" "this" {
   sku_name                   = "standard"
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   rbac_authorization_enabled = true
-  # A deleted secret can be recovered for the default 90 days. Purge protection is left off, so that a
-  # prototype's vault can be purged and its name reused.
-  purge_protection_enabled = false
+  # A deleted secret can be recovered for the default 90 days. Purge protection stays off unless the
+  # vault holds customer-managed keys - a disk encryption set refuses a key from a vault without it -
+  # so that a prototype's vault can otherwise be purged and its name reused.
+  purge_protection_enabled = var.key_vault_purge_protection_enabled
+}
+
+# One vault per isolation zone (design section 6): the secrets of the zone's applications, each
+# application reading only its own under an ABAC condition, as below. Nothing of one zone is in
+# another zone's vault.
+resource "azurerm_key_vault" "zone" {
+  for_each = var.zone_key_vault_names
+
+  location                   = var.location
+  name                       = each.value
+  resource_group_name        = local.resource_group_name
+  sku_name                   = "standard"
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = false
+}
+
+locals {
+  # The vault each namespace's share is in: its zone's, or the platform vault for a namespace with no
+  # zone.
+  key_vault_ids = merge({ for zone, vault in azurerm_key_vault.zone : zone => vault.id }, { "" = azurerm_key_vault.this.id })
+  namespace_key_vault_ids = {
+    for namespace, share in var.key_vault_namespaces : namespace => local.key_vault_ids[share.zone == null ? "" : share.zone]
+  }
+  namespace_key_vault_uris = {
+    for namespace, share in var.key_vault_namespaces : namespace => share.zone == null ? azurerm_key_vault.this.vault_uri : azurerm_key_vault.zone[share.zone].vault_uri
+  }
 }
 
 # The identity each namespace reads its own secrets as, in every cluster of the environment. A cluster
@@ -112,7 +143,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_reader" {
   for_each = var.create_role_assignments ? var.key_vault_namespaces : {}
 
   principal_id         = azurerm_user_assigned_identity.key_vault[each.key].principal_id
-  scope                = azurerm_key_vault.this.id
+  scope                = local.namespace_key_vault_ids[each.key]
   role_definition_name = "Key Vault Secrets User"
   principal_type       = "ServicePrincipal"
   condition_version    = "2.0"
@@ -124,20 +155,22 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   for_each = var.create_role_assignments ? local.key_vault_writers : {}
 
   principal_id         = each.value.principal_id
-  scope                = azurerm_key_vault.this.id
+  scope                = local.namespace_key_vault_ids[each.value.namespace]
   role_definition_name = "Key Vault Secrets Officer"
   principal_type       = each.value.principal_type
   condition_version    = "2.0"
   condition            = module.conventions.key_vault_write_conditions[each.value.namespace]
 }
 
-# The whole vault: the platform's secrets and certificates - the listener certificates in
-# ingress-gateway - are put there by them.
+# Every vault, whole: the platform's secrets and certificates - the gateways' listener certificates
+# - are put there by them.
 resource "azurerm_role_assignment" "key_vault_admin" {
-  for_each = toset(var.create_role_assignments ? var.key_vault_admin_group_object_ids : [])
+  for_each = var.create_role_assignments ? {
+    for pair in setproduct(var.key_vault_admin_group_object_ids, keys(local.key_vault_ids)) : "${pair[0]}/${pair[1]}" => { group = pair[0], vault = pair[1] }
+  } : {}
 
-  principal_id         = each.value
-  scope                = azurerm_key_vault.this.id
+  principal_id         = each.value.group
+  scope                = local.key_vault_ids[each.value.vault]
   role_definition_name = "Key Vault Administrator"
   principal_type       = "Group"
 }
@@ -172,7 +205,7 @@ resource "azurerm_key_vault_secret" "flux_github_webhook" {
 resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
   for_each = var.flux_github_webhook ? toset(var.flux_github_webhook_namespaces) : toset([])
 
-  key_vault_id = azurerm_key_vault.this.id
+  key_vault_id = lookup(local.namespace_key_vault_ids, each.key, azurerm_key_vault.this.id)
   name         = "${each.key}--github-webhook-token"
   value        = random_password.flux_github_webhook[0].result
   content_type = "text/plain"
@@ -280,12 +313,13 @@ check "global_hostnames_need_a_public_zone" {
 resource "azurerm_traffic_manager_profile" "global" {
   for_each = local.global_hostnames
 
-  name                   = "${local.traffic_manager_prefix}-${each.key}"
+  # A hostname below the zone may have dots in it (`hello.ext-fi.dev`); a profile's name may not.
+  name                   = "${local.traffic_manager_prefix}-${replace(each.key, ".", "-")}"
   resource_group_name    = local.resource_group_name
   traffic_routing_method = "Weighted"
 
   dns_config {
-    relative_name = "${local.traffic_manager_prefix}-${each.key}"
+    relative_name = "${local.traffic_manager_prefix}-${replace(each.key, ".", "-")}"
     ttl           = each.value.ttl
   }
 

@@ -7,9 +7,10 @@ name: Deploy
 # a change a cluster cannot take in place, such as its nodes' architecture: destroy, then apply with
 # allow_empty_state. dev-shared is never destroyed from here.
 #
-#   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the network, the
-#                        Key Vault, the namespaces' shared identities, the container registry and its
-#                        images and hello.onek8s.lol's Traffic Manager. Applied first.
+#   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the cells' networks,
+#                        the platform and zone Key Vaults, the namespaces' shared identities, the
+#                        internal zones' private DNS, the container registry and its images and the
+#                        external zones' Traffic Manager profiles. Applied first.
 #   dev-stateless-az1    the repository root with envs/dev-stateless-az1.tfvars: aks-dev-stateless-az1.
 #   dev-stateless-az2    the repository root with envs/dev-stateless-az2.tfvars: aks-dev-stateless-az2.
 #   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
@@ -155,15 +156,18 @@ jobs:
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
-          feature=ManagedGatewayAPIPreview
-          if [ "$(az feature show --namespace Microsoft.ContainerService --name $feature --query properties.state -o tsv)" != Registered ]; then
-            az feature register --namespace Microsoft.ContainerService --name $feature -o none
-            for _ in $(seq 1 40); do
-              [ "$(az feature show --namespace Microsoft.ContainerService --name $feature --query properties.state -o tsv)" = Registered ] && break
-              sleep 30
-            done
-            az provider register -n Microsoft.ContainerService -o none
-          fi
+          # The managed Gateway API CRDs, and encryption at host on the nodes (design section 18).
+          for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost; do
+            namespace="${pair%/*}"; feature="${pair#*/}"
+            if [ "$(az feature show --namespace "$namespace" --name "$feature" --query properties.state -o tsv)" != Registered ]; then
+              az feature register --namespace "$namespace" --name "$feature" -o none
+              for _ in $(seq 1 40); do
+                [ "$(az feature show --namespace "$namespace" --name "$feature" --query properties.state -o tsv)" = Registered ] && break
+                sleep 30
+              done
+              az provider register -n "$namespace" -o none
+            fi
+          done
           for _ in $(seq 1 40); do
             pending=""
             for p in $providers; do

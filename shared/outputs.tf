@@ -15,6 +15,7 @@ output "key_vault_identities" {
       name         = identity.name
       client_id    = identity.client_id
       principal_id = identity.principal_id
+      vault_uri    = local.namespace_key_vault_uris[namespace]
     }
   }
 }
@@ -32,4 +33,18 @@ output "container_registry_login_server" {
 output "global_hostnames" {
   description = "Per global hostname, the Traffic Manager name it is a CNAME to."
   value       = { for name, profile in azurerm_traffic_manager_profile.global : "${name}.${var.dns_zone_name}" => profile.fqdn }
+}
+
+output "zone_key_vault_uris" {
+  description = "Per isolation zone, the URI of its Key Vault."
+  value       = { for zone, vault in azurerm_key_vault.zone : zone => vault.vault_uri }
+}
+
+output "cell_subnet_ids" {
+  description = "Per cell, its subnets' resource IDs by name."
+  value = {
+    for cell in keys(var.cells) : cell => {
+      for key, subnet in local.cell_subnets : subnet.name => azurerm_subnet.cell[key].id if subnet.cell == cell
+    }
+  }
 }

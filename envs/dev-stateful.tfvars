@@ -15,8 +15,7 @@ sku_tier = "Free"
 
 # The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
 # the environment and what they share. What is this cluster's own carries its name (`aks-dev-stateful`,
-# `id-sec-dev-aks-...`); what is shared carries `shared` (`kv-onek8s-dev-shared`,
-# `id-sec-dev-shared-kv-...`).
+# `id-sec-dev-aks-...`); what is shared carries `shared` (`id-sec-dev-shared-kv-...`).
 resource_group_name = "rg-aks-dev"
 
 # The environment's network, created by shared/: every cluster's nodes share the subnet. With Azure
@@ -24,13 +23,20 @@ resource_group_name = "rg-aks-dev"
 virtual_network_name = "vnet-aks-dev"
 node_subnet_name     = "snet-aks-nodes"
 
-# SHARED. The environment's Key Vault, created by shared/ and looked up here. It holds the secrets
-# of every namespace - the listener certificates of ingress-gateway, the example team's - each
-# namespace reading only the ones named `<namespace>--<name>`, as the environment's shared identity
-# `id-sec-dev-shared-kv-<namespace>`. This cluster adds a federated credential of its own to
-# each; every grant on the vault is shared/'s.
-key_vault_name   = "kv-onek8s-dev-shared"
-key_vault_create = false
+# SHARED. The environment's platform Key Vault, created by shared/ and looked up here, and the
+# ext-fi zone's vault for the example team's secrets - each namespace reading only the ones named
+# `<namespace>--<name>`, as the environment's shared identity `id-sec-dev-shared-kv-<namespace>`.
+# This cluster adds a federated credential of its own to each; every grant on the vaults is shared/'s.
+#
+# Defined, not deployed: the stateful cluster of the design lives in the backend network with no
+# gateway of its own (sections 8 and 13), which clusters/dev-stateful of the platform repository does
+# not follow yet.
+key_vault_name       = "kv-onek8s-dev-platform"
+key_vault_create     = false
+key_vault_namespaces = ["platform-gateway"]
+key_vault_namespace_vaults = {
+  ext-fi-example = "kv-onek8s-dev-ext-fi"
+}
 
 # SHARED. The one zone the Gateway's hostnames are published in, onek8s.lol - public, provisioned
 # outside Terraform in rg-onek8s-dns. This cluster's external-dns gets an identity of its own,
@@ -86,12 +92,18 @@ default_node_pool = {
 # Gateway. It keeps the default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets the
 # Traefik pods in, and nothing else.
 managed_namespaces = {
-  example = {
+  ext-fi-example = {
+    labels = {
+      "platform/zone" = "ext-fi"
+    }
     flux = {
       url  = "https://github.com/onek8s/aks-fluxcd-example"
       path = "./apps"
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
+      substitute = {
+        zone_domain = "ext-fi.dev.onek8s.lol"
+      }
     }
   }
 }
@@ -106,5 +118,5 @@ flux_git_repository = {
 
 # A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
 # receiver (flux-webhook-dev-stateful.onek8s.lol), checked against the token shared/ keeps in the
-# shared vault. flux-system gets this cluster's credential on its shared identity to read it.
+# platform vault. flux-system gets this cluster's credential on its shared identity to read it.
 flux_github_webhook = true

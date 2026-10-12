@@ -183,6 +183,12 @@ module "aks" {
     omsagent = {
       enabled = false
     }
+    # The Secrets Store CSI driver is never used: secrets reach pods only as Kubernetes Secrets
+    # written by External Secrets Operator (OneK8s design section 6). Stated, so that the add-on
+    # cannot be switched on beside Terraform without showing up in the plan.
+    azureKeyvaultSecretsProvider = {
+      enabled = false
+    }
   }
   api_server_access_profile = {
     authorized_ip_ranges               = local.api_server_authorized_ip_ranges
@@ -201,9 +207,11 @@ module "aks" {
   }
   cluster_timeouts   = var.cluster_timeouts
   default_agent_pool = local.default_agent_pool
-  dns_prefix         = var.name
-  enable_telemetry   = var.enable_telemetry
-  fqdn_subdomain     = local.fqdn_subdomain
+  # Every node's OS disk with the cluster's own key - see encryption.tf.
+  disk_encryption_set_id = local.disk_encryption_set_id
+  dns_prefix             = var.name
+  enable_telemetry       = var.enable_telemetry
+  fqdn_subdomain         = local.fqdn_subdomain
   # AKS Automatic places its hosted system components in a subnet of the existing network. A cluster
   # that brings no network sends no profile at all, and AKS hosts them in the network it creates.
   hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
@@ -262,7 +270,7 @@ module "aks" {
       enabled = local.cost_analysis_enabled
     }
   }
-  network_profile = var.network_profile
+  network_profile = local.network_profile
   # Node auto provisioning (Karpenter) for the zone nodes - see node_auto_provisioning_enabled. AKS's
   # default NodePools stay off: every NAP node belongs to a zone NodePool of the Flux repository,
   # and nothing is created for a pod that no NodePool takes - the ones the system pool runs, say.
@@ -304,6 +312,8 @@ module "aks" {
     enabled = true
   }
   security_profile = {
+    # KMS: the Kubernetes secrets in etcd encrypted with the cluster's own key - see encryption.tf.
+    azure_key_vault_kms = local.azure_key_vault_kms
     # Defender for Containers is off, like the rest of the Azure monitoring stack. Stated rather
     # than left out, because a subscription with the Defender for Containers plan and its
     # auto-provisioning on turns the agent on by itself.
@@ -331,6 +341,9 @@ module "aks" {
     azurerm_role_assignment.network_contributor,
     azurerm_role_assignment.private_dns_zone_contributor,
     time_sleep.role_assignment_propagation,
+    azurerm_role_assignment.disk_encryption_set_key,
+    azurerm_role_assignment.cluster_customer_managed_keys,
+    time_sleep.customer_managed_keys_propagation,
   ]
 }
 
@@ -659,7 +672,7 @@ resource "azapi_resource" "flux_extension" {
   parent_id = module.aks.resource_id
   type      = "Microsoft.KubernetesConfiguration/extensions@${local.kubernetes_configuration_api_version}"
   body = {
-    properties = {
+    properties = merge({
       autoUpgradeMinorVersion = true
       extensionType           = "microsoft.flux"
       releaseTrain            = "Stable"
@@ -668,7 +681,14 @@ resource "azapi_resource" "flux_extension" {
           releaseNamespace = "flux-system"
         }
       }
-    }
+      },
+      # On a system pool tainted CriticalAddonsOnly, the Flux controllers tolerate it - they belong to
+      # the platform and run there, never on an isolation zone's nodes.
+      local.system_pool_critical_addons_only ? {
+        configurationSettings = {
+          "toleration-keys" = "CriticalAddonsOnly"
+        }
+    } : {})
   }
 
   # AKS runs one operation on a cluster at a time and refuses the next with "Another operation is

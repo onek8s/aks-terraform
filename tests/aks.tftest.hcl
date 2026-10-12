@@ -3390,3 +3390,237 @@ run "a_private_zone_is_never_created_here" {
 
   expect_failures = [var.dns_zone_private]
 }
+
+# ----------------------------------------------------------------------------------------------
+# A stateless cell of the OneK8s design: isolation zones, ACNS, customer-managed keys, hardening
+# ----------------------------------------------------------------------------------------------
+
+run "a_cell_gets_acns_with_fqdn_policies_and_ebpf_host_routing" {
+  command = plan
+
+  variables {
+    advanced_networking = {}
+    default_node_pool = {
+      os_sku = "AzureLinux"
+    }
+  }
+
+  assert {
+    condition = (
+      local.network_profile.advanced_networking.enabled &&
+      local.network_profile.advanced_networking.observability.enabled &&
+      local.network_profile.advanced_networking.security.advanced_network_policies == "FQDN"
+    )
+    error_message = "ACNS should be on, with Hubble and FQDN policies."
+  }
+  assert {
+    condition     = azapi_update_resource.ebpf_host_routing[0].body.properties.networkProfile.advancedNetworking.performance.accelerationMode == "BpfVeth"
+    error_message = "eBPF host routing should be written onto the cluster."
+  }
+}
+
+run "acns_stays_off_unless_asked_for" {
+  command = plan
+
+  assert {
+    condition     = !can(local.network_profile.advanced_networking) && length(azapi_update_resource.ebpf_host_routing) == 0
+    error_message = "No ACNS and no eBPF host routing without advanced_networking."
+  }
+}
+
+run "warns_about_ebpf_host_routing_on_the_default_node_os" {
+  command = plan
+
+  variables {
+    advanced_networking = {}
+  }
+
+  expect_failures = [check.ebpf_host_routing_needs_azure_linux_or_ubuntu_on_every_node]
+}
+
+run "the_system_pool_can_be_hardened" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      os_sku             = "AzureLinux"
+      encryption_at_host = true
+      ssh_access         = "Disabled"
+      node_taints        = ["CriticalAddonsOnly=true:NoSchedule"]
+    }
+  }
+
+  assert {
+    condition = (
+      local.default_agent_pool.os_sku == "AzureLinux" &&
+      local.default_agent_pool.enable_encryption_at_host &&
+      local.default_agent_pool.security_profile.ssh_access == "Disabled" &&
+      local.default_agent_pool.node_taints == tolist(["CriticalAddonsOnly=true:NoSchedule"])
+    )
+    error_message = "The system pool's OS, encryption at host, SSH and taints should reach the module."
+  }
+}
+
+run "rejects_an_ssh_access_azure_does_not_have" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      ssh_access = "Off"
+    }
+  }
+
+  expect_failures = [var.default_node_pool]
+}
+
+run "customer_managed_keys_encrypt_etcd_and_the_node_disks" {
+  command = plan
+
+  variables {
+    customer_managed_keys = {
+      key_vault_name = "kv-sec-test-platform"
+    }
+  }
+
+  assert {
+    condition     = azurerm_key_vault_key.cluster["kms"].name == "key-aks-test-kms" && azurerm_key_vault_key.cluster["disk"].name == "key-aks-test-disk"
+    error_message = "The cluster should have a KMS key and a disk key of its own."
+  }
+  assert {
+    condition     = azurerm_disk_encryption_set.this[0].name == "des-aks-test" && azurerm_disk_encryption_set.this[0].encryption_type == "EncryptionAtRestWithCustomerKey"
+    error_message = "The disk key should back a disk encryption set."
+  }
+  assert {
+    condition     = local.azure_key_vault_kms.enabled && local.azure_key_vault_kms.key_vault_network_access == "Public" && local.azure_key_vault_kms.key_vault_resource_id == null
+    error_message = "KMS should use the key over the vault's public endpoint, naming no vault."
+  }
+  assert {
+    condition = (
+      azurerm_role_assignment.cluster_customer_managed_keys["kms_key"].role_definition_name == "Key Vault Crypto User" &&
+      azurerm_role_assignment.disk_encryption_set_key[0].role_definition_name == "Key Vault Crypto Service Encryption User"
+    )
+    error_message = "The cluster identity should use the KMS key, the disk encryption set its own key."
+  }
+}
+
+run "without_customer_managed_keys_there_are_none" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_key_vault_key.cluster) == 0 && local.disk_encryption_set_id == null && local.azure_key_vault_kms == null
+    error_message = "Without customer_managed_keys the platform's keys are used."
+  }
+}
+
+run "isolation_zones_tell_flux_their_node_subnets" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+      ext-se = { node_subnet_name = "snet-ext-se-nodes" }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["nap_subnet_id_int_fi", "nap_subnet_id_ext_se"] :
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), key)
+    ])
+    error_message = "The Flux repository should be told every zone's node subnet."
+  }
+}
+
+run "isolation_zones_without_node_auto_provisioning_are_warned_about" {
+  command = plan
+
+  variables {
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+    }
+  }
+
+  expect_failures = [check.isolation_zones_need_node_auto_provisioning]
+}
+
+run "a_namespace_reads_its_zone_vault_on_a_shared_vault" {
+  command = plan
+
+  variables {
+    key_vault_name       = "kv-sec-test-platform"
+    key_vault_create     = false
+    key_vault_namespaces = ["ext-fi-gateway"]
+    key_vault_namespace_vaults = {
+      ext-fi-orders = "kv-sec-test-ext-fi"
+    }
+    managed_namespaces = {
+      ext-fi-orders = {}
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["key_vault_url_ext_fi_gateway", "key_vault_url_ext_fi_orders", "key_vault_client_id_ext_fi_orders"] :
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), key)
+    ])
+    error_message = "The Flux repository should be told each namespace's vault and identity."
+  }
+  assert {
+    condition     = keys(data.azurerm_key_vault.namespace) == ["kv-sec-test-ext-fi"]
+    error_message = "The zone vault should be looked up."
+  }
+}
+
+run "the_internal_zones_are_granted_to_external_dns" {
+  command = plan
+
+  variables {
+    dns_zone_name           = "contoso.com"
+    internal_dns_zone_names = ["int-fi.test.contoso.com"]
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.external_dns_internal["int-fi.test.contoso.com"].role_definition_name == "Private DNS Zone Contributor"
+    error_message = "external-dns should write the internal zones."
+  }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_resource_group_name == "rg-aks-test"
+    error_message = "The Flux repository should be told where the internal zones are."
+  }
+}
+
+run "a_tenant_gets_the_substitutes_it_is_given" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      ext-fi-orders = {
+        flux = {
+          url        = "https://github.com/example/orders"
+          substitute = { zone_domain = "ext-fi.test.contoso.com" }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.managed_namespace_flux_configuration["ext-fi-orders"].body.properties.kustomizations.apps.postBuild.substitute.zone_domain == "ext-fi.test.contoso.com" &&
+      azapi_resource.managed_namespace_flux_configuration["ext-fi-orders"].body.properties.kustomizations.apps.postBuild.substitute.cluster_name == "aks-test"
+    )
+    error_message = "A tenant's substitutes should reach its Flux configuration next to cluster_name."
+  }
+}

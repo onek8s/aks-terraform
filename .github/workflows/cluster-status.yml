@@ -113,6 +113,10 @@ jobs:
         run: |
           echo "== $DNS_ZONE"
           az network dns record-set list -g "$DNS_ZONE_RESOURCE_GROUP" -z "$DNS_ZONE" --query '[].{name: name, type: type, a: ARecords, txt: TXTRecords}' --output json
+          for zone in $(az network private-dns zone list -g "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            echo "== $zone (private)"
+            az network private-dns record-set list -g "$RESOURCE_GROUP" -z "$zone" --query '[].{name: name, type: type, a: aRecords}' --output json
+          done
 
       - name: Inside the cluster
         continue-on-error: true
@@ -129,52 +133,50 @@ jobs:
           # Report everything, whatever one command says.
           set +e -x
           kubectl version
-          kubectl get nodes -o wide
+          kubectl get nodes -o wide -L platform/zone,karpenter.sh/capacity-type,kubernetes.azure.com/ebpf-host-routing
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide
+          kubectl get pods -A -o wide
+          kubectl get nodepools.karpenter.sh,aksnodeclasses.karpenter.azure.com,nodeclaims.karpenter.sh
+          kubectl get nodeclaims.karpenter.sh -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          kubectl get events -A --field-selector reason=FailedScheduling --sort-by=.lastTimestamp | tail -n 20
           kubectl get pods -n kube-system -l app=azure-policy -o wide
-          kubectl get pods -n gatekeeper-system -o wide
           kubectl get constrainttemplates
-          kubectl logs -n kube-system -l app=azure-policy --tail=40 --prefix
           kubectl get resourcequota -A
-          kubectl get pods -A -o 'custom-columns=NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase,CPU:.spec.containers[*].resources.requests.cpu,MEM:.spec.containers[*].resources.requests.memory'
-          kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath="{.metadata.annotations}"; echo
-          kubectl get crd | grep gateway.networking.k8s.io
+          kubectl get crd | grep -E "gateway.networking.k8s.io|cilium.io"
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
-          kubectl get helmrelease -n flux-system traefik -o jsonpath="{.status.conditions}"; echo
-          kubectl get pods -A -o wide | grep -E "NAMESPACE|traefik|external-dns|flux-system|ingress-gateway|example"
-          kubectl describe pods -n traefik | tail -n 60
-          kubectl get events -n traefik --sort-by=.lastTimestamp | tail -n 30
-          kubectl get svc -n traefik -o wide
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
+          kubectl get helmreleases.helm.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
+          kubectl get gitrepositories.source.toolkit.fluxcd.io -A
+          # The gateways: one Traefik per isolation zone and the platform's, their load balancers,
+          # Gateways and routes.
+          kubectl get gatewayclass,gateway,httproute -A
+          kubectl get gateway -A -o yaml
+          kubectl get httproute -A -o yaml
+          kubectl get svc -A -o wide | grep -E "NAMESPACE|LoadBalancer"
+          for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-gateway$"); do
+            kubectl logs -n "$ns" -l app.kubernetes.io/name=traefik --tail=30 --prefix
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -n 15
+          done
+          # External Secrets Operator: the platform's and one per zone, and every store and secret.
           kubectl get externalsecrets.external-secrets.io,secretstores.external-secrets.io -A
           kubectl get externalsecrets.external-secrets.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
-          kubectl get gitrepositories.source.toolkit.fluxcd.io -A
-          kubectl get svc,networkpolicy -n flux-system -o wide
+          kubectl get secretstores.external-secrets.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
+          for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-secrets$|^external-secrets$"); do
+            kubectl logs -n "$ns" -l app.kubernetes.io/name=external-secrets --tail=20 --prefix
+          done
+          # Cilium: the platform's baseline and the applications' egress policies.
+          kubectl get ciliumclusterwidenetworkpolicies,ciliumnetworkpolicies -A
+          kubectl get ciliumnetworkpolicies -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          kubectl get networkpolicy -A
+          # external-dns and Flux's webhook receivers.
+          kubectl logs -n external-dns -l app.kubernetes.io/instance=external-dns-ext --tail=40 --prefix
+          kubectl logs -n external-dns -l app.kubernetes.io/instance=external-dns-int --tail=40 --prefix
           kubectl get receivers.notification.toolkit.fluxcd.io -A
-          # The path the repository's GitHub webhook calls, after https://<flux_webhook_hostname>.
-          echo "webhookPath: $(kubectl get receivers.notification.toolkit.fluxcd.io -n flux-system github -o jsonpath='{.status.webhookPath}')"
-          kubectl get receivers.notification.toolkit.fluxcd.io -n flux-system github -o jsonpath='{.status.conditions}'; echo
-          kubectl get deploy -n flux-system notification-controller -o jsonpath="{.spec.template.spec.containers[0].args}"; echo
-          kubectl get gatewayclass,gateway,httproute -A
-          kubectl get gateway -n ingress-gateway -o yaml
-          kubectl get httproute -A -o yaml
-          kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=80 --prefix
-          kubectl logs -n external-dns deploy/external-dns --tail=80
-          kubectl logs -n external-dns deploy/external-dns-public --tail=40
-          kubectl get kustomization -n flux-system flux-webhook -o jsonpath="{.status.conditions}"; echo
-          kubectl get helmrelease -n flux-system external-dns-public -o jsonpath="{.status.conditions}"; echo
-          # The `example` tenant: its Flux configuration and the objects the extension made of it,
-          # what the repository is applied as, what runs in the namespace and why not.
-          kubectl get fluxconfigs.clusterconfig.azure.com -n example example -o jsonpath="{.status}"; echo
-          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
-          kubectl get gitrepositories.source.toolkit.fluxcd.io -n example -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
-          kubectl get rolebindings -n example -o wide
-          kubectl get clusterrolebindings -o wide | grep -E "NAME|example"
-          kubectl auth can-i --list --as=system:serviceaccount:example:flux-applier -n example
-          kubectl auth can-i create namespaces --as=system:serviceaccount:example:flux-applier
-          kubectl auth can-i create deployments -n ingress-gateway --as=system:serviceaccount:example:flux-applier
-          kubectl get all,endpointslices,networkpolicy,secrets -n example -o wide
-          kubectl describe pods -n example | tail -n 60
-          kubectl get events -n example --sort-by=.lastTimestamp | tail -n 30
+          kubectl get receivers.notification.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.webhookPath} {.status.conditions}{"\n"}{end}'
+          # The `example` team, in the ext-fi zone: its Flux configuration, what runs and why not.
+          kubectl get fluxconfigs.clusterconfig.azure.com -n ext-fi-example ext-fi-example -o jsonpath="{.status}"; echo
+          kubectl get all,endpointslices,networkpolicy -n ext-fi-example -o wide
+          kubectl describe pods -n ext-fi-example | tail -n 60
+          kubectl get events -n ext-fi-example --sort-by=.lastTimestamp | tail -n 30
           kubectl get events -n flux-system --sort-by=.lastTimestamp | tail -n 40
-          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'

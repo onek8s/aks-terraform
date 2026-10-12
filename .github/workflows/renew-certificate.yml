@@ -1,28 +1,37 @@
 name: Renew Certificate
 
-# Issuance and renewal of the certificate the Gateway's listeners serve - `wildcard`, for
-# *.onek8s.lol, which every listener serves - on the schedule and whenever
-# this file changes on main, or the one given when run by hand:
+# Issuance and renewal of the gateways' listener certificates - one wildcard per isolation zone and
+# one for the platform gateway (OneK8s design section 13) - on the schedule and whenever this file
+# changes on main, or the one given when run by hand:
 #
-#   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> External Secrets --> Traefik
+#   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Traefik
 #
-# The certificate is imported into the cluster's Key Vault as `ingress-gateway--<name>` - the share of
-# the vault that belongs to ingress-gateway (README, "Key Vault"). onek8s/aks-fluxcd-platform
-# reads it from there with an ExternalSecret (infrastructure/certificates/gateway-tls.yaml) that
+#   platform-gateway--wildcard   *.onek8s.lol                Flux webhooks, Traefik dashboards
+#   int-fi-gateway--wildcard     *.int-fi.dev.onek8s.lol     the int-fi zone's gateway
+#   int-se-gateway--wildcard     *.int-se.dev.onek8s.lol
+#   ext-fi-gateway--wildcard     *.ext-fi.dev.onek8s.lol
+#   ext-se-gateway--wildcard     *.ext-se.dev.onek8s.lol
+#
+# Each is imported into the environment's platform vault under the name of the gateway namespace's
+# share of it (`<namespace>--wildcard`; README, "Key Vault"), so the gateway of one zone can read its
+# own certificate and no other. onek8s/aks-fluxcd-platform reads it with an ExternalSecret that
 # unpacks the secret behind the certificate as a PKCS#12 bundle, and turns it into the
-# `kubernetes.io/tls` Secret the listeners name. So two things here are not free to change:
+# `kubernetes.io/tls` Secret the zone's listener names. So two things here are not free to change:
 #
-#   - the name: `ingress-gateway--` + `gateway_certificate_name` of the platform's cluster-settings.
+#   - the name: `<zone>-gateway--wildcard`, as the platform's ExternalSecrets read it.
 #   - the format: the certificate is imported as PKCS#12, never as PEM. A certificate's secret keeps
 #     the content type it was imported with, and a PEM one is not what the ExternalSecret unpacks.
+#
+# The internal zones' names are private - they resolve only inside the cells - but the certificates
+# are publicly trusted: Let's Encrypt validates them with a TXT record in the public zone
+# (`_acme-challenge.int-fi.dev.onek8s.lol`), and the names themselves never get a public A record.
 #
 # A new version in the vault reaches the listener within the hour (the ExternalSecret's refresh
 # interval); nothing in the cluster is restarted or redeployed.
 #
 # The vault, the DNS zone and their resource groups are not configuration here: they are read out of
 # the variables file that names them - for `dev`, the environment's shared resources in
-# shared/envs/dev.tfvars, which all of its clusters use; for any other, the cluster's own
-# envs/<environment>.tfvars.
+# shared/envs/dev.tfvars (key_vault_name: the platform vault).
 #
 # Key Vault is also the only state this workflow keeps. Nothing is carried between runs on disk: the
 # certificate already in the vault decides whether a renewal is due, and the ACME account key sits
@@ -64,14 +73,14 @@ on:
         type: choice
         options: [dev]
       domains:
-        description: "Comma-separated SANs. The platform's hostname of the listener must be one of them"
+        description: "Comma-separated SANs. The hostnames of the gateway's listener must be among them"
         required: false
         default: "*.onek8s.lol"
         type: string
       certificate_name:
-        description: "The platform's <listener>_certificate_name; imported as ingress-gateway--<this>"
+        description: "The name in the vault: <gateway namespace>--wildcard"
         required: false
-        default: "wildcard"
+        default: "platform-gateway--wildcard"
         type: string
       acme_server:
         description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing)"
@@ -91,7 +100,7 @@ permissions:
 
 jobs:
   renew:
-    name: ingress-gateway--${{ matrix.certificate_name }} (${{ inputs.environment || 'dev' }})
+    name: ${{ matrix.certificate_name }} (${{ inputs.environment || 'dev' }})
     runs-on: ubuntu-latest
     # Not before the repository has its Azure identity.
     if: vars.AZURE_CLIENT_ID != ''
@@ -100,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"wildcard"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"platform-gateway--wildcard"},{"domains":"*.int-fi.dev.onek8s.lol","certificate_name":"int-fi-gateway--wildcard"},{"domains":"*.int-se.dev.onek8s.lol","certificate_name":"int-se-gateway--wildcard"},{"domains":"*.ext-fi.dev.onek8s.lol","certificate_name":"ext-fi-gateway--wildcard"},{"domains":"*.ext-se.dev.onek8s.lol","certificate_name":"ext-se-gateway--wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
@@ -122,10 +131,10 @@ jobs:
       # environment"), so it goes straight to the zone instead of searching for it.
       AZURE_AUTH_METHOD: cli
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      # Certificate identity and renewal policy. The `ingress-gateway--` prefix is what puts the
-      # certificate in ingress-gateway's share of the vault, where its SecretStore reads it.
+      # Certificate identity and renewal policy. The `<namespace>--` prefix is what puts the
+      # certificate in that gateway namespace's share of the vault, where its SecretStore reads it.
       DOMAINS: ${{ matrix.domains }}
-      CERT_NAME: ingress-gateway--${{ matrix.certificate_name }}
+      CERT_NAME: ${{ matrix.certificate_name }}
       ACME_SERVER: ${{ inputs.acme_server || 'letsencrypt' }}
       ACME_EMAIL: ${{ vars.LETSENCRYPT_EMAIL }}
       # An ACME account belongs to one directory: production and staging know nothing of each other's
@@ -355,7 +364,7 @@ jobs:
           VAULT: ${{ steps.env.outputs.vault }}
         run: |
           {
-            echo "### Gateway certificate - ${TF_ENV}"
+            echo "### Gateway certificate ${CERT_NAME} - ${TF_ENV}"
             echo
             echo "| | |"
             echo "|---|---|"

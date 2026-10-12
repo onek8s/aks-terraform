@@ -33,7 +33,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module]: looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node pool, Azure CNI overlay with Cilium, no uptime SLA. Side by side in one resource group and network, on the environment's [shared resources](#shared-resources), so workloads can be moved between them. The two stateless clusters - no persistent storage at all (`persistent_storage_enabled = false`), nodes in availability zone 1 and 2, with [node auto provisioning](#node-auto-provisioning) for the isolation zones - both serve `hello.onek8s.lol`. The stateful one is defined but not deployed for now. |
+| `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node, no uptime SLA. The two stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own, with the isolation zones' nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys and no persistent storage (`persistent_storage_enabled = false`); both serve `hello.ext-fi.dev.onek8s.lol` behind Traffic Manager. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -556,20 +556,20 @@ configuration provides is the API itself; the controller serving it is deployed 
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on the `2025-09-02-preview` API, the only one that knows the setting. |
 
-The Flux repository runs [Traefik Proxy][traefik], which provides the `traefik`
-GatewayClass, behind a `LoadBalancer` Service annotated
-`service.beta.kubernetes.io/azure-load-balancer-internal: "true"`. AKS creates an
-[internal load balancer][ilb] for it, in the node resource group, with a private frontend IP:
+The Flux repository runs [Traefik Proxy][traefik] once per isolation zone - in `<zone>-gateway`, on
+the zone's own nodes, with a GatewayClass `traefik-<zone>` and one Gateway - and once for the
+platform, in `platform-gateway` on the system pool, for Flux's webhook receivers. Each is behind a
+`LoadBalancer` Service of its own:
 
-- **In an existing network**, the frontend is in the node subnet. The cluster identity already holds
-  `Network Contributor` there, which is all AKS needs - no subnet of its own, no delegation and no
-  further grant.
-- **Without a network of its own**, it is in the network AKS creates for the cluster.
+- **An internal zone's** is an [internal load balancer][ilb] in the zone's `snet-<zone>-ilb`
+  (`service.beta.kubernetes.io/azure-load-balancer-internal-subnet`), reachable from inside the
+  network only. The cluster identity holds `Network Contributor` on the whole network (node auto
+  provisioning), which is all AKS needs.
+- **An external zone's**, and the platform gateway's, is public: Azure Traffic Manager
+  (`global_hostnames` in `shared/`) points an application's one hostname at it in every cell.
 
-Either way the Gateway is reachable from inside the virtual network - and whatever is peered or
-connected to it - only. Traffic reaches the pods from the Traefik pods inside the cluster, so a
-managed namespace that keeps its default closed ingress lets the `traefik` namespace in with a
-`NetworkPolicy` of its own.
+Traffic reaches the pods from the zone's Traefik pods inside the cluster, which the platform's
+Cilium baseline lets in - from the zone's own gateway only.
 
 ### Certificates and DNS
 
@@ -578,14 +578,15 @@ Vault or Azure DNS integration of its own - AKS's, through the App Routing opera
 based GatewayClasses only. So both are done from inside the cluster, by workloads the Flux repository
 deploys, each acting as an identity created here:
 
-- **Certificates** are kept in the cluster's [Key Vault](#key-vault) as `ingress-gateway--<name>` -
-  the share of the vault that belongs to `ingress-gateway`. External Secrets Operator syncs it into
-  the Secret the listeners name, as `ingress-gateway/key-vault`, unpacking the secret behind the
-  certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new version is
-  picked up within the hour.
+- **Certificates** are kept in the environment's platform [Key Vault](#key-vault) as
+  `<zone>-gateway--wildcard` - the share of the vault that belongs to the zone's gateway namespace,
+  so a zone's gateway reads its own certificate and no other. External Secrets Operator syncs it
+  into the Secret the zone's listener names, as `<zone>-gateway/key-vault`, unpacking the secret
+  behind the certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new
+  version is picked up within the hour.
 
-  Every listener serves one wildcard certificate, `ingress-gateway--wildcard`
-  (`*.onek8s.lol`), issued and renewed by the
+  Each zone's listener serves its zone's wildcard certificate (`*.<zone>.dev.onek8s.lol`), and the
+  platform gateway `platform-gateway--wildcard` (`*.onek8s.lol`), all issued and renewed by the
   [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with the
   DNS-01 challenge solved in the environment's public `dns_zone_name` - imported into its
   `key_vault_name`, both read from the variables file that creates them - `shared/envs/dev.tfvars`
@@ -597,7 +598,10 @@ deploys, each acting as an identity created here:
   `Key Vault Secrets Officer` on the vault and `DNS Zone Contributor` on the zone. The Let's Encrypt
   account key is kept in the vault beside the certificate, as `letsencrypt-account-key` - a name in
   no namespace's share. Other certificates can still be imported by hand by an admin group.
-- **DNS**: one zone, `dns_zone_name`, public or private (`dns_zone_private`). `<cluster
+- **DNS**: the internal zones' names are in Azure Private DNS zones of their own
+  (`internal_dns_zone_names`, created by `shared/` and linked to every cell's network), on which
+  `<cluster identity>-dns` is granted `Private DNS Zone Contributor` too. Everything else is in one
+  zone, `dns_zone_name`, public or private (`dns_zone_private`). `<cluster
   identity>-dns` is federated with `external-dns/external-dns` and granted `DNS Zone Contributor` on
   a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told which
   (`dns_zone_private`, and the external-dns provider in `dns_provider`: `azure` or
@@ -620,9 +624,17 @@ permission model - or, with `key_vault_create = false`, looks up the environment
 namespace keeps its secrets in it, and reads only its own: the namespaces are kept apart by the names of the secrets, with
 [Azure ABAC conditions][kvabac] on the role assignments.
 
-**A namespace owns the secrets named `<namespace>--<name>`** - `example--api-key`,
-`ingress-gateway--wildcard`. The namespaces with a share are every managed namespace and the ones
-in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates).
+**A namespace owns the secrets named `<namespace>--<name>`** - `ext-fi-example--api-key`,
+`ext-fi-gateway--wildcard`. The namespaces with a share are every managed namespace and the ones
+in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates);
+the `dev` cells name each zone's gateway and the platform gateway instead.
+
+With isolation zones (OneK8s design section 6) there is more than one vault: `shared/` creates the
+environment's **platform vault** (`key_vault_name`) - the gateways' certificates, the clusters'
+customer-managed keys, the Flux webhook token - and **one vault per zone** (`zone_key_vault_names`)
+for the secrets of the zone's applications. An application namespace's share is in its zone's
+vault: `zone` in `shared/`'s `key_vault_namespaces`, and `key_vault_namespace_vaults` in the
+cluster, which tells the Flux repository each namespace's vault as `key_vault_url_<namespace>`.
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
@@ -674,13 +686,14 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 
 | | Shared - `shared/envs/dev.tfvars` | Per cluster - `envs/dev-<cluster>.tfvars` |
 | --- | --- | --- |
-| Resource group and network | `rg-aks-dev`, `vnet-aks-dev` with the nodes' subnet `snet-aks-nodes` (`resource_group_create`, `virtual_network_create`) | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name` |
-| Key Vault | `kv-onek8s-dev-shared`, with every grant on it - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false` |
+| Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-stateless-az<N>` (`cells`) with `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb`, each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `isolation_zones` |
+| Key Vaults | The platform vault `kv-onek8s-dev-platform` (purge protection, for the customer-managed keys) and one per zone, `kv-onek8s-dev-<zone>` (`zone_key_vault_names`), with every grant on them - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false`, `key_vault_namespace_vaults`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
+| Internal names | `internal_dns_zones`: `int-fi.dev.onek8s.lol`, `int-se.dev.onek8s.lol`, private, linked to every cell's network | Looked up: `internal_dns_zone_names`; external-dns is granted on them |
 | What a namespace reads the vault as | `id-sec-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
 | DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
-| Hostnames every cluster serves | `global_hostnames`: `hello.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the stateless clusters' public addresses alike and leaves out one whose probe fails | Each cluster serves the hostname on its public Gateway; its external-dns leaves the record alone |
+| Hostnames every cluster serves | `global_hostnames`: `hello.ext-fi.dev.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the app's hostname in each cell - an A record of that cell's ext-fi gateway - alike and leaves out one whose probe fails | Each cell serves the hostname on its ext-fi Gateway; the route that names it tells its external-dns to leave the record alone |
 | The cluster | | `aks-dev-<cluster>`, run by `id-sec-dev-aks-<cluster>`; its node resource group, which AKS deletes with it |
 
 The names say which is which: a shared resource carries `shared` - or, for the zones, the
@@ -742,6 +755,26 @@ Turning it on for an existing cluster is an update in place. To turn it off agai
 `NodePool`s first, so that their nodes are drained and removed, then set it back to `false`.
 
 [nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
+
+## Cells of the OneK8s design
+
+The `dev` stateless clusters are the design's cells. Beyond node auto provisioning, they set:
+
+| Variable | What it does | Design |
+| --- | --- | --- |
+| `isolation_zones` | Each zone's node subnet in the cell's network; the Flux repository is told its ID as `nap_subnet_id_<zone>` for the zone's `AKSNodeClass`, so a zone's nodes are in the zone's subnet behind the zone's NSG | sections 2, 4, 5 |
+| `advanced_networking` | Advanced Container Networking Services: Hubble, FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The module has no input for the last, so it is written onto the cluster afterwards with an `azapi_update_resource`, which puts it back if a later module update drops it. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 16 |
+| `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 18 |
+| `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 3, 4, 18 |
+| `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 12 |
+| `internal_dns_zone_names` | The internal zones' private DNS, which the cell's external-dns writes | section 13 |
+
+Always, on every cluster: the Secrets Store CSI driver add-on is off - secrets reach pods only as
+Kubernetes Secrets from External Secrets Operator (design section 6).
+
+The one difference from the design that the lab keeps on purpose: **the API server is public**
+(`private_cluster_enabled = false`), with Entra ID and Azure RBAC on every call and local accounts
+disabled, because the build tenant's lab has no network path into the cells.
 
 ## GitOps with Flux
 
