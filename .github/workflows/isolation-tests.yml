@@ -1,0 +1,186 @@
+name: Isolation tests
+
+# The isolation and egress tests of OneK8s design section 17 ("Requirement and isolation tests") that
+# a pipeline can run against a dev cell, without anyone on a kubeconfig. Started by hand. It creates a
+# test namespace in the ext-fi isolation zone, runs a pod there and deletes both afterwards; it
+# changes nothing else.
+#
+#   - From an application namespace of ext-fi, with only the zone's Cilium baseline: the Azure
+#     instance metadata service, the internet, a name outside the cluster, the zone's Key Vault and
+#     another zone's gateway must all be unreachable; the cluster's own DNS must work.
+#   - With an application egress policy that names one FQDN: that name must work, and nothing else.
+#   - From the runner, on the internet: the external application's names, in the cell and behind
+#     Traffic Manager, answer over HTTPS; plain HTTP does not.
+#   - The cluster: local accounts disabled, SSH off on the system pool, eBPF host routing and
+#     FQDN policies on, customer-managed keys in place.
+#
+# Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
+# role that may create namespaces and pods (Azure Kubernetes Service RBAC Cluster Admin).
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "The cell to test"
+        required: true
+        default: "aks-dev-stateless-az1"
+        type: choice
+        options: [aks-dev-stateless-az1, aks-dev-stateless-az2]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  isolation:
+    name: isolation ${{ inputs.cluster }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      RESOURCE_GROUP: rg-aks-dev
+      CLUSTER: ${{ inputs.cluster }}
+      NAMESPACE: ext-fi-isolation-test
+      ZONE_VAULT: kv-onek8s-dev-ext-fi
+      ZONE_DOMAIN: ext-fi.dev.onek8s.lol
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cluster settings
+        run: |
+          set -euo pipefail
+          fail=0
+          check() { if [ "$2" = "$3" ]; then echo "PASS $1 ($2)"; else echo "::error::FAIL $1: $2, expected $3"; fail=1; fi; }
+          c="$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" -o json)"
+          check "local accounts disabled" "$(jq -r .disableLocalAccounts <<<"$c")" true
+          check "SSH off on the system pool" "$(jq -r '.agentPoolProfiles[0].securityProfile.sshAccess' <<<"$c")" Disabled
+          check "encryption at host" "$(jq -r '.agentPoolProfiles[0].enableEncryptionAtHost' <<<"$c")" true
+          check "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
+          check "ACNS" "$(jq -r '.networkProfile.advancedNetworking.enabled' <<<"$c")" true
+          check "FQDN policies" "$(jq -r '.networkProfile.advancedNetworking.security.advancedNetworkPolicies' <<<"$c")" FQDN
+          check "eBPF host routing" "$(jq -r '.networkProfile.advancedNetworking.performance.accelerationMode' <<<"$c")" BpfVeth
+          check "KMS" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
+          check "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
+          check "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
+          check "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
+          exit $fail
+
+      - name: Credentials
+        run: |
+          sudo az aks install-cli --only-show-errors >/dev/null
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
+          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l azurecli
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Test pod in the ext-fi zone
+        run: |
+          set -euo pipefail
+          kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: $NAMESPACE
+            labels:
+              platform/zone: ext-fi
+              pod-security.kubernetes.io/enforce: restricted
+          ---
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: probe
+            namespace: $NAMESPACE
+            labels:
+              app: probe
+          spec:
+            automountServiceAccountToken: false
+            nodeSelector:
+              platform/zone: ext-fi
+            tolerations:
+              - {key: platform/zone, operator: Equal, value: ext-fi, effect: NoSchedule}
+              - {key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 100
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: probe
+                image: docker.io/curlimages/curl:8.10.1
+                command: ["sleep", "3600"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities: {drop: ["ALL"]}
+                resources:
+                  requests: {cpu: 10m, memory: 16Mi}
+                  limits: {memory: 64Mi}
+          EOF
+          kubectl -n "$NAMESPACE" wait pod/probe --for=condition=Ready --timeout=600s
+
+      - name: The zone baseline denies what it should
+        run: |
+          set -uo pipefail
+          fail=0
+          run() { kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
+          deny() { if run "$2"; then echo "::error::FAIL $1 - reachable:"; cat /tmp/out; fail=1; else echo "PASS $1 - blocked"; fi; }
+          allow() { if run "$2"; then echo "PASS $1"; else echo "::error::FAIL $1:"; cat /tmp/out; fail=1; fi; }
+          int_ilb="$(kubectl -n int-fi-gateway get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+          int_pod="$(kubectl -n int-fi-gateway get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.podIP}' 2>/dev/null || true)"
+          allow "cluster DNS" "nslookup kubernetes.default.svc.cluster.local"
+          deny "instance metadata service" "curl -sS -m 5 -H Metadata:true 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'"
+          deny "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
+          deny "an outside name in DNS" "nslookup -timeout=3 www.microsoft.com | grep -q 'Address: [0-9]'"
+          deny "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
+          deny "the zone's Key Vault" "curl -sS -m 5 -o /dev/null https://$ZONE_VAULT.vault.azure.net/healthstatus"
+          [ -z "$int_ilb" ] || deny "the int-fi gateway's load balancer ($int_ilb)" "curl -sS -m 5 -k -o /dev/null https://$int_ilb"
+          [ -z "$int_pod" ] || deny "the int-fi gateway's pod ($int_pod)" "curl -sS -m 5 -k -o /dev/null https://$int_pod:8443"
+          exit $fail
+
+      - name: An application's FQDN policy opens exactly its names
+        run: |
+          set -uo pipefail
+          kubectl apply -f - <<EOF
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: egress
+            namespace: $NAMESPACE
+          spec:
+            endpointSelector: {}
+            egress:
+              - toEndpoints:
+                  - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+                toPorts:
+                  - ports: [{port: "53", protocol: ANY}]
+                    rules:
+                      dns:
+                        - matchName: api.github.com
+              - toFQDNs:
+                  - matchName: api.github.com
+                toPorts:
+                  - ports: [{port: "443", protocol: TCP}]
+          EOF
+          sleep 10
+          fail=0
+          run() { kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
+          if run "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://api.github.com/zen"; then echo "PASS the declared name: $(cat /tmp/out)"; else echo "::error::FAIL the declared name:"; cat /tmp/out; fail=1; fi
+          if run "curl -sS -m 5 -o /dev/null https://www.microsoft.com"; then echo "::error::FAIL an undeclared name is reachable"; fail=1; else echo "PASS an undeclared name stays blocked"; fi
+          if run "curl -sS -m 5 -o /dev/null http://api.github.com"; then echo "::error::FAIL an undeclared port is reachable"; fail=1; else echo "PASS an undeclared port stays blocked"; fi
+          exit $fail
+
+      - name: The external application from the internet
+        run: |
+          set -uo pipefail
+          fail=0
+          for host in "hello-$CLUSTER.$ZONE_DOMAIN" "hello.$ZONE_DOMAIN"; do
+            code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$host/healthz" || true)"
+            if [ "$code" = 200 ]; then echo "PASS https://$host/healthz"; else echo "::error::FAIL https://$host/healthz: $code"; fail=1; fi
+            if curl -sS -m 5 -o /dev/null "http://$host/"; then echo "::error::FAIL plain HTTP answers on $host"; fail=1; else echo "PASS no plain HTTP on $host"; fi
+          done
+          exit $fail
+
+      - name: Clean up
+        if: always()
+        run: kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=false
