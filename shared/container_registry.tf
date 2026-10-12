@@ -39,6 +39,10 @@ resource "azurerm_container_registry_task" "build" {
     context_access_token = "-" # required by the provider; a public repository is read without one
     image_names          = [each.key]
     push_enabled         = true
+    # The task's classic builder sets no platform arguments of its own, unlike BuildKit. A Dockerfile
+    # that cross-compiles - its build stage on the host's amd64, publishing for the target - reads
+    # the target from TARGETARCH, as it would under BuildKit.
+    arguments = { TARGETARCH = each.value.architecture }
   }
 
   lifecycle {
