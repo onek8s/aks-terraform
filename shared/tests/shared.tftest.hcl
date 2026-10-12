@@ -369,3 +369,140 @@ run "a_private_zone_without_a_network_resolves_nowhere" {
 
   expect_failures = [check.a_created_private_zone_has_a_network_to_resolve_in]
 }
+
+run "a_namespace_with_a_zone_reads_the_zone_vault" {
+  command = apply
+
+  variables {
+    zone_key_vault_names = { ext-fi = "kv-sec-test-ext-fi" }
+    key_vault_namespaces = {
+      ext-fi-gateway = {}
+      ext-fi-orders  = { zone = "ext-fi" }
+    }
+  }
+
+  assert {
+    condition     = azurerm_key_vault.zone["ext-fi"].name == "kv-sec-test-ext-fi" && !azurerm_key_vault.zone["ext-fi"].purge_protection_enabled
+    error_message = "The zone's vault is created, without purge protection."
+  }
+  assert {
+    condition     = azurerm_role_assignment.key_vault_namespace_reader["ext-fi-gateway"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-sec-test-shared"
+    error_message = "A namespace with no zone - a gateway, for its certificate - reads the platform vault."
+  }
+  assert {
+    condition     = azurerm_role_assignment.key_vault_namespace_reader["ext-fi-orders"].condition == module.conventions.key_vault_read_conditions["ext-fi-orders"]
+    error_message = "An application reads its own secrets only, under its prefix."
+  }
+}
+
+run "rejects_a_namespace_in_a_zone_with_no_vault" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      ext-fi-orders = { zone = "ext-fi" }
+    }
+  }
+
+  expect_failures = [var.key_vault_namespaces]
+}
+
+run "the_platform_vault_can_hold_customer_managed_keys" {
+  command = plan
+
+  variables {
+    key_vault_purge_protection_enabled = true
+  }
+
+  assert {
+    condition     = azurerm_key_vault.this.purge_protection_enabled
+    error_message = "A disk encryption set needs purge protection on the vault of its key."
+  }
+}
+
+run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
+  command = plan
+
+  variables {
+    resource_group_create = true
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+      ext-fi = { exposure = "ext", index = 3 }
+    }
+    cells = {
+      dev-stateless-az1 = { address_space = "172.21.0.0/20" }
+    }
+    internal_dns_zones = ["int-fi.test.contoso.com"]
+  }
+
+  assert {
+    condition     = azurerm_virtual_network.cell["dev-stateless-az1"].name == "vnet-dev-stateless-az1" && azurerm_virtual_network.cell["dev-stateless-az1"].encryption[0].enforcement == "AllowUnencrypted"
+    error_message = "Every cell has a network of its own, with VNet encryption."
+  }
+  assert {
+    condition = (
+      azurerm_subnet.cell["dev-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
+      azurerm_subnet.cell["dev-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
+      azurerm_subnet.cell["dev-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
+      azurerm_subnet.cell["dev-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25"
+    )
+    error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second."
+  }
+  assert {
+    condition     = length(azurerm_network_security_group.cell) == 5 && length(azurerm_network_security_rule.cell_deny) == 5
+    error_message = "Every subnet has an NSG of its own that denies what it does not allow."
+  }
+  assert {
+    condition = (
+      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
+      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
+      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-system/https"].source_address_prefix == "Internet"
+    )
+    error_message = "HTTPS comes from the internet to the external zones and the platform gateway, from the network to the internal zones."
+  }
+  assert {
+    condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-stateless-az1/snet-ext-fi-ilb/https")
+    error_message = "An external zone's load balancer is public: its internal load balancer subnet lets nothing in."
+  }
+  assert {
+    condition     = azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-ext-fi-nodes/kubelet-from-system"].source_address_prefix == "172.21.0.0/24"
+    error_message = "Only the system pool reaches a zone's kubelets."
+  }
+  assert {
+    condition     = azurerm_private_dns_zone_virtual_network_link.internal["int-fi.test.contoso.com/dev-stateless-az1"].name == "vnet-dev-stateless-az1"
+    error_message = "The internal zones' names resolve in every cell."
+  }
+}
+
+run "rejects_a_cell_that_is_not_a_slash_20" {
+  command = plan
+
+  variables {
+    cells = {
+      dev-stateless-az1 = { address_space = "172.21.0.0/22" }
+    }
+  }
+
+  expect_failures = [var.cells]
+}
+
+run "a_global_hostname_below_the_zone_has_a_profile_name_without_dots" {
+  command = plan
+
+  variables {
+    dns_zone_name   = "contoso.com"
+    dns_zone_create = false
+    global_hostnames = {
+      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"] }
+    }
+  }
+
+  assert {
+    condition     = azurerm_traffic_manager_profile.global["hello.ext-fi.dev"].name == "contoso-com-test-hello-ext-fi-dev"
+    error_message = "A profile's name has no dots."
+  }
+  assert {
+    condition     = azurerm_dns_cname_record.global["hello.ext-fi.dev"].name == "hello.ext-fi.dev"
+    error_message = "The record keeps the hostname."
+  }
+}

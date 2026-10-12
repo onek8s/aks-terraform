@@ -41,9 +41,9 @@ locals {
             # variables: which cluster it is, so an app can say where it runs. Nothing secret, and
             # nothing a team could use to reach beyond its namespace.
             postBuild = {
-              substitute = {
+              substitute = merge(namespace.flux.substitute, {
                 cluster_name = var.name
-              }
+              })
             }
           }
         }
@@ -108,6 +108,9 @@ locals {
     local.node_auto_provisioning && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
       nap_availability_zone = "${var.location}-${var.default_node_pool.availability_zones[0]}"
     } : {},
+    # Each isolation zone's node subnet, each namespace's vault and the internal zones' DNS - see
+    # zones.tf.
+    local.flux_zone_settings,
   )
 
   # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
@@ -274,6 +277,13 @@ locals {
     }
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = one(data.azurerm_subnet.node[*].id)
+
+    os_sku                    = var.default_node_pool.os_sku
+    enable_encryption_at_host = var.default_node_pool.encryption_at_host
+    node_taints               = var.default_node_pool.node_taints
+    security_profile = var.default_node_pool.ssh_access == null ? null : {
+      ssh_access = var.default_node_pool.ssh_access
+    }
   }
 
   # The pod and service ranges Azure assigns by itself when the create request carries no network

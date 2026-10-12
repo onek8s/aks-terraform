@@ -248,11 +248,25 @@ variable "default_node_pool" {
     max_surge                  = optional(string, "10%")
     drain_timeout_minutes      = optional(number)
     node_soak_duration_minutes = optional(number)
+
+    os_sku             = optional(string)
+    encryption_at_host = optional(bool)
+    ssh_access         = optional(string)
+    node_taints        = optional(list(string))
   })
   default     = {}
   description = <<DESCRIPTION
 System node pool of the cluster. **Ignored for AKS Automatic apart from `name`**, which sizes,
 scales and rolls its own node pools - see the README for what that SKU drops.
+
+- `os_sku` - The node OS, such as `AzureLinux` (Azure Linux 3.0, which eBPF host routing needs on
+  every node). Null leaves the AKS default.
+- `encryption_at_host` - Encrypts the node's temporary disk and caches with the disk encryption set's
+  key too. The subscription needs the `Microsoft.Compute/EncryptionAtHost` feature registered.
+- `ssh_access` - `Disabled` turns off SSH to the nodes; null leaves the AKS default (`LocalUser`).
+- `node_taints` - Taints on the system pool, such as `CriticalAddonsOnly=true:NoSchedule`, which
+  keeps every pod off it that does not tolerate them - the platform's own controllers do; the
+  isolation zones' workloads run on their zones' NAP nodes.
 
 The last three govern how the pool is rolled during an upgrade:
 
@@ -265,6 +279,10 @@ The last three govern how the pool is rolled during an upgrade:
 DESCRIPTION
   nullable    = false
 
+  validation {
+    condition     = var.default_node_pool.ssh_access == null || contains(["Disabled", "LocalUser", "EntraId"], coalesce(var.default_node_pool.ssh_access, "-"))
+    error_message = "default_node_pool.ssh_access must be Disabled, LocalUser or EntraId, or left unset."
+  }
   validation {
     condition     = can(regex("^[a-z][a-z0-9]{0,11}$", var.default_node_pool.name))
     error_message = "default_node_pool.name must be 1 to 12 lowercase letters and digits, starting with a letter."
@@ -779,6 +797,7 @@ variable "managed_namespaces" {
       path                  = optional(string, "./")
       secret_name           = optional(string)
       sync_interval_seconds = optional(number, 300)
+      substitute            = optional(map(string), {})
     }))
     labels = optional(map(string), {})
     network_policy = optional(object({
@@ -922,6 +941,8 @@ managed_namespaces = {
   Vault. Leave it unset for a public repository.
 - `sync_interval_seconds` - How often the repository is read and applied, and how soon a failed
   apply is retried. Defaults to 300; at least 60.
+- `substitute` - Further `$${...}` post-build variables the team's manifests may use, such as the
+  isolation zone's domain (`zone_domain`). `cluster_name` is always there and cannot be overridden.
 
 The repository is applied by the extension's `flux-applier` service account in the namespace, and
 the AKS Flux extension refuses references across namespaces: its manifests land in this namespace
@@ -1391,4 +1412,93 @@ variable "virtual_network_resource_group_name" {
 variable "cost_analysis_enabled" {
   type    = bool
   default = false
+}
+
+variable "advanced_networking" {
+  type = object({
+    observability     = optional(bool, true)
+    fqdn_policies     = optional(bool, true)
+    ebpf_host_routing = optional(bool, true)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium - OneK8s design
+section 16. Null leaves it off.
+
+- `observability` - Hubble flow logs and metrics.
+- `fqdn_policies` - Cilium network policies with `toFQDNs`, resolved by the ACNS DNS proxy: what lets
+  an application's egress name its destinations.
+- `ebpf_host_routing` - eBPF host routing (`accelerationMode: BpfVeth`): no iptables in the node's
+  network namespace. Every node has to run Azure Linux 3.0 or Ubuntu 24.04 on Kubernetes 1.33 or
+  later - set default_node_pool.os_sku. Turning it on or off rolls the nodes.
+DESCRIPTION
+
+  validation {
+    condition     = var.advanced_networking == null || var.network_profile.network_dataplane == "cilium"
+    error_message = "advanced_networking needs network_profile.network_dataplane = \"cilium\"."
+  }
+}
+
+variable "customer_managed_keys" {
+  type = object({
+    key_vault_name                = string
+    key_vault_resource_group_name = optional(string)
+    key_vault_network_access      = optional(string, "Public")
+  })
+  default     = null
+  description = <<DESCRIPTION
+Encryption at rest with customer-managed keys - OneK8s design section 18. Two keys of the cluster's
+own are created in the vault: `key-<cluster>-kms`, with which the control plane encrypts the
+Kubernetes secrets in etcd (KMS), and `key-<cluster>-disk`, the key of a disk encryption set for the
+OS disks of every node - the system pool and the NAP nodes. Null leaves both to platform-managed keys.
+
+The vault - the environment's platform vault, with purge protection, which a disk encryption set
+needs - is reached `Public`ly or, with API Server VNet Integration, `Private`ly. Both settings take
+effect only on a new cluster: a cluster created without a disk encryption set has to be built again.
+DESCRIPTION
+
+  validation {
+    condition     = var.customer_managed_keys == null || contains(["Public", "Private"], try(var.customer_managed_keys.key_vault_network_access, ""))
+    error_message = "customer_managed_keys.key_vault_network_access must be Public or Private."
+  }
+}
+
+variable "isolation_zones" {
+  type = map(object({
+    node_subnet_name = string
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+The isolation zones of a stateless cell - OneK8s design section 4 - keyed by zone (`int-fi`): the
+subnet of virtual_network_name each zone's NAP nodes are put in. The Flux repository is told its ID
+as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's AKSNodeClass. Needs node auto
+provisioning, which is granted the whole virtual network.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "key_vault_namespace_vaults" {
+  type        = map(string)
+  default     = {}
+  description = <<DESCRIPTION
+For a shared vault (key_vault_create = false): the namespaces whose share is in another of the
+environment's vaults than key_vault_name - an application namespace's in its isolation zone's vault -
+keyed by namespace, the vault's name as the value. shared/ makes the grants; the cluster looks the
+vault up, federates the namespace's identity, and tells the Flux repository the vault's URL as
+`key_vault_url_<namespace>` (hyphens as underscores) - every namespace gets that variable, the ones
+in key_vault_name too.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "internal_dns_zone_names" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Azure Private DNS zones in resource_group_name - the internal isolation zones' names, created by
+shared/ - in which the cluster's external-dns keeps the records of its internal gateways.
+Its identity is granted Private DNS Zone Contributor on each; the Flux repository is told their
+resource group as `internal_dns_resource_group_name`.
+DESCRIPTION
+  nullable    = false
 }

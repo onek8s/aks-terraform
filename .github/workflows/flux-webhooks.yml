@@ -4,12 +4,14 @@ name: Flux webhooks
 # clusters at once instead of at the next poll:
 #
 #   onek8s/aks-fluxcd-platform  -> Receiver flux-system/github  (GitRepository platform)
-#   onek8s/aks-fluxcd-example   -> Receiver example/github      (the team's GitRepository example)
+#   onek8s/aks-fluxcd-example   -> Receiver ext-fi-example/github (the team's GitRepository
+#                                  ext-fi-example)
 #
 # one webhook per repository and cluster, to https://<flux_webhook_hostname><receiver path>. The
-# hostname is the platform's convention, flux-webhook-<cluster without aks->.<dns_zone_name>; the path
+# hostname is the platform's convention, flux-webhook-<cluster without aks->.<dns_zone_name>, served
+# by the cluster's platform gateway; the path
 # is the one notification-controller serves a Receiver on, /hook/sha256(token + name + namespace).
-# The token is shared/'s, read from the vault (`flux-system--github-webhook-token`), and is each
+# The token is shared/'s, read from the platform vault (`flux-system--github-webhook-token`), and is each
 # webhook's secret. Webhooks to a Flux receiver of a cluster that no longer runs are deleted.
 #
 # Runs after every successful Deploy, by hand, and when this file changes on main.
@@ -46,7 +48,7 @@ jobs:
       VARS: shared/envs/dev.tfvars
       RECEIVERS: |
         onek8s/aks-fluxcd-platform github flux-system
-        onek8s/aks-fluxcd-example github example
+        onek8s/aks-fluxcd-example github ext-fi-example
     steps:
       - uses: actions/checkout@v7
 
