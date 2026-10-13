@@ -100,7 +100,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `platform/team`, `platform/cost-center` and annotation `platform/contact` (`managed_namespaces.<ns>.owner`
   here; `platform` for the fleet's own); Azure Policy `namespace-ownership` **deny** (0 violations).
   shared/ `monthly_budget` (budget.tf): subscription budget 600/month, Owners told at 80 %/100 % actual and
-  100 % forecast. CIS on az1 59 % (24 of 41).
+  100 % forecast. CIS on az1 56 % (23 of 41); the Grafana collectors' findings (4.1.2, 4.1.6, 4.2.8,
+  4.5.1) are accepted by D48.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
