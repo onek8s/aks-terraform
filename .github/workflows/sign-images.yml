@@ -59,7 +59,9 @@ jobs:
           printf '| Image | Digest | Result |\n|---|---|---|\n' > "$summary"
           failed=0
           for repository in $(az acr repository list -n "$REGISTRY" -o tsv); do
-            for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv); do
+            # Without the referrers API a signature is also kept under a tag `sha256-<digest>`: not an
+            # image, and not to be signed.
+            for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv | grep -v '^sha256-'); do
               digest="$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
               ref="$server/$repository@$digest"
               if notation verify "$ref" >/dev/null 2>&1; then
