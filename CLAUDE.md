@@ -34,6 +34,7 @@ reads; job logs via `get_job_logs`).
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
+| `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-dev-platform` without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
 
 Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
