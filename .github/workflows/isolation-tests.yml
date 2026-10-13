@@ -188,13 +188,14 @@ jobs:
         run: |
           . "$RUNNER_TEMP/lib.sh"
           templates="k8splatformnopersistentstorage k8splatformzoneplacement k8splatformplacementlabels k8splatformfqdnegress k8splatformgatewayonly k8splatformnodepools
-            k8splatformsecretsviaeso k8splatformesoobjects k8splatformserviceaccounts k8splatformrolloutguardrails k8splatformverticalpodautoscalers"
+            k8splatformsecretsviaeso k8splatformesoobjects k8splatformserviceaccounts k8splatformrolloutguardrails k8splatformverticalpodautoscalers
+            k8splatformnamespaceownership"
           for _ in $(seq 1 20); do
             missing=""
             for t in $templates; do kubectl get constrainttemplate "$t" >/dev/null 2>&1 || missing="$missing $t"; done
             mutations="$(kubectl get assign,modifyset -o json 2>/dev/null | jq '.items | length')"
-            [ -z "$missing" ] && [ "${mutations:-0}" -ge 12 ] && break
-            echo "waiting for the add-on: missing templates:${missing:- none}, mutations ${mutations:-0}/12"; sleep 60
+            [ -z "$missing" ] && [ "${mutations:-0}" -ge 13 ] && break
+            echo "waiting for the add-on: missing templates:${missing:- none}, mutations ${mutations:-0}/13"; sleep 60
           done
           for t in $templates; do
             if kubectl get constrainttemplate "$t" >/dev/null 2>&1; then
@@ -208,7 +209,7 @@ jobs:
           # ValidatingAdmissionPolicy).
           storage="$(kubectl get k8splatformnopersistentstorage -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
           case "$storage" in *deny*) result PASS "R8, R14" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R8, R14" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
-          if [ "${mutations:-0}" -ge 12 ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of 12"; fi
+          if [ "${mutations:-0}" -ge 13 ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of 13"; fi
           kubectl get constrainttemplates -o custom-columns=NAME:.metadata.name,CREATED:.status.created || true
 
       # Key Vault ABAC (R7): a namespace's identity - the `key-vault` service account's, what its
@@ -475,7 +476,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . "$RUNNER_TEMP/lib.sh"
-          printf 'apiVersion: v1\nkind: Namespace\nmetadata: {name: %s, labels: {platform/zone: %s, pod-security.kubernetes.io/enforce: restricted}}\n' "$NAMESPACE" "$ZONE" \
+          printf 'apiVersion: v1\nkind: Namespace\nmetadata: {name: %s, labels: {platform/zone: %s, platform/team: platform, platform/cost-center: platform, pod-security.kubernetes.io/enforce: restricted}, annotations: {platform/contact: "https://github.com/onek8s/aks-terraform/issues"}}\n' "$NAMESPACE" "$ZONE" \
             | kubectl apply -f -
           # forbidden <requirement> <what> <rule> : the manifest on stdin, sent as a server-side dry run.
           # <rule> is the constraint kind that must refuse it; `always` for what is refused in every
@@ -550,6 +551,30 @@ jobs:
           pod own-arch "nodeSelector: {kubernetes.io/arch: arm64}" | forbidden R17 "pod selecting an architecture without platform/arch" k8splatformplacementlabels
           pod sneaky-spot "tolerations: [{key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}]" \
             | forbidden R17 "spot toleration without platform/capacity: spot" k8splatformplacementlabels
+          # GPUs (R17, decision D42): asked for with nvidia.com/gpu and the label platform/accelerator:
+          # nvidia-gpu, which the mutation turns into the GPU NodePool's toleration. A dry run of such
+          # a pod shows the toleration added; the request alone, the label alone and the toleration
+          # alone are refused.
+          gpu_pod() { # name labels resources tolerations
+            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: gpu%s}}\nspec: {%s securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, resources: {%s}, securityContext: %s}]}\n' \
+              "$1" "${2:+, $2}" "${4:+$4,}" "$3" "$restricted"
+          }
+          if out="$(gpu_pod gpu "platform/accelerator: nvidia-gpu" "limits: {nvidia.com/gpu: 1}" | kubectl create --dry-run=server -n "$NAMESPACE" -o json -f - 2>&1)"; then
+            if jq -e '.spec.tolerations[]? | select(.key == "platform/accelerator" and .value == "nvidia-gpu")' <<<"$out" >/dev/null; then
+              result PASS R17 "GPU pod admitted with the GPU toleration from the mutation" "$(jq -c '[.spec.nodeSelector, [.spec.tolerations[] | .key]]' <<<"$out")"
+            else
+              result FAIL R17 "GPU pod admitted with the GPU toleration from the mutation" "no toleration: $(jq -c '.spec.tolerations' <<<"$out")"
+            fi
+          else
+            result FAIL R17 "GPU pod admitted with the GPU toleration from the mutation" "$(tail -1 <<<"$out" | head -c 300)"
+          fi
+          gpu_pod gpu-unlabelled "" "limits: {nvidia.com/gpu: 1}" | forbidden R17 "GPU request without platform/accelerator" k8splatformplacementlabels
+          gpu_pod gpu-idle "platform/accelerator: nvidia-gpu" "" | forbidden R17 "platform/accelerator without a GPU request" k8splatformplacementlabels
+          gpu_pod gpu-sneaky "" "" "tolerations: [{key: platform/accelerator, operator: Equal, value: nvidia-gpu, effect: NoSchedule}]" \
+            | forbidden R17 "GPU toleration without platform/accelerator" k8splatformplacementlabels
+          # Every namespace names its owner, cost centre and contact (R25).
+          printf 'apiVersion: v1\nkind: Namespace\nmetadata: {name: %s-unowned, labels: {platform/zone: %s}}\n' "$ZONE" "$ZONE" \
+            | forbidden R25 "namespace without owner, cost centre and contact" k8splatformnamespaceownership
           # Images by digest from the environment's registry only (built-in, k8s-allowed-images).
           image_pod() {
             printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: "%s", securityContext: %s}]}\n' \

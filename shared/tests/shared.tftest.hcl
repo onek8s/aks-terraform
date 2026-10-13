@@ -11,7 +11,8 @@ mock_provider "azurerm" {
   }
   mock_data "azurerm_client_config" {
     defaults = {
-      tenant_id = "66666666-6666-6666-6666-666666666666"
+      tenant_id       = "66666666-6666-6666-6666-666666666666"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
     }
   }
   mock_data "azurerm_virtual_network" {
@@ -602,4 +603,50 @@ run "the_workspace_takes_only_entra_id_and_caps_its_ingestion" {
     ])
     error_message = "The workspace should accept only Entra ID, keep 30 days and cap ingestion at 1 GB a day."
   }
+}
+
+# The monthly budget: the whole subscription, the Owners told at 80 % and 100 % of actual cost and at
+# a forecast of 100 %.
+run "the_budget_covers_the_subscription_and_tells_its_owners" {
+  command = plan
+
+  variables {
+    monthly_budget = {
+      amount     = 600
+      start_date = "2026-10-01T00:00:00Z"
+    }
+  }
+
+  assert {
+    condition     = azurerm_consumption_budget_subscription.this[0].subscription_id == "/subscriptions/00000000-0000-0000-0000-000000000000" && azurerm_consumption_budget_subscription.this[0].amount == 600
+    error_message = "The budget should cover the subscription with the amount given."
+  }
+  assert {
+    condition = toset([for n in azurerm_consumption_budget_subscription.this[0].notification : "${n.threshold_type}-${n.threshold}"]) == toset(["Actual-80", "Actual-100", "Forecasted-100"]) && alltrue([
+      for n in azurerm_consumption_budget_subscription.this[0].notification : n.contact_roles == tolist(["Owner"])
+    ])
+    error_message = "The Owners should hear at 80 % and 100 % of actual cost and at a forecast of 100 %."
+  }
+}
+
+run "no_budget_unless_asked" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_consumption_budget_subscription.this) == 0
+    error_message = "No budget without monthly_budget."
+  }
+}
+
+run "rejects_a_budget_start_that_is_not_the_first_of_a_month" {
+  command = plan
+
+  variables {
+    monthly_budget = {
+      amount     = 600
+      start_date = "2026-10-13T00:00:00Z"
+    }
+  }
+
+  expect_failures = [var.monthly_budget]
 }

@@ -2,7 +2,9 @@ name: vCPU quota
 
 # Raises the dev subscription's compute quotas in a region to what the dev cells need, through the
 # Azure Quota API. Started by hand. Two stateless cells take, each, a 4-vCPU system node (Dalv6) and
-# a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a surge node while they upgrade.
+# a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a surge node while they upgrade. A zone's
+# GPU node (aks-fluxcd-platform `<zone>gpu`) is a 40-vCPU Standard_NC40ads_H100_v5, in a family
+# whose quota Azure starts at 0; `gpu` stays 0 unless GPU nodes are wanted.
 #
 # A quota only ever goes up here: a limit already at or above its target is left as it is. Azure
 # approves small vCPU increases itself; one it does not approve is reported as failed, with the
@@ -35,6 +37,10 @@ on:
         description: "Total Regional Low-priority vCPUs (spot)"
         required: true
         default: "8"
+      gpu:
+        description: "Standard NCadsH100v5 Family vCPUs (GPU nodes, 40 each; 0 = leave as is)"
+        required: true
+        default: "0"
 
 permissions:
   contents: read
@@ -68,6 +74,7 @@ jobs:
             Standard Dpsv6 Family vCPUs=${{ inputs.dpsv6 }}
             standard Dalv6 Family vCPUs=${{ inputs.dalv6 }}
             Total Regional Low-priority vCPUs=${{ inputs.low_priority }}
+            StandardNCadsH100v5Family=${{ inputs.gpu }}
         run: |
           set -euo pipefail
           az provider register --namespace Microsoft.Quota --wait --only-show-errors
@@ -78,7 +85,7 @@ jobs:
           while IFS='=' read -r label target; do
             [ -n "$label" ] || continue
             label="$(echo "$label" | xargs)"
-            row="$(jq -c --arg l "$label" '[.[] | select((.localName // .name.localizedValue) | ascii_downcase == ($l | ascii_downcase))][0]' <<<"$usage")"
+            row="$(jq -c --arg l "$label" '[.[] | select(((.localName // .name.localizedValue) | ascii_downcase) == ($l | ascii_downcase) or (.name.value | ascii_downcase) == ($l | ascii_downcase))][0]' <<<"$usage")"
             if [ "$row" = null ]; then echo "::error::No quota named '$label' in $LOCATION"; fail=1; continue; fi
             name="$(jq -r '.name.value' <<<"$row")"
             limit="$(jq -r '.limit' <<<"$row")"
@@ -116,6 +123,6 @@ jobs:
           fi
           echo
           az vm list-usage -l "$LOCATION" \
-            --query "[?contains(name.value, 'ores') || contains(name.value, 'Dalv6') || contains(name.value, 'Dpsv6')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
+            --query "[?contains(name.value, 'ores') || contains(name.value, 'Dalv6') || contains(name.value, 'Dpsv6') || contains(name.value, 'H100')].{quota: name.localizedValue, used: currentValue, limit: limit}" \
             --output table
           exit $fail

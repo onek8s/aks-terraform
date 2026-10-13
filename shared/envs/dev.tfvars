@@ -141,3 +141,12 @@ global_hostnames = {
     health_path = "/healthz"
   }
 }
+
+# The environment's monthly budget (budget.tf): the Owners of sub-aks-dev are told at 80 % and 100 %
+# of actual cost and at a forecast of 100 %. The lab's steady cost - one cell's two system nodes,
+# load balancers, Traffic Manager, the vaults, the registry, the workspace - is well below it; a GPU
+# node (about 7 per hour) or a second cell left running is what it catches.
+monthly_budget = {
+  amount     = 600
+  start_date = "2026-10-01T00:00:00Z"
+}

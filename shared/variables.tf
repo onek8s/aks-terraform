@@ -392,3 +392,25 @@ variable "log_analytics_daily_quota_gb" {
   description = "The workspace's daily ingestion cap in GB, -1 for none."
   nullable    = false
 }
+
+variable "monthly_budget" {
+  type = object({
+    amount         = number
+    start_date     = string
+    contact_roles  = optional(list(string), ["Owner"])
+    contact_emails = optional(list(string), [])
+  })
+  default     = null
+  description = <<DESCRIPTION
+The environment subscription's monthly budget, in the billing account's currency: Azure Cost
+Management notifies `contact_roles` (the subscription's Owners by default) and `contact_emails` when
+the month's actual cost passes 80 % and 100 % of `amount`, and when its forecast passes 100 %.
+`start_date` is the first day of a month, `2026-10-01T00:00:00Z`, and stays put once set: Azure
+refuses a start date in the past on a new budget, not on an existing one. Null for none.
+DESCRIPTION
+
+  validation {
+    condition     = var.monthly_budget == null || try(var.monthly_budget.amount > 0 && can(regex("^[0-9]{4}-[0-9]{2}-01T00:00:00Z$", var.monthly_budget.start_date)), false)
+    error_message = "monthly_budget.amount must be positive and start_date the first of a month, e.g. 2026-10-01T00:00:00Z."
+  }
+}

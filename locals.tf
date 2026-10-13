@@ -357,17 +357,32 @@ locals {
   }
 
   managed_namespace_annotations = {
-    for name, namespace in var.managed_namespaces : name => merge(var.managed_namespace_defaults.annotations, namespace.annotations)
+    for name, namespace in var.managed_namespaces : name => tomap(merge(
+      var.managed_namespace_defaults.annotations,
+      namespace.annotations,
+      namespace.owner == null ? tomap({}) : tomap({ "platform/contact" = namespace.owner.contact }),
+      namespace.flux == null ? tomap({}) : tomap({ "platform/repository" = namespace.flux.url }),
+    ))
   }
 
   # The pod security labels come last, because they are decided by `pod_security` alone - `labels`
   # is refused a `pod-security.kubernetes.io/*` key of its own, so nothing here is being overridden.
   managed_namespace_labels = {
-    for name, namespace in var.managed_namespaces : name => merge(
+    for name, namespace in var.managed_namespaces : name => tomap(merge(
       var.managed_namespace_defaults.labels,
       namespace.labels,
+      local.managed_namespace_owner_labels[name],
       local.managed_namespace_pod_security_labels[name],
-    )
+    ))
+  }
+
+  # Who owns the namespace and pays for it, as the labels OpenCost and the telemetry group by - see
+  # managed_namespaces' `owner`.
+  managed_namespace_owner_labels = {
+    for name, namespace in var.managed_namespaces : name => namespace.owner == null ? tomap({}) : tomap({
+      "platform/team"        = namespace.owner.team
+      "platform/cost-center" = namespace.owner.cost_center
+    })
   }
 
   # The Pod Security Standard each namespace is held to, with the estate-wide default filled in

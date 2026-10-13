@@ -33,7 +33,7 @@ reads; job logs via `get_job_logs`).
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
-| `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). |
+| `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
 
 Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
@@ -76,6 +76,23 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   service accounts in the platform's namespaces (fleet). Accepted with reasons in `tests/cis/accepted.yaml`:
   the dev lab exceptions (public API server, Defender off), AKS's and Flux's own RBAC, ESO's Secret access,
   gateway namespaces on baseline PSS. Follow-ups in the design (section 17, "CIS benchmark").
+- **GPU nodes on request** (2026-10-13, decision D42 built): per zone a NAP AKSNodeClass + NodePool
+  `<zone>gpu` in the fleet - NVIDIA H100 v5 only (`NCads_v5`; the only GPU VMs with VNet encryption),
+  on-demand, amd64, taint `platform/accelerator=nvidia-gpu`, AKS managed GPU stack (AKSNodeClass tag
+  `EnableManagedGPUExperience`, feature `ManagedGPUExperiencePreview` registered by Deploy). A pod asks
+  with `nvidia.com/gpu` + label `platform/accelerator: nvidia-gpu` (policy mutation `gpu-toleration`,
+  `placement-labels` refuses either without the other). No GPU node created yet: the H100 family quota
+  starts at 0 (`vcpu-quota.yml` `gpu`). A GPU node is ~7 USD/hour; NAP removes it 1 min after empty.
+- **Cost and ownership** (2026-10-13): AKS cost analysis add-on NOT used (needs Standard tier and the
+  Disk CSI driver, which the stateless cells keep off); instead the user chose **Grafana k8s-monitoring
+  with OpenCost via Flux** (fleet `infrastructure/observability`, namespace `infra-observability`).
+  It waits for the vault secret `flux-system--grafana-cloud` (JSON: prometheus-url,
+  prometheus-query-url, prometheus-username, loki-url, loki-username, token with metrics:write,
+  metrics:read, logs:write) - to be created by the user from their Grafana Cloud stack. Every namespace
+  carries labels `platform/team`, `platform/cost-center` and annotation `platform/contact`
+  (`managed_namespaces.<ns>.owner` here; `platform` for the fleet's own); Azure Policy
+  `namespace-ownership` in audit. shared/ `monthly_budget` (budget.tf): subscription budget 600/month,
+  Owners told at 80 %/100 % actual and 100 % forecast.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 12 mutations **on** (zone placement from the namespace,
@@ -126,6 +143,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   platform gateway and platform ESO), so a zone without application pods has zero nodes and its
   NodePools scale to zero. Consequence: the system subnet NSG allows 443 from Internet *and* (a
   separate rule) from VirtualNetwork.
+- **GPUs are the application's choice too** (D42): label `platform/accelerator: nvidia-gpu` + request
+  `nvidia.com/gpu`; zone GPU pools H100 v5 only (VNet encryption), on-demand.
+- **No AKS cost analysis add-on**: cost per namespace/team comes from OpenCost in Grafana's k8s-monitoring
+  chart, deployed by Flux (the user's choice); namespaces name their owner (R25).
 - **Spot and architecture are the application's choice.** Per zone a spot NodePool (weight 50,
   taint `platform/capacity=spot`) and an on-demand one (weight 10): a pod that tolerates spot gets
   spot when available, else on-demand; one that does not stays on on-demand. amd64 and arm64 both
@@ -183,5 +204,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   without a host scanner it has no node data; report.py takes section 3 from kube-bench only.
   Microsoft.Security is not registered in the build subscription (Defender plan unreadable = off).
 - `az aks install-cli` can fail on GitHub's API rate limit (kubelogin lookup) - re-run.
+- **A failing `check` block fails `terraform test` runs** (not only a warning) - so no check for
+  managed namespaces without an owner; Azure Policy enforces it. `merge()` of maps with conditional
+  `{}` yields an object: wrap in `tomap()` when tests compare with `tomap({...})`.
+- **New parameters on an assigned Azure Policy definition need a `defaultValue`**, or the update fails.
+- **Karpenter's `sku-series` does not name the GPU** (`NDisr_v5` is H100 and H200): also require
+  `karpenter.azure.com/sku-gpu-name`.
+- **k8s-monitoring (v4) requires OpenCost to use the metrics destination's own secret and keys**; with
+  inline credentials that is `<destination lowercased>-<release>` with keys `username`/`password`.
+  Flux `valuesFrom` reads Secrets of the HelmRelease's namespace only (flux-system).
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.

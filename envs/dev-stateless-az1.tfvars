@@ -138,6 +138,13 @@ node_auto_provisioning_enabled = true
 # opens DNS and the zone gateway, and the team's own FQDN policy anything outside the cluster.
 managed_namespaces = {
   ext-fi-example = {
+    # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
+    # annotation platform/contact (design section 7; Azure Policy namespace-ownership).
+    owner = {
+      team        = "example"
+      cost_center = "example"
+      contact     = "https://github.com/onek8s/aks-fluxcd-example/issues"
+    }
     labels = {
       "platform/zone" = "ext-fi"
     }
