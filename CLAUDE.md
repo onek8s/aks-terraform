@@ -82,7 +82,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `EnableManagedGPUExperience`, feature `ManagedGPUExperiencePreview` registered by Deploy). A pod asks
   with `nvidia.com/gpu` + label `platform/accelerator: nvidia-gpu` (policy mutation `gpu-toleration`,
   `placement-labels` refuses either without the other). No GPU node created yet: the H100 family quota
-  starts at 0 (`vcpu-quota.yml` `gpu`). A GPU node is ~7 USD/hour; NAP removes it 1 min after empty.
+  starts at 0 (`vcpu-quota.yml` `gpu`). A GPU node is ~7 USD/hour: **the user does not want GPU nodes
+  run in the lab** - the cells' `gpu_cpu_limit: "0"` (fleet cluster-settings.yaml) keeps NAP from creating
+  any, and the quota stays 0; GPU checks are dry runs only.
 - **Cost and ownership** (2026-10-13): AKS cost analysis add-on NOT used (needs Standard tier and the
   Disk CSI driver, which the stateless cells keep off); instead the user chose **Grafana k8s-monitoring
   with OpenCost via Flux** (fleet `infrastructure/observability`, namespace `infra-observability`).
