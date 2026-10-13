@@ -108,6 +108,14 @@ locals {
     local.node_auto_provisioning && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
       nap_availability_zone = "${var.location}-${var.default_node_pool.availability_zones[0]}"
     } : {},
+    # The image signature verifier's identity, the signing certificate in the platform vault and the
+    # registry the signatures are in - see image_integrity.tf.
+    var.image_integrity_enabled ? {
+      image_verification_client_id    = data.azurerm_user_assigned_identity.image_verification[0].client_id
+      image_signing_certificate_name  = module.conventions.image_signing_certificate_name
+      image_signing_subject           = one(one(data.azurerm_key_vault_certificate.image_signing[0].certificate_policy).x509_certificate_properties).subject
+      container_registry_login_server = data.azurerm_container_registry.this[0].login_server
+    } : {},
     # Each isolation zone's node subnet, each namespace's vault and the internal zones' DNS - see
     # zones.tf.
     local.flux_zone_settings,

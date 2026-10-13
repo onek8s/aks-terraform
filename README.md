@@ -87,6 +87,13 @@ az feature register --namespace Microsoft.ContainerService --name ManagedGateway
 az provider register --namespace Microsoft.ContainerService
 ```
 
+A cluster with `image_integrity_enabled` runs AKS Image Integrity (Ratify), also in **preview**:
+
+```sh
+az feature register --namespace Microsoft.ContainerService --name EnableImageIntegrityPreview
+az provider register --namespace Microsoft.ContainerService
+```
+
 The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
 both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or not you ask:
 

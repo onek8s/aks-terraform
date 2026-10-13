@@ -86,6 +86,12 @@ container_registry_builds = {
   }
 }
 
+# Every image the registry builds is signed with this certificate in the platform vault (the Sign
+# images workflow), and the clusters' AKS Image Integrity audits the signatures at admission.
+image_signing = {
+  subject = "CN=OneK8s dev image signing, O=OneK8s, ST=Uusimaa, C=FI"
+}
+
 # Every namespace with a share of a vault in any of the clusters. In the platform vault: flux-system
 # (the Flux webhook's token), platform-gateway and each zone's `<zone>-gateway` (their listener
 # certificates, `<namespace>--wildcard`). In a zone's vault: every application namespace of the zone -

@@ -329,6 +329,11 @@ module "aks" {
       enabled        = true
       interval_hours = 168
     }
+    # Ratify checks the images' signatures for the Azure Policy add-on - see image_integrity.tf.
+    # Stated when off as well, so that turning it off turns it off.
+    image_integrity = {
+      enabled = var.image_integrity_enabled
+    }
     # Federates Kubernetes service accounts with Entra ID. External Secrets Operator and external-dns
     # authenticate to Azure this way - see the identities below.
     workload_identity = {

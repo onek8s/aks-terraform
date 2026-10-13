@@ -26,6 +26,10 @@ locals {
     for namespace in var.key_vault_namespaces : namespace => "id-${local.location_code}-${var.environment}-shared-kv-${namespace}"
   }
 
+  # The identity the image signature verifier (Ratify, of AKS Image Integrity) reads the registry and
+  # the signing certificate as, shared by every cluster of the environment like the ones above.
+  image_verification_identity_name = var.environment == null ? null : "id-${local.location_code}-${var.environment}-shared-ratify"
+
   # The share of each: the secrets whose names start with this. Key Vault names are case-insensitive
   # and compared in lowercase, which a namespace name already is.
   key_vault_secret_prefixes = { for namespace in var.key_vault_namespaces : namespace => "${namespace}--" }

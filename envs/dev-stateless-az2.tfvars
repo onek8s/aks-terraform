@@ -80,6 +80,11 @@ portable_disks_enabled     = false
 # it as this cluster's identity, with AcrPull - no image pull secret.
 container_registry_name = "acronek8sdev"
 
+# AKS Image Integrity (preview): Ratify checks the Notation signature of every image for the Azure
+# Policy add-on, which reports unsigned ones (audit only). Its identity and the signing certificate
+# are shared/'s (image_signing).
+image_integrity_enabled = true
+
 # A public API server - the one exception of the dev lab to design section 3, which has no network
 # path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
 private_cluster_enabled         = false

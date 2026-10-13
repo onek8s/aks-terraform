@@ -1,0 +1,80 @@
+name: Sign images
+
+# Signs every image in the environment's container registry with the platform's signing certificate
+# (OneK8s design section 14): a Notation signature, stored next to the image in the registry as an
+# OCI referrer, made with the key in the platform vault (shared/: image_signing) through Notation's
+# Azure Key Vault plugin - the key never leaves the vault. The clusters' AKS Image Integrity (Ratify)
+# checks these signatures at admission.
+#
+# Each tag is first verified against the current certificate: one that verifies is left alone, any
+# other (new, rebuilt by its ACR task, or signed with a certificate that has since been renewed) is
+# signed and then verified again. So a run that finds everything signed changes nothing, and the
+# summary lists each image with what was done.
+#
+# Runs after every Deploy apply of dev-shared (where the registry builds new images), and by hand.
+#
+# Credentials: the same Azure identity and GitHub environment as Deploy. It signs as that identity:
+# `Key Vault Administrator` on the subscription covers the certificate and the key's sign operation,
+# Owner the registry's push of the signature.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sign:
+    name: sign images
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: sign-images
+      cancel-in-progress: false
+    env:
+      REGISTRY: acronek8sdev
+      VAULT: kv-onek8s-dev-platform
+      CERTIFICATE: image-signing
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Notation with its Azure Key Vault plugin, trusting the platform's certificate the way a
+      # cluster's Ratify does.
+      - name: Set up Notation
+        run: .github/scripts/notation-setup.sh "$VAULT" "$CERTIFICATE" "$REGISTRY"
+
+      - name: Sign
+        run: |
+          set -euo pipefail
+          server="$REGISTRY.azurecr.io"
+          summary="$RUNNER_TEMP/summary.md"
+          printf '| Image | Digest | Result |\n|---|---|---|\n' > "$summary"
+          failed=0
+          for repository in $(az acr repository list -n "$REGISTRY" -o tsv); do
+            for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv); do
+              digest="$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
+              ref="$server/$repository@$digest"
+              if notation verify "$ref" >/dev/null 2>&1; then
+                result="already signed"
+              elif notation sign --signature-format cose --plugin azure-kv --id "$NOTATION_KEY_ID" \
+                  --plugin-config self_signed=true --plugin-config credential_type=azurecli "$ref" \
+                && notation verify "$ref"; then
+                result="signed"
+              else
+                result="FAILED"; failed=1
+                echo "::error::Could not sign and verify $repository:$tag ($digest)"
+              fi
+              echo "$repository:$tag $digest: $result"
+              printf '| %s:%s | `%s` | %s |\n' "$repository" "$tag" "$digest" "$result" >> "$summary"
+            done
+          done
+          { echo "### Sign images - $REGISTRY"; echo; echo "Signer: $NOTATION_SUBJECT"; echo; cat "$summary"; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"
