@@ -77,10 +77,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - Region swedencentral. Quotas: regional vCPUs 52, Dpsv6 24, Dalv6 16, low-priority (spot) 3 - a
   raise to 8 was throttled by Azure ("retry after 3600 s", each retry restarts the wait); re-run
   `vcpu-quota.yml` once at most per hour.
-- A cell with no applications is one 4-vCPU system node (Standard_D4als_v6). Each zone with
+- A cell with no applications is two 4-vCPU system nodes (Standard_D4als_v6): App Routing's istiod
+  requests 2 x (500m, 2 GiB), which one 8 GiB node cannot hold beside the rest. Each zone with
   application pods adds NAP nodes.
 - **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
-  the system node too, so dev normally runs zero zone nodes: az1 is just its system node. The
+  the system node too, so dev normally runs zero zone nodes: az1 is just its system nodes. The
   Isolation tests' probe pod still uses the ext-fi zone, so a test run briefly creates a zone node
   (NAP removes it ~5 min after). Remove the patch to put the app back on zone nodes.
 
