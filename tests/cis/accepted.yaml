@@ -1,7 +1,72 @@
 # CIS AKS Benchmark failures the platform accepts, each with its reason (report.py, the CIS benchmark
-# workflow). `id` is the CIS recommendation; `objects`, a regular expression (case-insensitive,
-# whole value), limits the acceptance to those failing objects - nodes (`node/<name>`), Kubernetes
-# objects (Kubescape's resource IDs, `<group>/<version>/<namespace>/<Kind>/<name>`), Azure resources -
-# and without it every failing object of the recommendation is accepted. An accepted failure still
-# counts against the score; an entry that no longer matches a failure is reported, to be removed.
-accepted: []
+# workflow). `id` (or `ids`) is the CIS recommendation; `objects`, a regular expression
+# (case-insensitive, whole value), limits the acceptance to those failing objects - nodes
+# (`node/<name>`), Kubernetes objects (Kubescape's resource IDs: `<group>/<version>/<namespace>/<Kind>/<name>`,
+# for RBAC `/<namespace>/ServiceAccount/<name>/<role>/<binding>` or `<group>//User|Group/<name>/...`),
+# Azure resources (`managedCluster/<name>`) - and without it every failing object of the
+# recommendation is accepted. An accepted failure still counts against the score; an entry that no
+# longer matches a failure is reported, to be removed. A new object failing one of these fails the
+# run until it is fixed or added here with its reason.
+#
+# Who may grant what - every subject below is either AKS's own or one of the platform's controllers:
+#   AKS:  system:masters, the clusterAdmin / clusterUser / aks-support / hcpService users, the
+#         konnectivity client and kube-controller-manager, and the service accounts of kube-system and
+#         of the add-ons' namespaces (aks-istio-system, gatekeeper-system). Managed by AKS; changing
+#         them is not supported, and local accounts are off (5.2.2), so clusterAdmin/clusterUser are
+#         not usable by people.
+#   Flux: the AKS Flux extension's controllers in flux-system, and a team namespace's own applier
+#         (`<namespace>/flux-applier`, a Role in that namespace only). Flux applies what Git holds; what
+#         it may create is decided by Azure Policy admission (design section 14), not by its RBAC.
+#   ESO:  External Secrets Operator - the platform's and one per zone - which writes Secrets by design
+#         (design section 6), and its cert controller, which patches its webhook configurations.
+accepted:
+  # --- Lab exceptions (dev only; the corporate design has none of these) ---
+  - id: "5.4.1"
+    objects: managedCluster/aks-dev-.*
+    reason: "Lab exception: public API server with authorized range 0.0.0.0/0, for GitHub-hosted runners; Entra ID only, local accounts off. Design section 3: private API server in acc/prd"
+  - id: "5.4.2"
+    objects: managedCluster/aks-dev-.*
+    reason: "Lab exception: public API server in dev (see 5.4.1). Design section 3: private cluster in acc/prd"
+  - id: "5.1.1"
+    objects: managedCluster/aks-dev-.*
+    reason: "Lab exception: Defender for Containers off for cost (Microsoft.Security not registered in the build subscription); images are built in ACR from pinned commits and Notation-signed, Image Integrity verifies them. Design sections 14 and 19: Defender for Containers on in the corporate tenant"
+
+  # --- RBAC: AKS and the platform's own controllers ---
+  - ids: ["4.1.1", "4.1.2", "4.1.3", "4.1.4", "4.1.9", "4.1.10", "4.1.11", "4.1.12"]
+    objects: "rbac\\.authorization\\.k8s\\.io//(Group/system:masters|User/(clusterAdmin|clusterUser|aks-support|hcpService|konnectivity-prometheus-client|system:kube-controller-manager))/.*"
+    reason: "AKS's own users and groups (see the header); local accounts are off, so none is usable by people"
+  - ids: ["4.1.1", "4.1.2", "4.1.3", "4.1.4", "4.1.9", "4.1.10", "4.1.11", "4.1.12"]
+    objects: "/(kube-system|aks-istio-system|gatekeeper-system)/ServiceAccount/[^/]+/.*"
+    reason: "AKS's control plane and add-ons (Azure Policy/Gatekeeper, Ratify, App Routing's istiod, Cilium, VPA, Image Cleaner): managed by AKS"
+  - ids: ["4.1.1", "4.1.2", "4.1.3", "4.1.4", "4.1.9", "4.1.10", "4.1.11", "4.1.12"]
+    objects: "/flux-system/ServiceAccount/[^/]+/.*"
+    reason: "The AKS Flux extension's controllers: cluster-admin is the extension's own binding; what Flux may create is decided by Azure Policy admission (design section 14)"
+  - ids: ["4.1.2", "4.1.3", "4.1.4", "4.1.9", "4.1.10", "4.1.11", "4.1.12"]
+    objects: "/(int|ext)-(fi|se)-[a-z0-9-]+/ServiceAccount/flux-applier/rbac\\.authorization\\.k8s\\.io/v1/(int|ext)-(fi|se)-[a-z0-9-]+/Role/.*"
+    reason: "A team namespace's own Flux applier (AKS Flux extension, namespace-scoped configuration): a wildcard Role in the team's namespace only, held in by Azure Policy admission (design sections 7 and 14)"
+  - ids: ["4.1.2", "4.1.11", "4.1.12"]
+    objects: "/(external-secrets|(int|ext)-(fi|se)-secrets)/ServiceAccount/external-secrets[a-z0-9-]*/.*"
+    reason: "External Secrets Operator writes Secrets and requests tokens for its stores' service accounts by design (design section 6); its cert controller keeps the CA bundle of its own webhook configurations. Follow-up: the zones' ESO hold the chart's cluster-wide Secret access; scoping each to its zone's namespaces is in the CIS follow-ups (design section 17)"
+
+  # --- Service accounts and tokens ---
+  - id: "4.1.5"
+    objects: "(/v1//Namespace/(default|kube-public|kube-node-lease)|/v1/(kube-system|aks-istio-system|gatekeeper-system)/ServiceAccount/default)"
+    reason: "Kubernetes' own empty namespaces have no account but `default` (whose token is off), and kube-system and the add-ons' namespaces are AKS's"
+  - id: "4.1.6"
+    objects: "[a-z.]*/v1/(kube-system|aks-istio-system|gatekeeper-system|flux-system|external-secrets|external-dns|(int|ext)-(fi|se)-secrets)/[A-Za-z]+/.*"
+    reason: "Controllers that call the API server and need their token: AKS's add-ons, Flux, External Secrets Operator, external-dns. Application pods mount none (aks-hello: automountServiceAccountToken false)"
+
+  # --- Pod security ---
+  - id: "4.2.8"
+    objects: "/v1//Namespace/(kube-system|aks-istio-system|gatekeeper-system|flux-system|((int|ext)-(fi|se)|platform)-gateway)"
+    reason: "Namespaces not on the restricted Pod Security Standard: AKS's (kube-system, add-ons, flux-system) and the gateways' (baseline: App Routing's gateway pods set no seccomp profile and cannot be configured to - design section 14). Application pods are held to restricted by Azure Policy"
+  - id: "4.7.2"
+    reason: "Kubescape's C-0211 fails any workload that leaves an optional securityContext field unset (fsGroup, supplementalGroups, SELinux, ...), the hardened ones included. The platform's measure is the restricted Pod Security Standard (enforced in the platform's namespaces, Azure Policy for the applications) and the read-only root file system rule in deny"
+  - id: "4.7.3"
+    objects: "(/v1/default/(ConfigMap/(kube-root-ca\\.crt|istio-ca-root-cert|istio-ca-crl)|ServiceAccount/default)|discovery\\.k8s\\.io/v1/default/EndpointSlice/kubernetes)"
+    reason: "Only what Kubernetes and App Routing's istiod put into every namespace; nothing of the platform's or the teams' runs in default (restricted, deny-all)"
+
+  # --- Network policies ---
+  - id: "4.4.2"
+    objects: "/v1//Namespace/(aks-istio-system|gatekeeper-system)"
+    reason: "Namespaces of AKS add-ons (App Routing's istiod, Azure Policy/Gatekeeper and Ratify), managed by AKS"

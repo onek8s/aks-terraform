@@ -1572,3 +1572,35 @@ resource group as `internal_dns_resource_group_name`.
 DESCRIPTION
   nullable    = false
 }
+
+variable "log_analytics_workspace_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the environment's Log Analytics workspace (created by shared/, `log-<env>-platform`), where the
+cluster sends its Kubernetes audit log through a diagnostic setting - the categories in
+audit_log_categories (OneK8s design section 19, CIS AKS Benchmark 2.1.1). Null for none.
+DESCRIPTION
+}
+
+variable "log_analytics_workspace_resource_group_name" {
+  type        = string
+  default     = null
+  description = "Resource group of log_analytics_workspace_name. Defaults to resource_group_name."
+}
+
+variable "audit_log_categories" {
+  type        = list(string)
+  default     = ["kube-audit-admin", "guard"]
+  description = <<DESCRIPTION
+The cluster's resource log categories sent to log_analytics_workspace_name: by default
+`kube-audit-admin` (every request that is not a get, list or watch) and `guard` (Entra ID and Azure
+RBAC decisions). `kube-audit` adds the reads, at many times the volume.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = length(var.audit_log_categories) > 0 && alltrue([for c in var.audit_log_categories : contains(["kube-audit", "kube-audit-admin", "guard", "kube-apiserver", "kube-controller-manager", "kube-scheduler", "cluster-autoscaler", "cloud-controller-manager", "csi-azuredisk-controller", "csi-azurefile-controller", "csi-snapshot-controller", "fleet-member-agent", "fleet-member-net-controller-manager", "fleet-mcs-controller-manager"], c)])
+    error_message = "audit_log_categories must name at least one AKS resource log category, such as kube-audit-admin or guard."
+  }
+}

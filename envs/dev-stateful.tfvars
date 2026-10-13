@@ -56,6 +56,10 @@ portable_disks_enabled = true
 # no image pull secret.
 container_registry_name = "acronek8sdev"
 
+# SHARED. The environment's Log Analytics workspace, created by shared/: this cluster's Kubernetes
+# audit log (kube-audit-admin and guard) - design section 19, CIS AKS Benchmark 2.1.1.
+log_analytics_workspace_name = "log-dev-platform"
+
 # A public API server, open to every address: a lab with no network path into the VNet. Entra ID
 # authenticates every call; local accounts are disabled.
 private_cluster_enabled         = false

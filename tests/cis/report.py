@@ -14,7 +14,8 @@ CIS recommendation, from three sources gathered by the CIS benchmark workflow in
 
 A recommendation fails when any source fails it (any node, any object). A failure is accepted when
 accepted.yaml lists it with a reason - for every failing object, if the entry names them - and only
-then: an accepted failure still counts against the score. Prints one line per recommendation, a
+then: an accepted failure still counts against the score. 4.7.1 (Kubescape's list of every
+namespace) is a review, not a test, and counts as manual. Prints one line per recommendation, a
 Markdown summary to $GITHUB_STEP_SUMMARY and results.json beside the inputs; exits 1 when a failure is
 not accepted.
 """
@@ -27,6 +28,8 @@ import sys
 import yaml
 
 RANK = {"FAIL": 4, "PASS": 3, "WARN": 2, "MANUAL": 1}
+# Kubescape controls that fail whatever the cluster: 4.7.1 (C-0209) lists every namespace for review.
+REVIEW_ONLY = {"C-0209"}
 
 
 def load(directory, name, default=None):
@@ -100,6 +103,9 @@ def kubescape(report, directory):
         # Passed because nothing in the cluster is of the kind the control looks at: no evidence.
         if control.get("statusInfo", {}).get("subStatus") == "irrelevant":
             status, info = "MANUAL", "no object the control applies to"
+        # A list to review, not a test: it reports every namespace there is.
+        if control_id in REVIEW_ONLY:
+            status, info = "MANUAL", "a list of every namespace, for review"
         report.add(cis, title, status, f"kubescape {control_id}", sorted(failing.get(control_id, [])),
                    info if status != "PASS" else "")
 
@@ -176,12 +182,16 @@ def azure(report, directory):
                    f"{len(gateways.get('items', []))} Gateways, listeners without TLS: {len(plain)}")
 
 
+def ids(entry):
+    return [str(i) for i in entry["ids"]] if "ids" in entry else [str(entry["id"])]
+
+
 def accepted_objects(entries, row):
     """The failing objects of a row that accepted.yaml does not cover."""
     reasons = []
     left = []
     for obj in row["failing"] or ["*"]:
-        hit = next((e for e in entries if str(e["id"]) == row["id"]
+        hit = next((e for e in entries if row["id"] in ids(e)
                     and re.fullmatch(e.get("objects", ".*"), obj, re.IGNORECASE)), None)
         if hit:
             if hit["reason"] not in reasons:
@@ -213,7 +223,7 @@ def main():
                 row["unaccepted"] = left
             else:
                 row["status"] = "ACCEPTED"
-    stale = [e for e in entries if not any(r["id"] == str(e["id"]) and r["status"] == "ACCEPTED" for r in rows)]
+    stale = [e for e in entries if not any(r["id"] in ids(e) and r["status"] == "ACCEPTED" for r in rows)]
 
     counts = {s: sum(r["status"] == s for r in rows) for s in ("PASS", "FAIL", "ACCEPTED", "WARN", "MANUAL")}
     automated = counts["PASS"] + counts["FAIL"] + counts["ACCEPTED"]
@@ -231,7 +241,7 @@ def main():
             print("\n".join(row["failing"]))
             print("::endgroup::")
     for e in stale:
-        print(f"::warning::accepted.yaml: {e['id']} ({e.get('objects', 'all')}) no longer fails - remove it")
+        print(f"::warning::accepted.yaml: {', '.join(ids(e))} ({e.get('objects', 'all')}) no longer fails - remove it")
     print(f"\nScore {score:.0f} % ({counts['PASS']} of {automated} automated recommendations pass), "
           f"{counts['ACCEPTED']} accepted, {counts['FAIL']} failed, {counts['WARN']} warn, {counts['MANUAL']} manual")
 
