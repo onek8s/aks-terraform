@@ -71,18 +71,26 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   green on it (healthz through the gateway and Traffic Manager, cross-zone blocked, Flux webhook).
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
-  templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the
-  fleet's ValidatingAdmissionPolicies), 12 mutations **on** (zone placement from the namespace,
-  `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference), the other
-  validations (zone placement, placement labels, FQDN egress, Gateway only, NodePools) in **audit** until
-  phase 3. Stateless/stateful rules are scoped with `not_scopes` (cluster names in `policy.tfvars`).
-  A pod labelled `platform/zone-placement: "off"` skips the zone mutation (aks-hello's lab exception).
+  templates + gator tests in `kubernetes/`): 12 mutations **on** (zone placement from the namespace,
+  `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference). **Deny**
+  (2026-10-13, `kubernetes_deny` in `environments/dev/policy.tfvars`, each promoted after zero violations on
+  az1): storage, FQDN egress, Gateway only, NodePools, placement labels, `secrets-via-eso` (in a zone's
+  namespaces only `<zone>-secrets:external-secrets-<zone>` writes Secrets; the Flux extension's
+  `fluxconfig-agent-sa` / `fluxconfig-controller-sa` and Helm storage exempt), `eso-objects`,
+  `service-accounts`, `rollout-guardrails` (>= 2 replicas spread over nodes, maxUnavailable 0, PDB
+  maxUnavailable >= 1), `vertical-pod-autoscalers`, built-ins no-Ingress and read-only root filesystem.
+  **Audit** (reasons in policy.tfvars): zone placement (aks-hello's exception), pod security restricted,
+  deployment safeguards, allowed images, automount, internal LBs, Image Integrity. Stateless/stateful
+  rules are scoped with `not_scopes` (cluster names in `policy.tfvars`). A pod labelled
+  `platform/zone-placement: "off"` skips the zone mutation (aks-hello's lab exception). To promote
+  another rule: Cluster status must list 0 violations for it, then add it to `kubernetes_deny`.
 - Region swedencentral. Quotas: regional vCPUs 52, Dpsv6 24, Dalv6 16, low-priority (spot) 3 - a
   raise to 8 was throttled by Azure ("retry after 3600 s", each retry restarts the wait); re-run
   `vcpu-quota.yml` once at most per hour.
 - A cell with no applications is two 4-vCPU system nodes (Standard_D4als_v6): App Routing's istiod
   requests 2 x (500m, 2 GiB), which one 8 GiB node cannot hold beside the rest. Each zone with
   application pods adds NAP nodes.
+- aks-hello runs **2 replicas** (rollout guardrails), still on the system nodes.
 - **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
   the system node too, so dev normally runs zero zone nodes: az1 is just its system nodes. The
   Isolation tests' probe pod still uses the ext-fi zone, so a test run briefly creates a zone node
@@ -157,5 +165,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   fail once - re-run.
 - GitHub OIDC to Azure has transient 503/504s; re-dispatch.
 - `kubectl debug` has no `-o`; parse the pod name from its output.
+- **A policy that denies must be checked against what the platform itself writes**, not only the audit:
+  Gatekeeper's audit has no request user (`secrets-via-eso` reports nothing there), and AKS components
+  write into team namespaces (the Flux extension's `<config>-auth/-genkey/-protected-parameters`).
+  Cluster status lists Secret writers from managed fields (`kubectl get -o json` hides them unless
+  `--show-managed-fields`). An assignment display name over 128 characters fails only at apply.
+- `az aks install-cli` can fail on GitHub's API rate limit (kubelogin lookup) - re-run.
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.

@@ -494,13 +494,25 @@ jobs:
               esac
             else
               # The reason, without kubectl's "Error from server (Forbidden): error when creating ...:"
-              result PASS "$req" "refused: $what" "$(tail -1 <<<"$out" | sed -E 's/^Error from server \([A-Za-z]+\): (error when creating "STDIN": )?//' | head -c 220)"
+              reason="$(tail -1 <<<"$out" | sed -E 's/^Error from server \([A-Za-z]+\): (error when creating "STDIN": )?//' | head -c 220)"
+              # A platform rule must be among the reasons (Gatekeeper lists every constraint that
+              # refuses; the add-on names them azurepolicy-<template, cut at 30 characters>-<hash>),
+              # or another rule refused the manifest in its place.
+              if [ "$rule" = always ] || [ "$rule" = builtin ] || grep -q "azurepolicy-${rule:0:30}" <<<"$out"; then
+                result PASS "$req" "refused: $what" "$reason"
+              else
+                action="$(kubectl get "$rule" -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
+                case "$action" in
+                  *deny*) result FAIL "$req" "refused: $what" "refused, but not by $rule: $reason" ;;
+                  *) result AUDIT "$req" "refused: $what" "$rule is in audit (${action:-no constraint}); refused by another rule: $reason" ;;
+                esac
+              fi
             fi
           }
           # A pod the restricted Pod Security Standard admits, so that each manifest is refused for
           # the one thing it adds: name, extra pod spec (YAML flow mapping entries), container
           # securityContext.
-          restricted='{allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}'
+          restricted='{allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}'
           pod() {
             printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, securityContext: %s}]}\n' \
               "$1" "${2:+$2,}" "${3:-$restricted}"
