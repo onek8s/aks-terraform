@@ -87,13 +87,20 @@ locals {
           priority = 200
           protocol = "Tcp"
           ports    = ["443"]
-          sources = (
-            subnet.kind == "system" ? ["Internet", "VirtualNetwork"] :
-            try(var.isolation_zones[subnet.zone].exposure, "") == "ext" ? ["Internet"] : ["VirtualNetwork"]
-          )
+          sources  = [subnet.kind == "system" || try(var.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
         }
       } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(var.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
+    # A rule takes one service tag, so the system pool's HTTPS from the network is a rule of its own.
+    {
+      for key, subnet in local.cell_subnets : "${key}/https-from-network" => {
+        subnet   = key
+        priority = 210
+        protocol = "Tcp"
+        ports    = ["443"]
+        sources  = ["VirtualNetwork"]
+      } if subnet.kind == "system"
+    },
   )
 }
 
