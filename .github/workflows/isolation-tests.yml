@@ -1,21 +1,36 @@
 name: Isolation tests
 
-# The isolation and egress tests of OneK8s design section 17 ("Requirement and isolation tests") that
-# a pipeline can run against a dev cell, without anyone on a kubeconfig. Started by hand. It creates a
-# test namespace in the ext-fi isolation zone, runs a pod there and deletes both afterwards; it
-# changes nothing else.
+# The automated negative tests of OneK8s design section 17 ("Requirement and isolation tests"), run
+# against one dev cell as a pipeline stage: after every apply of a stateless cell (Deploy calls this
+# workflow), every weekday morning (after fleet and policy changes, which do not go through Deploy),
+# and by hand. Each check names the requirement it covers; the run's summary is the table of them.
 #
-#   - From an application namespace of ext-fi, with only the zone's Cilium baseline: the Azure
-#     instance metadata service, the internet, a name outside the cluster, the zone's Key Vault and
-#     another zone's gateway must all be unreachable; the cluster's own DNS must work.
-#   - With an application egress policy that names one FQDN: that name must work, and nothing else.
-#   - From the runner, on the internet: the external application's names, in the cell and behind
-#     Traffic Manager, answer over HTTPS; plain HTTP does not.
-#   - The cluster: local accounts disabled, SSH off on the system pool, eBPF host routing and
-#     FQDN policies on, customer-managed keys in place.
+#   - Cluster settings (R1, R19, R21): local accounts and SSH off, eBPF host routing, FQDN policies,
+#     customer-managed keys, no Secrets Store CSI driver; and `az aks get-credentials --admin` is
+#     refused.
+#   - Policies in the cluster (R14): the platform's constraint templates and mutations from Azure
+#     Policy (azure-landing-zone stacks/aks-policy) are present.
+#   - Placement (R17, R4): a probe pod in a test namespace of the ext-fi zone that states only
+#     `platform/capacity: spot` is placed on the zone's nodes by the mutations alone.
+#   - Isolation from that pod (R2, R3, R5, R6, R7b): the other zones' gateway and External Secrets
+#     pods and load balancers, another application of the same zone, the node, every zone's and the
+#     platform's Key Vault, and the instance metadata service are unreachable; the cluster DNS works.
+#   - Egress (R20): with only the zone baseline nothing leaves the cluster; an FQDN policy opens
+#     exactly its name and port.
+#   - Forbidden manifests (R7b, R8, R9b, R11, R14, R17, R20): each manifest of the policy table is
+#     sent as a server-side dry run. Rules in effect `deny` must refuse it; rules still in audit (the
+#     build tenant, until phase 3) are reported as AUDIT, and must at least be in the cluster.
+#   - From the internet (R9b, R24): the external application's names answer /healthz over HTTPS, in
+#     the cell and behind Traffic Manager; plain HTTP does not.
+#   - Azure Resource Graph (R1, R5, R7a): public IPs, public PaaS endpoints and local authentication -
+#     none but the designed ones and the recorded lab exceptions (tests/isolation/).
+#
+# It creates a test namespace in the ext-fi zone, runs one pod there (NAP adds a zone node for a few
+# minutes) and deletes both afterwards; the dry runs create nothing. It changes nothing else.
 #
 # Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
-# role that may create namespaces and pods (Azure Kubernetes Service RBAC Cluster Admin).
+# role that may create namespaces and pods (Azure Kubernetes Service RBAC Cluster Admin) and Reader on
+# the subscription for Resource Graph.
 
 on:
   workflow_dispatch:
@@ -26,6 +41,14 @@ on:
         default: "aks-dev-stateless-az1"
         type: choice
         options: [aks-dev-stateless-az1, aks-dev-stateless-az2]
+  workflow_call:
+    inputs:
+      cluster:
+        required: true
+        type: string
+  schedule:
+    # Weekdays 05:40 UTC, the running cell.
+    - cron: "40 5 * * 1-5"
 
 permissions:
   contents: read
@@ -33,40 +56,90 @@ permissions:
 
 jobs:
   isolation:
-    name: isolation ${{ inputs.cluster }}
+    name: isolation ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
     runs-on: ubuntu-latest
     environment: dev
+    timeout-minutes: 60
+    # One run per cell at a time: two would share the test namespace.
+    concurrency:
+      group: isolation-tests-${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      cancel-in-progress: false
     env:
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      ZONE: ext-fi
       NAMESPACE: ext-fi-isolation-test
-      ZONE_VAULT: kv-onek8s-dev-ext-fi
+      ZONES: "int-fi int-se ext-fi ext-se"
+      VAULT_PREFIX: kv-onek8s-dev
       ZONE_DOMAIN: ext-fi.dev.onek8s.lol
     steps:
+      - uses: actions/checkout@v7
+
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Every check reports through result(): a line in the log and a row in the summary. A failed
+      # check does not stop the run; the last step fails it if any did.
+      - name: Test helpers
+        run: |
+          cat > "$RUNNER_TEMP/lib.sh" <<'EOF'
+          # Checks are expected to fail one by one; result() records them, the step goes on.
+          set +e
+          RESULTS="$RUNNER_TEMP/results.md"; export RESULTS
+          result() { # PASS|FAIL|AUDIT requirement check [detail]
+            local status=$1 req=$2 check=$3 detail=${4:-}
+            case $status in
+              PASS) echo "PASS [$req] $check${detail:+ - $detail}" ;;
+              AUDIT) echo "::notice::AUDIT [$req] $check${detail:+ - $detail}" ;;
+              *) echo "::error::FAIL [$req] $check${detail:+ - $detail}"; echo x >> "$RUNNER_TEMP/failures" ;;
+            esac
+            printf '| %s | %s | %s | %s |\n' "$status" "$req" "$check" "${detail//|/\\|}" >> "$RESULTS"
+          }
+          # Run a command in the probe pod; its output in /tmp/out.
+          probe() { timeout 30 kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
+          # Cilium drops what a policy denies, so a blocked connection times out (curl 28) or its
+          # name does not resolve (curl 6, nslookup 1). A refused connection (7) or a TLS error
+          # reached the other end: that is not blocked.
+          blocked() {
+            probe "$3"; local rc=$?
+            case $rc in
+              1|6|28|124) result PASS "$1" "$2 is blocked" "exit $rc" ;;
+              0) result FAIL "$1" "$2 is blocked" "reachable: $(head -c 300 /tmp/out)" ;;
+              *) result FAIL "$1" "$2 is blocked" "the connection got through (exit $rc): $(head -c 300 /tmp/out)" ;;
+            esac
+          }
+          reachable() { if probe "$3"; then result PASS "$1" "$2"; else result FAIL "$1" "$2" "$(head -c 300 /tmp/out)"; fi; }
+          EOF
+          : > "$RUNNER_TEMP/results.md"
+
       - name: Cluster settings
         run: |
-          set -euo pipefail
-          fail=0
-          check() { if [ "$2" = "$3" ]; then echo "PASS $1 ($2)"; else echo "::error::FAIL $1: $2, expected $3"; fail=1; fi; }
+          . "$RUNNER_TEMP/lib.sh"
+          check() { if [ "$3" = "$4" ]; then result PASS "$1" "$2" "$3"; else result FAIL "$1" "$2" "$3, expected $4"; fi; }
           c="$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" -o json)"
-          check "local accounts disabled" "$(jq -r .disableLocalAccounts <<<"$c")" true
-          check "SSH off on the system pool" "$(jq -r '.agentPoolProfiles[0].securityProfile.sshAccess' <<<"$c")" Disabled
-          check "encryption at host" "$(jq -r '.agentPoolProfiles[0].enableEncryptionAtHost' <<<"$c")" true
-          check "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
-          check "ACNS" "$(jq -r '.networkProfile.advancedNetworking.enabled' <<<"$c")" true
-          check "FQDN policies" "$(jq -r '.networkProfile.advancedNetworking.security.advancedNetworkPolicies' <<<"$c")" FQDN
-          check "eBPF host routing" "$(jq -r '.networkProfile.advancedNetworking.performance.accelerationMode' <<<"$c")" BpfVeth
-          check "KMS" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
-          check "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
-          check "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
-          check "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
-          exit $fail
+          check R1 "local accounts disabled" "$(jq -r .disableLocalAccounts <<<"$c")" true
+          check R1 "Entra ID with Azure RBAC" "$(jq -r '.aadProfile.enableAzureRbac' <<<"$c")" true
+          check R1 "SSH off on the system pool" "$(jq -r '.agentPoolProfiles[0].securityProfile.sshAccess' <<<"$c")" Disabled
+          check R21 "encryption at host" "$(jq -r '.agentPoolProfiles[0].enableEncryptionAtHost' <<<"$c")" true
+          check R21 "KMS with the cluster's key" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
+          check R21 "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
+          check R19 "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
+          check R19 "ACNS" "$(jq -r '.networkProfile.advancedNetworking.enabled' <<<"$c")" true
+          check R19 "eBPF host routing" "$(jq -r '.networkProfile.advancedNetworking.performance.accelerationMode' <<<"$c")" BpfVeth
+          check R20 "FQDN policies" "$(jq -r '.networkProfile.advancedNetworking.security.advancedNetworkPolicies' <<<"$c")" FQDN
+          check R7b "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
+          check R14 "Azure Policy add-on" "$(jq -r '.addonProfiles.azurepolicy.enabled // false' <<<"$c")" true
+          check R8 "stateless: no CSI drivers" "$(jq -r '[.storageProfile.diskCsiDriver.enabled, .storageProfile.fileCsiDriver.enabled] | map(. // false) | any' <<<"$c")" false
+          check R12 "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
+          if out="$(az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --admin --file "$RUNNER_TEMP/admin.kubeconfig" 2>&1)"; then
+            rm -f "$RUNNER_TEMP/admin.kubeconfig"
+            result FAIL R1 "local admin credential (get-credentials --admin) refused" "Azure handed it out"
+          else
+            result PASS R1 "local admin credential (get-credentials --admin) refused" "$(head -c 200 <<<"$out" | tr '\n' ' ')"
+          fi
 
       - name: Credentials
         run: |
@@ -75,17 +148,49 @@ jobs:
           KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l azurecli
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
 
-      - name: Test pod in the ext-fi zone
+      # The Azure Policy add-on pulls new assignments every 15 minutes: a cluster built minutes ago
+      # gets a little time.
+      - name: Platform policies in the cluster
+        if: ${{ !cancelled() }}
         run: |
-          set -euo pipefail
+          . "$RUNNER_TEMP/lib.sh"
+          templates="k8splatformnopersistentstorage k8splatformzoneplacement k8splatformplacementlabels k8splatformfqdnegress k8splatformgatewayonly k8splatformnodepools"
+          for _ in $(seq 1 20); do
+            missing=""
+            for t in $templates; do kubectl get constrainttemplate "$t" >/dev/null 2>&1 || missing="$missing $t"; done
+            mutations="$(kubectl get assign,modifyset -o json 2>/dev/null | jq '.items | length')"
+            [ -z "$missing" ] && [ "${mutations:-0}" -ge 12 ] && break
+            echo "waiting for the add-on: missing templates:${missing:- none}, mutations ${mutations:-0}/12"; sleep 60
+          done
+          for t in $templates; do
+            if kubectl get constrainttemplate "$t" >/dev/null 2>&1; then
+              actions="$(kubectl get "$t" -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
+              result PASS R14 "constraint template $t" "constraints: ${actions:-none}"
+            else
+              result FAIL R14 "constraint template $t" "not in the cluster"
+            fi
+          done
+          # Stateless: the storage rule is enforced in every environment (it replaced the fleet's
+          # ValidatingAdmissionPolicy).
+          storage="$(kubectl get k8splatformnopersistentstorage -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
+          case "$storage" in *deny*) result PASS "R8, R14" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R8, R14" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
+          if [ "${mutations:-0}" -ge 12 ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of 12"; fi
+          kubectl get constrainttemplates -o custom-columns=NAME:.metadata.name,CREATED:.status.created || true
+
+      - name: Probe pod placed by the mutations
+        id: probe
+        if: ${{ !cancelled() }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
           kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true
+          # No nodeSelector, no tolerations: the zone comes from the namespace, spot from the label.
           kubectl apply -f - <<EOF
           apiVersion: v1
           kind: Namespace
           metadata:
             name: $NAMESPACE
             labels:
-              platform/zone: ext-fi
+              platform/zone: $ZONE
               pod-security.kubernetes.io/enforce: restricted
           ---
           apiVersion: v1
@@ -95,13 +200,9 @@ jobs:
             namespace: $NAMESPACE
             labels:
               app: probe
+              platform/capacity: spot
           spec:
             automountServiceAccountToken: false
-            nodeSelector:
-              platform/zone: ext-fi
-            tolerations:
-              - {key: platform/zone, operator: Equal, value: ext-fi, effect: NoSchedule}
-              - {key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}
             securityContext:
               runAsNonRoot: true
               runAsUser: 100
@@ -112,35 +213,56 @@ jobs:
                 command: ["sleep", "3600"]
                 securityContext:
                   allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
                   capabilities: {drop: ["ALL"]}
                 resources:
                   requests: {cpu: 10m, memory: 16Mi}
                   limits: {memory: 64Mi}
           EOF
-          kubectl -n "$NAMESPACE" wait pod/probe --for=condition=Ready --timeout=600s
+          pod="$(kubectl -n "$NAMESPACE" get pod probe -o json)"
+          check() { if [ "$3" = "$4" ]; then result PASS "$1" "$2" "$3"; else result FAIL "$1" "$2" "$3, expected $4"; fi; }
+          check R4 "mutation: zone nodeSelector" "$(jq -r '.spec.nodeSelector["platform/zone"] // "none"' <<<"$pod")" "$ZONE"
+          check R17 "mutation: default architecture" "$(jq -r '.spec.nodeSelector["kubernetes.io/arch"] // "none"' <<<"$pod")" amd64
+          check R17 "mutation: spot toleration from platform/capacity" "$(jq -r '[.spec.tolerations[] | select(.key == "platform/capacity" and .value == "spot")] | length' <<<"$pod")" 1
+          check R17 "mutation: spot preferred" "$(jq -r '[.spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[]?.preference.matchExpressions[] | select(.key == "karpenter.sh/capacity-type")] | length' <<<"$pod")" 1
+          if kubectl -n "$NAMESPACE" wait pod/probe --for=condition=Ready --timeout=600s; then
+            node="$(kubectl -n "$NAMESPACE" get pod probe -o jsonpath='{.spec.nodeName}')"
+            check R4 "probe runs on a node of its zone ($node)" "$(kubectl get node "$node" -o jsonpath='{.metadata.labels.platform/zone}')" "$ZONE"
+          else
+            kubectl -n "$NAMESPACE" describe pod probe | tail -20
+            result FAIL R4 "probe pod scheduled on the zone's nodes" "not ready after 10 minutes"
+            exit 1
+          fi
 
-      - name: The zone baseline denies what it should
+      - name: Isolation from an application pod of ext-fi
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: |
-          set -uo pipefail
-          fail=0
-          run() { kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
-          deny() { if run "$2"; then echo "::error::FAIL $1 - reachable:"; cat /tmp/out; fail=1; else echo "PASS $1 - blocked"; fi; }
-          allow() { if run "$2"; then echo "PASS $1"; else echo "::error::FAIL $1:"; cat /tmp/out; fail=1; fi; }
-          int_ilb="$(kubectl -n int-fi-gateway get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-          int_pod="$(kubectl -n int-fi-gateway get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.podIP}' 2>/dev/null || true)"
-          allow "cluster DNS" "nslookup kubernetes.default.svc.cluster.local"
-          deny "instance metadata service" "curl -sS -m 5 -H Metadata:true 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'"
-          deny "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
-          deny "an outside name in DNS" "nslookup -timeout=3 www.microsoft.com | grep -q 'Address: [0-9]'"
-          deny "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
-          deny "the zone's Key Vault" "curl -sS -m 5 -o /dev/null https://$ZONE_VAULT.vault.azure.net/healthstatus"
-          [ -z "$int_ilb" ] || deny "the int-fi gateway's load balancer ($int_ilb)" "curl -sS -m 5 -k -o /dev/null https://$int_ilb"
-          [ -z "$int_pod" ] || deny "the int-fi gateway's pod ($int_pod)" "curl -sS -m 5 -k -o /dev/null https://$int_pod:8443"
-          exit $fail
+          . "$RUNNER_TEMP/lib.sh"
+          reachable R5 "cluster DNS" "nslookup kubernetes.default.svc.cluster.local"
+          blocked R5 "the instance metadata service (IMDS token)" "curl -sS -m 5 -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/'"
+          for zone in $ZONES; do
+            blocked R7b "Key Vault $VAULT_PREFIX-$zone" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-$zone.vault.azure.net/healthstatus"
+            [ "$zone" = "$ZONE" ] && continue
+            gw_pod="$(kubectl -n "$zone-gateway" get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
+            gw_lb="$(kubectl -n "$zone-gateway" get svc -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
+            eso_pod="$(kubectl -n "$zone-secrets" get pod -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
+            [ -z "$gw_pod" ] || blocked "R2, R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:8443"
+            [ -z "$gw_lb" ] || blocked "R2, R3, R5" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
+            [ -z "$eso_pod" ] || blocked "R2, R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
+          done
+          blocked R7b "the platform Key Vault" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-platform.vault.azure.net/healthstatus"
+          app_pod="$(kubectl -n ext-fi-example get pod -l app.kubernetes.io/name=aks-hello -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
+          [ -z "$app_pod" ] || blocked R6 "another application of the same zone (ext-fi-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
+          node_ip="$(kubectl get nodes -l kubernetes.azure.com/mode=system -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
+          [ -z "$node_ip" ] || blocked R5 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
+          blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
+          blocked R20 "an outside name in DNS" "nslookup -timeout=3 www.microsoft.com | grep -q 'Address: [0-9]'"
+          blocked R20 "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
 
       - name: An application's FQDN policy opens exactly its names
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: |
-          set -uo pipefail
+          . "$RUNNER_TEMP/lib.sh"
           kubectl apply -f - <<EOF
           apiVersion: cilium.io/v2
           kind: CiliumNetworkPolicy
@@ -163,27 +285,111 @@ jobs:
                   - ports: [{port: "443", protocol: TCP}]
           EOF
           sleep 10
-          fail=0
-          run() { kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
-          echo "::group::The pod's resolver"
-          run "cat /etc/resolv.conf; nslookup api.github.com"; cat /tmp/out
-          echo "::endgroup::"
-          if run "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://api.github.com/zen"; then echo "PASS the declared name: $(cat /tmp/out)"; else echo "::error::FAIL the declared name:"; cat /tmp/out; fail=1; fi
-          if run "curl -sS -m 5 -o /dev/null https://www.microsoft.com"; then echo "::error::FAIL an undeclared name is reachable"; fail=1; else echo "PASS an undeclared name stays blocked"; fi
-          if run "curl -sS -m 5 -o /dev/null http://api.github.com"; then echo "::error::FAIL an undeclared port is reachable"; fail=1; else echo "PASS an undeclared port stays blocked"; fi
-          exit $fail
+          reachable R20 "the declared name (api.github.com:443)" "curl -sS -m 10 -o /dev/null https://api.github.com/zen"
+          blocked R20 "an undeclared name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
+          blocked R20 "an undeclared port of the declared name" "curl -sS -m 5 -o /dev/null http://api.github.com"
+
+      - name: Forbidden manifests
+        if: ${{ !cancelled() }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          printf 'apiVersion: v1\nkind: Namespace\nmetadata: {name: %s, labels: {platform/zone: %s, pod-security.kubernetes.io/enforce: restricted}}\n' "$NAMESPACE" "$ZONE" \
+            | kubectl apply -f -
+          # forbidden <requirement> <what> <rule> : the manifest on stdin, sent as a server-side dry run.
+          # <rule> is the constraint kind that must refuse it; `always` for what is refused in every
+          # environment (Pod Security, the storage rules, an API the cluster does not serve);
+          # `builtin` for a built-in Azure Policy definition, in audit in the build tenant.
+          forbidden() {
+            local req=$1 what=$2 rule=$3 out action
+            if out="$(kubectl create --dry-run=server -n "$NAMESPACE" -f - 2>&1)"; then
+              if [ "$rule" = always ]; then result FAIL "$req" "refused: $what" "admitted"; return; fi
+              if [ "$rule" = builtin ]; then result AUDIT "$req" "refused: $what" "built-in definition in audit until phase 3"; return; fi
+              action="$(kubectl get "$rule" -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
+              case "$action" in
+                *deny*) result FAIL "$req" "refused: $what" "admitted although $rule denies" ;;
+                "") result FAIL "$req" "refused: $what" "admitted, and no $rule constraint is in the cluster" ;;
+                *) result AUDIT "$req" "refused: $what" "$rule is in audit ($action) until phase 3" ;;
+              esac
+            else
+              # The reason, without kubectl's "Error from server (Forbidden): error when creating ...:"
+              result PASS "$req" "refused: $what" "$(tail -1 <<<"$out" | sed -E 's/^Error from server \([A-Za-z]+\): (error when creating "STDIN": )?//' | head -c 220)"
+            fi
+          }
+          # A pod the restricted Pod Security Standard admits, so that each manifest is refused for
+          # the one thing it adds: name, extra pod spec (YAML flow mapping entries), container
+          # securityContext.
+          restricted='{allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}'
+          pod() {
+            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, securityContext: %s}]}\n' \
+              "$1" "${2:+$2,}" "${3:-$restricted}"
+          }
+          pod privileged "" "{privileged: true}" | forbidden R5 "privileged pod" always
+          pod host-path "volumes: [{name: h, hostPath: {path: /}}]" | forbidden R5 "hostPath volume" always
+          pod host-network "hostNetwork: true" | forbidden R5 "hostNetwork pod" always
+          printf 'apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata: {name: data}\nspec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}\n' \
+            | forbidden R8 "PersistentVolumeClaim on a stateless cluster" always
+          printf 'apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata: {name: isolation-test}\nprovisioner: disk.csi.azure.com\n' \
+            | forbidden R8 "StorageClass on a stateless cluster" always
+          pod csi "volumes: [{name: v, csi: {driver: secrets-store.csi.k8s.io}}]" | forbidden "R7b, R8" "inline csi volume (Secrets Store)" always
+          printf 'apiVersion: secrets-store.csi.x-k8s.io/v1\nkind: SecretProviderClass\nmetadata: {name: kv}\nspec: {provider: azure}\n' \
+            | forbidden R7b "SecretProviderClass" always
+          printf 'apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata: {name: web}\nspec: {defaultBackend: {service: {name: web, port: {number: 80}}}}\n' \
+            | forbidden R9b "Ingress" builtin
+          printf 'apiVersion: v1\nkind: Service\nmetadata: {name: lb}\nspec: {type: LoadBalancer, selector: {app: x}, ports: [{port: 80}]}\n' \
+            | forbidden R9b "LoadBalancer Service outside a gateway namespace" k8splatformgatewayonly
+          printf 'apiVersion: v1\nkind: Service\nmetadata: {name: np}\nspec: {type: NodePort, selector: {app: x}, ports: [{port: 80}]}\n' \
+            | forbidden R9b "NodePort Service" k8splatformgatewayonly
+          printf 'apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: other-zone}\nspec: {parentRefs: [{namespace: int-fi-gateway, name: int-fi}], hostnames: [x.int-fi.dev.onek8s.lol], rules: [{backendRefs: [{name: x, port: 80}]}]}\n' \
+            | forbidden "R2, R9b" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
+          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: cidr}\nspec: {endpointSelector: {}, egress: [{toCIDR: [1.1.1.1/32]}]}\n' \
+            | forbidden R20 "CiliumNetworkPolicy toCIDR" k8splatformfqdnegress
+          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: world}\nspec: {endpointSelector: {}, egress: [{toEntities: [world]}]}\n' \
+            | forbidden R20 "CiliumNetworkPolicy toEntities world" k8splatformfqdnegress
+          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: wildcard}\nspec: {endpointSelector: {}, egress: [{toFQDNs: [{matchPattern: "*.blob.core.windows.net"}], toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
+            | forbidden R20 "CiliumNetworkPolicy cloud-wide wildcard" k8splatformfqdnegress
+          printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata: {name: ipblock}\nspec: {podSelector: {}, policyTypes: [Egress], egress: [{to: [{ipBlock: {cidr: 0.0.0.0/0}}]}]}\n' \
+            | forbidden R20 "NetworkPolicy egress ipBlock" k8splatformfqdnegress
+          pod own-dns "dnsPolicy: Default" | forbidden R20 "pod with its own DNS (dnsPolicy Default)" k8splatformfqdnegress
+          pod system-pool "nodeSelector: {kubernetes.azure.com/mode: system}, tolerations: [{key: CriticalAddonsOnly, operator: Exists}]" \
+            | forbidden R4 "zone pod on the system pool" k8splatformzoneplacement
+          pod other-zone "nodeSelector: {platform/zone: int-fi}" | forbidden "R2, R4" "zone pod selecting another zone's nodes" k8splatformzoneplacement
+          pod own-arch "nodeSelector: {kubernetes.io/arch: arm64}" | forbidden R17 "pod selecting an architecture without platform/arch" k8splatformplacementlabels
+          pod sneaky-spot "tolerations: [{key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}]" \
+            | forbidden R17 "spot toleration without platform/capacity: spot" k8splatformplacementlabels
 
       - name: The external application from the internet
+        if: ${{ !cancelled() }}
         run: |
-          set -uo pipefail
-          fail=0
+          . "$RUNNER_TEMP/lib.sh"
           for host in "hello-$CLUSTER.$ZONE_DOMAIN" "hello.$ZONE_DOMAIN"; do
             code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$host/healthz" || true)"
-            if [ "$code" = 200 ]; then echo "PASS https://$host/healthz"; else echo "::error::FAIL https://$host/healthz: $code"; fail=1; fi
-            if curl -sS -m 5 -o /dev/null "http://$host/"; then echo "::error::FAIL plain HTTP answers on $host"; fail=1; else echo "PASS no plain HTTP on $host"; fi
+            if [ "$code" = 200 ]; then result PASS R24 "https://$host/healthz" 200; else result FAIL R24 "https://$host/healthz" "$code"; fi
+            if curl -sS -m 5 -o /dev/null "http://$host/"; then result FAIL R9b "no plain HTTP on $host" "answers"; else result PASS R9b "no plain HTTP on $host"; fi
           done
-          exit $fail
+
+      - name: Azure Resource Graph - public endpoints and local authentication
+        if: ${{ !cancelled() }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          python3 tests/isolation/check-public-endpoints.py "$(az account show --query id -o tsv)" tests/isolation/allowed-public-endpoints.yaml \
+            || echo x >> "$RUNNER_TEMP/failures"
 
       - name: Clean up
         if: always()
-        run: kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=false
+        run: kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=false || true
+
+      - name: Results
+        if: always()
+        run: |
+          {
+            echo "### Isolation tests - $CLUSTER"
+            echo
+            echo "| Result | Requirement | Check | Detail |"
+            echo "|---|---|---|---|"
+            cat "$RUNNER_TEMP/results.md" 2>/dev/null
+          } >> "$GITHUB_STEP_SUMMARY"
+          pass=$(grep -c '^| PASS' "$RUNNER_TEMP/results.md" || true)
+          audit=$(grep -c '^| AUDIT' "$RUNNER_TEMP/results.md" || true)
+          failed=$(grep -c '^| FAIL' "$RUNNER_TEMP/results.md" || true)
+          echo "$pass passed, $audit audit only (deny in phase 3), $failed failed"
+          [ ! -s "$RUNNER_TEMP/failures" ]

@@ -16,6 +16,9 @@ name: Deploy
 #   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
 #                        not deployed for now).
 #
+# After an apply of a stateless cell, the Isolation tests workflow runs against it as a further
+# stage (job isolation-tests).
+#
 # Each stack has a state of its own - so a cluster can be destroyed and built again without touching
 # the shared resources or the other clusters - in the azurerm backend of its terraform.tf, as
 # `<stack>.tfstate` in the `tfstate` container of the storage account named by the variables
@@ -262,3 +265,14 @@ jobs:
               echo "Apply: ${{ job.status }}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The requirement and isolation tests (design section 17) as the stage after every apply of a
+  # stateless cell: the cell is tested as it is now, policies and Flux included.
+  isolation-tests:
+    name: isolation tests
+    needs: deploy
+    if: inputs.action == 'apply' && startsWith(inputs.stack, 'dev-stateless-')
+    uses: ./.github/workflows/isolation-tests.yml
+    with:
+      cluster: aks-${{ inputs.stack }}
+    secrets: inherit

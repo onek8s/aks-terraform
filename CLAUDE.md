@@ -28,14 +28,16 @@ reads; job logs via `get_job_logs`).
 |---|---|
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-stateless-az1` / `dev-stateless-az2` / `dev-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota. `node_iptables` option for eBPF debugging. |
-| `isolation-tests.yml` | Requirement tests on one cell: cluster settings, zone baseline denies, FQDN egress, external HTTPS (cell name and Traffic Manager name). Must pass after any network/zone change. |
+| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
 
 Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
-tests) and in `shared/` (24+), `kustomize build` for changed fleet directories. The fleet and example
+tests) and in `shared/` (24+), `kustomize build` for changed fleet directories; for a policy change in
+azure-landing-zone, `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and
+`terraform test` there. The fleet and example
 repos' CI does not run on GitHub, so validate them locally.
 
 Workflow: branch, PR, squash-merge (the user wants changes deployed and merged without asking each
@@ -54,6 +56,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   64Mi-128Mi, `minReplicas: 1`) and `resizePolicy: NotRequired`; Cluster status shows VPAs, targets
   and resize conditions. First in-place resize not yet observed.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
+- **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
+  templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the
+  fleet's ValidatingAdmissionPolicies), 12 mutations **on** (zone placement from the namespace,
+  `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference), the other
+  validations (zone placement, placement labels, FQDN egress, Gateway only, NodePools) in **audit** until
+  phase 3. Stateless/stateful rules are scoped with `not_scopes` (cluster names in `policy.tfvars`).
+  A pod labelled `platform/zone-placement: "off"` skips the zone mutation (aks-hello's lab exception).
 - Region swedencentral. Quotas: regional vCPUs 52, Dpsv6 24, Dalv6 16, low-priority (spot) 3 - a
   raise to 8 was throttled by Azure ("retry after 3600 s", each retry restarts the wait); re-run
   `vcpu-quota.yml` once at most per hour.
@@ -91,14 +100,18 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   tainted `CriticalAddonsOnly`, Kubernetes 1.36, auto-upgrade none, Free tier.
 - **Secrets only through ESO**; vault shares by ABAC prefix `<namespace>--`; gateway certs
   `<zone>-gateway--wildcard` and `platform-gateway--wildcard`.
-- Skipped for now by the user: custom Azure Policy definitions, automated requirement tests beyond
-  the isolation-tests workflow.
+- **One policy engine (R14)**: no ValidatingAdmissionPolicies in the fleet; every admission rule is an
+  Azure Policy definition. Placement (R17) is stated by applications only as labels `platform/arch`
+  and `platform/capacity`; the mutations do the rest.
 
 ## Lessons learned (gotchas)
 
 - **Cilium DNS rules must cover the pod's search suffixes**, including the node's Azure suffix
   `<id>.<x>.internal.cloudapp.net`; a refused expansion makes musl (Alpine) stop resolving, so
   allowed FQDNs fail. The zone baseline allows `cluster.local` and `internal.cloudapp.net` patterns.
+- **A `Microsoft.Kubernetes.Data` policy rule may test only `type`, `location` and `tags`** of the
+  cluster (`InvalidPolicyAliasFormat` otherwise, only at apply - the plan does not catch it); scope by
+  assignment `not_scopes`. Custom mutations cannot be parameterized: render one definition per value.
 - **An NSG rule takes one service tag**; `Internet` + `VirtualNetwork` in one rule is a 400.
 - **Quota errors** show up as `ErrCode_InsufficientVCPUQuota` on the cluster PUT; check the
   "vCPU quota" step of Cluster status.
