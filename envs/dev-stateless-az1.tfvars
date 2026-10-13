@@ -103,17 +103,19 @@ entra_reader_group_object_ids = []
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy).
 azure_policy_enabled = true
 
-# The system pool: one amd64 node in availability zone 1, 4 vCPU and 8 GiB (the platform's
-# controllers and the Azure Policy add-on do not fit in 2), on Azure Linux 3.0 - which eBPF host
-# routing needs on every node - with encryption at host, SSH off and the CriticalAddonsOnly taint:
-# only the platform's own controllers run here, every isolation zone's pods on that zone's NAP nodes.
+# The system pool: two amd64 nodes in availability zone 1, 4 vCPU and 8 GiB each (the platform's
+# controllers and the Azure Policy add-on do not fit in 2 vCPU, and App Routing's istiod requests
+# 500m and 2 GiB per replica, at least two replicas - more than one 8 GiB node holds beside the
+# rest), on Azure Linux 3.0 - which eBPF host routing needs on every node - with encryption at host,
+# SSH off and the CriticalAddonsOnly taint: only the platform's own controllers run here, every
+# isolation zone's pods on that zone's NAP nodes.
 # Standard_D4als_v6 is offered in both zones the cells use and supports VNet encryption. A system
 # node pool cannot run on Spot VMs, and a node pool cannot change its architecture or OS in place.
 default_node_pool = {
   vm_size             = "Standard_D4als_v6"
   availability_zones  = ["1"]
   enable_auto_scaling = false
-  node_count          = 1
+  node_count          = 2
   os_sku              = "AzureLinux"
   encryption_at_host  = true
   ssh_access          = "Disabled"
