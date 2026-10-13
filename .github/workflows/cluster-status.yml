@@ -163,7 +163,7 @@ jobs:
           # Who writes the Secrets of the isolation zones' namespaces (the ESO-only rule is judged on
           # the admission request's user, which Gatekeeper's audit does not see): the managers of
           # each Secret, from its managed fields.
-          kubectl get secrets -A -o json | jq -r '.items[] | select(.metadata.namespace | test("^(int|ext)-(fi|se)-")) | "\(.metadata.namespace)/\(.metadata.name) \(.type) managers=\([.metadata.managedFields[]?.manager] | unique | join(","))"'
+          kubectl get secrets -A -o json --show-managed-fields | jq -r '.items[] | select(.metadata.namespace | test("^(int|ext)-(fi|se)-")) | "\(.metadata.namespace)/\(.metadata.name) \(.type) managers=\([.metadata.managedFields[]?.manager] | unique | join(","))"'
           kubectl get resourcequota -A
           kubectl get crd | grep -E "gateway.networking.k8s.io|cilium.io"
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
