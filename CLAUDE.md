@@ -55,6 +55,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `vcpu-quota.yml` once at most per hour.
 - A cell with no applications is one 4-vCPU system node (Standard_D4als_v6). Each zone with
   application pods adds NAP nodes.
+- **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
+  the system node too, so dev normally runs zero zone nodes: az1 is just its system node. The
+  Isolation tests' probe pod still uses the ext-fi zone, so a test run briefly creates a zone node
+  (NAP removes it ~5 min after). Remove the patch to put the app back on zone nodes.
 
 ## Decisions already made (do not re-litigate)
 
