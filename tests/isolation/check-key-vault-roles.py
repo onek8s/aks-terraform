@@ -13,9 +13,11 @@ in an application namespace of the zones (`<zone>-<app>`) is checked:
   - any other service account (an application's own workload identity): no Key Vault data-plane
     role at all, at any scope.
 
-The role assignments come from Azure Resource Graph (`authorizationresources`), so roles given at
-the vault, its resource group or the subscription are all seen. Signed in with the Azure CLI. Prints
-one line per check and a Markdown table to $RESULTS (the workflow's summary); exits 1 on a finding.
+The role assignments are every one the identity holds, inherited ones included (`az role
+assignment list --all --include-inherited`), so roles given at the vault, its resource group, the
+subscription or a management group are all seen. A reader with no Secrets User at all fails too:
+the check must have found the share it is about. Signed in with the Azure CLI. Prints one line per
+check and a Markdown table to $RESULTS (the workflow's summary); exits 1 on a finding.
 """
 import json
 import os
@@ -33,15 +35,6 @@ def az(*args):
     return json.loads(subprocess.run(["az", *args, "-o", "json"], check=True, capture_output=True, text=True).stdout)
 
 
-def graph(subscription, query):
-    body = json.dumps({"subscriptions": [subscription], "query": query, "options": {"$top": 1000}})
-    out = subprocess.run(
-        ["az", "rest", "--method", "post", "--url",
-         "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
-         "--body", body], check=True, capture_output=True, text=True).stdout
-    return json.loads(out)["data"]
-
-
 def result(status, req, check, detail=""):
     print(f"{status} [{req}] {check}{' - ' + detail if detail else ''}")
     if os.environ.get("RESULTS"):
@@ -51,25 +44,8 @@ def result(status, req, check, detail=""):
 
 def main():
     group, zones = sys.argv[1], sys.argv[2:]
-    subscription = az("account", "show")["id"]
     application = re.compile(r"^system:serviceaccount:((?:%s)-[a-z0-9-]+):([a-z0-9.-]+)$" % "|".join(map(re.escape, zones)))
     platform = {f"{zone}-{suffix}" for zone in zones for suffix in ("gateway", "secrets")}
-
-    # Every role assignment of the subscription, with its role's name.
-    assignments = graph(subscription, """
-        authorizationresources
-        | where type =~ 'microsoft.authorization/roleassignments'
-        | extend principalId = tostring(properties.principalId), roleDefinitionId = tolower(tostring(properties.roleDefinitionId)),
-                 scope = tostring(properties.scope), condition = tostring(properties.condition)
-        | join kind=leftouter (
-            authorizationresources
-            | where type =~ 'microsoft.authorization/roledefinitions'
-            | project roleDefinitionId = tolower(id), role = tostring(properties.roleName)
-          ) on roleDefinitionId
-        | project principalId, role, scope, condition""")
-    by_principal = {}
-    for a in assignments:
-        by_principal.setdefault(a["principalId"], []).append(a)
 
     failed = checked = 0
     for identity in az("identity", "list", "-g", group):
@@ -78,7 +54,9 @@ def main():
         if not accounts:
             continue
         checked += 1
-        roles = [a for a in by_principal.get(identity["principalId"], []) if DATA_ROLE.match(a.get("role") or "")]
+        assignments = az("role", "assignment", "list", "--assignee", identity["principalId"], "--all", "--include-inherited")
+        roles = [{"role": a.get("roleDefinitionName") or "", "scope": a.get("scope") or "", "condition": a.get("condition") or ""}
+                 for a in assignments if DATA_ROLE.match(a.get("roleDefinitionName") or "")]
         names = ", ".join(f"{ns}:{sa}" for ns, sa in sorted(accounts))
         problems = []
         for ns, sa in sorted(accounts):
@@ -90,6 +68,8 @@ def main():
                 elif f"'{ns}--'" not in a["condition"] and f"\"{ns}--\"" not in a["condition"]:
                     problems.append(f"{a['role']} on {a['scope'].rsplit('/', 1)[-1]} without the ABAC condition on {ns}--")
         reader = all(sa == READER_SERVICE_ACCOUNT for _, sa in accounts)
+        if reader and not roles:
+            problems.append("no Key Vault Secrets User at all - not the namespace's share")
         what = f"{'namespace reader' if reader else 'application identity'} {identity['name']} ({names})"
         if problems:
             failed += 1
