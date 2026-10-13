@@ -3669,3 +3669,93 @@ run "a_tenant_gets_the_substitutes_it_is_given" {
     error_message = "A tenant's substitutes should reach its Flux configuration next to cluster_name."
   }
 }
+
+# ----------------------------------------------------------------------------------------------
+# Image Integrity
+# ----------------------------------------------------------------------------------------------
+
+# Ratify reads the signatures and the signing certificate as the environment's shared identity, through
+# this cluster's credential for its service account, and Flux is told what to configure it with.
+run "image_integrity_federates_ratify_with_the_shared_identity" {
+  command = plan
+
+  variables {
+    name                    = "aks-test-a"
+    key_vault_name          = "kv-sec-test-shared"
+    key_vault_create        = false
+    container_registry_name = "acrtest"
+    image_integrity_enabled = true
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  override_data {
+    target = data.azurerm_container_registry.this
+    values = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerRegistry/registries/acrtest"
+      login_server = "acrtest.azurecr.io"
+    }
+  }
+  override_data {
+    target = data.azurerm_key_vault_certificate.image_signing
+    values = {
+      certificate_policy = [{
+        x509_certificate_properties = [{ subject = "CN=Test image signing, O=OneK8s, ST=Uusimaa, C=FI" }]
+      }]
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      data.azurerm_user_assigned_identity.image_verification[0].name == "id-sec-test-shared-ratify",
+      data.azurerm_user_assigned_identity.image_verification[0].resource_group_name == "rg-aks-test",
+    ])
+    error_message = "Ratify's identity should be the environment's shared one, looked up by its conventional name."
+  }
+  assert {
+    condition = alltrue([
+      azurerm_federated_identity_credential.image_verification[0].name == "aks-aks-test-a",
+      azurerm_federated_identity_credential.image_verification[0].subject == "system:serviceaccount:gatekeeper-system:ratify-admin",
+      azurerm_federated_identity_credential.image_verification[0].issuer == "https://swedencentral.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111/",
+    ])
+    error_message = "The cluster should federate the add-on's Ratify service account with the shared identity, under the cluster's own name."
+  }
+  assert {
+    condition = alltrue([
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.image_verification_client_id == "88888888-8888-8888-8888-888888888888",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.image_signing_certificate_name == "image-signing",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.container_registry_login_server == "acrtest.azurecr.io",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.image_signing_subject == "CN=Test image signing, O=OneK8s, ST=Uusimaa, C=FI",
+    ])
+    error_message = "Flux should get Ratify's client ID, the signing certificate's name and subject, and the registry."
+  }
+}
+
+run "no_image_integrity_by_default" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azurerm_federated_identity_credential.image_verification) == 0 &&
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "image_verification_client_id")
+    )
+    error_message = "Without image_integrity_enabled there is no Ratify credential and nothing for Flux to configure."
+  }
+}
+
+run "image_integrity_needs_the_shared_vault_and_the_registry" {
+  command = plan
+
+  variables {
+    image_integrity_enabled = true
+  }
+
+  expect_failures = [var.image_integrity_enabled]
+}

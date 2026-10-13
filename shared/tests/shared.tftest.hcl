@@ -507,3 +507,81 @@ run "a_global_hostname_below_the_zone_has_a_profile_name_without_dots" {
     error_message = "The record keeps the hostname."
   }
 }
+
+# Image signing: a code signing certificate whose key never leaves the vault, and the verifier's
+# identity able to read the signatures and that one certificate - nothing else in the vault.
+run "image_signing_has_a_certificate_and_a_verifier_identity" {
+  command = plan
+
+  variables {
+    container_registry_name = "acrtestshared"
+    image_signing = {
+      subject = "CN=Test image signing, O=OneK8s, ST=Uusimaa, C=FI"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_key_vault_certificate.image_signing[0].name == "image-signing",
+      one(one(azurerm_key_vault_certificate.image_signing[0].certificate_policy).issuer_parameters).name == "Self",
+      one(one(azurerm_key_vault_certificate.image_signing[0].certificate_policy).key_properties).exportable == false,
+      tolist(one(one(azurerm_key_vault_certificate.image_signing[0].certificate_policy).x509_certificate_properties).key_usage) == tolist(["digitalSignature"]),
+      tolist(one(one(azurerm_key_vault_certificate.image_signing[0].certificate_policy).x509_certificate_properties).extended_key_usage) == tolist(["1.3.6.1.5.5.7.3.3"]),
+      one(one(azurerm_key_vault_certificate.image_signing[0].certificate_policy).x509_certificate_properties).validity_in_months == 12,
+    ])
+    error_message = "The signing certificate should be self-signed, code signing only, with a key that cannot be exported."
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.image_verification[0].name == "id-sec-test-shared-ratify"
+    error_message = "The verifier's identity should be named the way the clusters look for it."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.image_verification["registry"].role_definition_name == "AcrPull" &&
+      azurerm_role_assignment.image_verification["certificate"].role_definition_name == "Key Vault Secrets User" &&
+      azurerm_role_assignment.image_verification["certificate"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.KeyVault/vaults/kv-sec-test-shared/secrets/image-signing"
+    )
+    error_message = "The verifier should pull from the registry and read the signing certificate's secret alone, not the vault."
+  }
+
+  assert {
+    condition     = length(local.image_verification_grants) == 2
+    error_message = "The verifier should get exactly the two grants."
+  }
+}
+
+run "no_image_signing_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_key_vault_certificate.image_signing) == 0 && length(azurerm_user_assigned_identity.image_verification) == 0
+    error_message = "Without image_signing there is no certificate and no verifier identity."
+  }
+}
+
+run "image_signing_needs_a_registry" {
+  command = plan
+
+  variables {
+    image_signing = {
+      subject = "CN=Test image signing, O=OneK8s, ST=Uusimaa, C=FI"
+    }
+  }
+
+  expect_failures = [var.image_signing]
+}
+
+run "refuses_a_signing_subject_without_a_country" {
+  command = plan
+
+  variables {
+    container_registry_name = "acrtestshared"
+    image_signing = {
+      subject = "CN=Test image signing, O=OneK8s, ST=Uusimaa"
+    }
+  }
+
+  expect_failures = [var.image_signing]
+}

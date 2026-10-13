@@ -17,3 +17,13 @@ output "shared_key_vault_identity_names" {
   description = "Per namespace, the name of the identity it reads the environment's shared Key Vault as. Empty without an environment."
   value       = local.shared_key_vault_identity_names
 }
+
+output "image_verification_identity_name" {
+  description = "Name of the identity the clusters' image signature verifier (Ratify) reads the registry and the signing certificate as. Null without an environment."
+  value       = local.image_verification_identity_name
+}
+
+output "image_signing_certificate_name" {
+  description = "Name of the certificate in the environment's platform Key Vault that the platform signs its images with. No namespace's share (`<namespace>--`) covers it."
+  value       = "image-signing"
+}

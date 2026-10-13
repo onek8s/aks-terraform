@@ -48,3 +48,13 @@ output "cell_subnet_ids" {
     }
   }
 }
+
+output "image_signing_certificate_name" {
+  description = "Name of the image signing certificate in the platform vault. Null without image_signing."
+  value       = one(azurerm_key_vault_certificate.image_signing[*].name)
+}
+
+output "image_verification_client_id" {
+  description = "Client ID of the identity the clusters' image signature verifier (Ratify) reads the registry and the signing certificate as. Null without image_signing."
+  value       = one(azurerm_user_assigned_identity.image_verification[*].client_id)
+}

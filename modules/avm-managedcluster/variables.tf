@@ -1366,6 +1366,10 @@ variable "security_profile" {
       enabled        = optional(bool)
       interval_hours = optional(number)
     }))
+    # Vendored patch: AKS Image Integrity (preview) - see VENDORED.md.
+    image_integrity = optional(object({
+      enabled = optional(bool)
+    }))
     workload_identity = optional(object({
       enabled = optional(bool)
     }))
@@ -1385,6 +1389,8 @@ Security profile for the container service cluster.
   - `security_monitoring` - Microsoft Defender settings for the security profile threat detection.
     - `enabled` - Whether to enable Defender threat detection
 - `image_cleaner` - Image Cleaner removes unused images from nodes, freeing up disk space and helping to reduce attack surface area. Here are settings for the security profile.
+- `image_integrity` - (Vendored patch, preview API only) AKS Image Integrity: Ratify verifies image signatures for the Azure Policy add-on's Gatekeeper.
+  - `enabled` - Whether to turn it on.
   - `enabled` - Whether to enable Image Cleaner on AKS cluster.
   - `interval_hours` - Image Cleaner scanning interval in hours.
 - `workload_identity` - Workload identity settings for the security profile.

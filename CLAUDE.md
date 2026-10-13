@@ -28,7 +28,8 @@ reads; job logs via `get_job_logs`).
 |---|---|
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-stateless-az1` / `dev-stateless-az2` / `dev-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota. `node_iptables` option for eBPF debugging. |
-| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
+| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
+| `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). |
@@ -55,6 +56,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   aks-hello has a `VerticalPodAutoscaler` in `InPlaceOrRecreate` (RequestsOnly, CPU 3m-20m, memory
   64Mi-128Mi, `minReplicas: 1`) and `resizePolicy: NotRequired`; Cluster status shows VPAs, targets
   and resize conditions. First in-place resize not yet observed.
+- **Image Integrity on** (preview, `image_integrity_enabled` in the stateless tfvars; feature
+  `EnableImageIntegrityPreview` registered by Deploy). shared/ `image_signing`: self-signed cert
+  `image-signing` in `kv-onek8s-dev-platform` (non-exportable key) and identity
+  `id-sec-dev-shared-ratify` (AcrPull, Secrets User on that one secret), federated per cluster with
+  `gatekeeper-system/ratify-admin`. Fleet `infrastructure/image-verification` configures Ratify.
+  The vendored AVM module has a second patch for `securityProfile.imageIntegrity`. Not yet confirmed
+  on a running cluster: the add-on's service account name and that its pod gets the workload
+  identity token (Cluster status and Isolation tests show both).
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the

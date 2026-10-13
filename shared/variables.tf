@@ -233,6 +233,33 @@ DESCRIPTION
   }
 }
 
+variable "image_signing" {
+  type = object({
+    subject            = string
+    validity_in_months = optional(number, 12)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Signing of the registry's images (OneK8s design section 14): a self-signed code signing certificate
+in the platform vault, `image-signing`, with this `subject` - Notation wants it to name a country
+(`C`), a state (`ST`) and an organisation (`O`) - valid for `validity_in_months`, and the identity the
+clusters' image signature verifier (Ratify, AKS Image Integrity) reads the registry and the
+certificate as. Needs container_registry_name. Null for none.
+DESCRIPTION
+
+  validation {
+    condition = var.image_signing == null || alltrue([
+      for part in ["C", "ST", "O"] : can(regex("(^|,)\\s*${part}=[^,]+", try(var.image_signing.subject, "")))
+    ])
+    error_message = "image_signing.subject must name a country (C=), a state (ST=) and an organisation (O=), as Notation requires of a signing certificate."
+  }
+
+  validation {
+    condition     = var.image_signing == null || var.container_registry_name != null
+    error_message = "image_signing signs the images of the environment's registry, and container_registry_name names none."
+  }
+}
+
 variable "global_hostnames" {
   type = map(object({
     endpoints   = list(string)

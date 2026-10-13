@@ -17,7 +17,8 @@ name: Deploy
 #                        not deployed for now).
 #
 # After an apply of a stateless cell, the Isolation tests workflow runs against it as a further
-# stage (job isolation-tests).
+# stage (job isolation-tests); after an apply of dev-shared, Sign images signs the registry's new
+# images (job sign-images).
 #
 # Each stack has a state of its own - so a cluster can be destroyed and built again without touching
 # the shared resources or the other clusters - in the azurerm backend of its terraform.tf, as
@@ -159,8 +160,10 @@ jobs:
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
-          # The managed Gateway API CRDs, and encryption at host on the nodes (design section 18).
-          for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost; do
+          # The managed Gateway API CRDs, encryption at host on the nodes (design section 18), and
+          # Image Integrity (section 14).
+          for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost \
+            Microsoft.ContainerService/EnableImageIntegrityPreview; do
             namespace="${pair%/*}"; feature="${pair#*/}"
             if [ "$(az feature show --namespace "$namespace" --name "$feature" --query properties.state -o tsv)" != Registered ]; then
               az feature register --namespace "$namespace" --name "$feature" -o none
@@ -265,6 +268,15 @@ jobs:
               echo "Apply: ${{ job.status }}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The registry builds new images when dev-shared changes their entries: sign whatever is unsigned
+  # (design section 14) before a cluster runs it.
+  sign-images:
+    name: sign images
+    needs: deploy
+    if: inputs.action == 'apply' && inputs.stack == 'dev-shared'
+    uses: ./.github/workflows/sign-images.yml
+    secrets: inherit
 
   # The requirement and isolation tests (design section 17) as the stage after every apply of a
   # stateless cell: the cell is tested as it is now, policies and Flux included.

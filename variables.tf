@@ -172,6 +172,43 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "image_integrity_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether AKS runs [Image Integrity][ii] (preview): Ratify, which checks each image's Notation
+signature for the Azure Policy add-on, so that the assignment "Kubernetes cluster containers should
+only use images that are signed with Notation" reports unsigned images (OneK8s design section 14;
+audit only while in preview). Ratify reads the signatures in `container_registry_name` and the
+signing certificate in the environment's shared platform vault as the shared identity shared/ creates
+with its image_signing, through a federated credential added here for Ratify's service account; Flux
+gets the rest (`image_verification_client_id`, `image_signing_certificate_name`,
+`image_signing_subject`, `container_registry_login_server`) and applies Ratify's configuration. Needs the subscription's
+`Microsoft.ContainerService/EnableImageIntegrityPreview` feature (the Deploy workflow registers it),
+the Azure Policy add-on, the shared vault and the registry.
+
+[ii]: https://learn.microsoft.com/en-us/azure/aks/image-integrity
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = !var.image_integrity_enabled || (var.azure_policy_enabled && !var.key_vault_create && var.key_vault_name != null && var.container_registry_name != null)
+    error_message = "image_integrity_enabled needs the Azure Policy add-on, the environment's shared Key Vault (key_vault_create = false, key_vault_name) and container_registry_name."
+  }
+}
+
+variable "image_integrity_service_account" {
+  type        = string
+  default     = "gatekeeper-system/ratify-admin"
+  description = "`<namespace>/<name>` of the service account the Image Integrity add-on runs Ratify as - the subject of its federated credential."
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[a-z0-9-]+/[a-z0-9-]+$", var.image_integrity_service_account))
+    error_message = "image_integrity_service_account is <namespace>/<name>."
+  }
+}
+
 variable "azure_rbac_enabled" {
   type        = bool
   default     = true
