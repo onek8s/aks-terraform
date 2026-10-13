@@ -445,10 +445,12 @@ jobs:
           # "only images signed with Notation" - stacks/aks-policy's, and any other assignment's, such
           # as the landing zone's security benchmark - reports the probe pod's unsigned image from
           # Docker Hub, and none the application's signed one. Gatekeeper audits every few minutes.
+          # The add-on's PrintMutationsAnnotations constraints carry the same policy ID but only note
+          # that the platform mutations changed a pod - they are left out.
           probe_reported() { jq -e --arg ns "$NAMESPACE" 'length > 0 and all(.[]; any(.status.violations[]?; .namespace == $ns and .name == "probe"))' <<<"$constraints" >/dev/null; }
           constraints="[]"
           for _ in $(seq 1 10); do
-            constraints="$(kubectl get constraints -o json 2>/dev/null | jq -c '[.items[] | select((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity")))]')"
+            constraints="$(kubectl get constraints -o json 2>/dev/null | jq -c '[.items[] | select(((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) and (.kind | test("(?i)printmutations") | not))]')"
             if [ "$(jq length <<<"$constraints")" -gt 0 ] && { [ "${{ steps.probe.outcome }}" != success ] || probe_reported; }; then break; fi
             sleep 30
           done
