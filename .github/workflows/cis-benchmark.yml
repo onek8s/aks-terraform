@@ -1,0 +1,181 @@
+name: CIS benchmark
+
+# The CIS Azure Kubernetes Service (AKS) Benchmark on one cluster of the dev environment (OneK8s design
+# sections 14 and 17): continuous evidence that the platform's hardening has not drifted, and the
+# Cloud configuration review's CIS input. Weekly, after every Deploy apply of a stateless cell, and by
+# hand.
+#
+#   - Section 3, worker nodes: kube-bench (`--benchmark aks-1.8 --targets node`) as a Job pinned to
+#     every node, in kube-system, with read-only hostPath mounts of the kubelet's files and hostPID -
+#     the only way to read a node's files with SSH off. The Jobs are deleted afterwards.
+#   - Section 4, policies: Kubescape's `cis-aks-t1.8.0` framework from the runner, against the API
+#     server - RBAC, service accounts, pod security, network policies, secrets, namespaces. Read only;
+#     nothing is installed in the cluster (no host scanner, kube-bench covers the nodes) and nothing is
+#     sent to a Kubescape backend.
+#   - Sections 2 and 5, the managed service: the cluster's Azure settings (audit logs, Defender for
+#     Containers, the registry, Azure RBAC, KMS, the API server's exposure, private nodes, network
+#     policy, Entra ID) and the Gateways' listeners, checked here.
+#
+# tests/cis/report.py merges them into one row per CIS recommendation and a score (the share of
+# automated recommendations that pass). A failure not listed with its reason in
+# tests/cis/accepted.yaml fails the run; the score and the per-recommendation results are in the
+# summary and in the `cis-<cluster>` artifact, for the trend that design section 14 watches.
+#
+# Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
+# role that may create Jobs in kube-system and read every object (Azure Kubernetes Service RBAC
+# Cluster Admin) and Reader on the subscription.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "The cluster to benchmark"
+        required: true
+        default: "aks-dev-stateless-az1"
+        type: choice
+        options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
+  workflow_call:
+    inputs:
+      cluster:
+        required: true
+        type: string
+  schedule:
+    # Mondays 06:20 UTC, the running cell.
+    - cron: "20 6 * * 1"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  KUBE_BENCH_IMAGE: docker.io/aquasec/kube-bench:v0.16.0
+  KUBE_BENCH_BENCHMARK: aks-1.8
+  KUBESCAPE_VERSION: 4.0.15
+  KUBESCAPE_FRAMEWORK: cis-aks-t1.8.0
+
+jobs:
+  cis:
+    name: cis ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 30
+    concurrency:
+      group: cis-benchmark-${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      cancel-in-progress: false
+    env:
+      RESOURCE_GROUP: rg-aks-dev
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      REGISTRY: acronek8sdev
+      OUT: ${{ github.workspace }}/cis-results
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure settings (sections 2 and 5)
+        run: |
+          mkdir -p "$OUT"
+          id="$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id -o tsv)"
+          # The preview API: the stable one leaves preview properties out.
+          az rest --method get --url "https://management.azure.com${id}?api-version=2026-05-02-preview" > "$OUT/aks.json"
+          az monitor diagnostic-settings list --resource "$id" -o json > "$OUT/diagnostic-settings.json"
+          az security pricing show -n Containers -o json > "$OUT/defender.json" || echo '{}' > "$OUT/defender.json"
+          registry="$(az acr show -n "$REGISTRY" -o json)"
+          echo "$registry" > "$OUT/registry.json"
+          kubelet="$(jq -r '.properties.identityProfile.kubeletidentity.objectId' "$OUT/aks.json")"
+          az role assignment list --assignee "$kubelet" --scope "$(jq -r .id <<<"$registry")" --include-inherited -o json > "$OUT/kubelet-registry-roles.json"
+
+      - name: Cluster credentials
+        run: |
+          sudo az aks install-cli --only-show-errors >/dev/null
+          az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
+          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l azurecli
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+          kubectl get gateways.gateway.networking.k8s.io -A -o json > "$OUT/gateways.json" || rm -f "$OUT/gateways.json"
+
+      - name: kube-bench on every node (section 3)
+        run: |
+          for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+            job="kube-bench-$(sha1sum <<<"$node" | cut -c1-10)"
+            kubectl -n kube-system delete job "$job" --ignore-not-found --wait=true >/dev/null
+            kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: $job
+            namespace: kube-system
+            labels: {app.kubernetes.io/name: kube-bench}
+          spec:
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 3600
+            template:
+              metadata:
+                labels: {app.kubernetes.io/name: kube-bench}
+              spec:
+                nodeName: $node
+                hostPID: true
+                restartPolicy: Never
+                automountServiceAccountToken: false
+                tolerations: [{operator: Exists}]
+                containers:
+                  - name: kube-bench
+                    image: $KUBE_BENCH_IMAGE
+                    command: ["/bin/sh", "-c", "kube-bench run --targets node --benchmark $KUBE_BENCH_BENCHMARK --json > /tmp/results.json 2>/tmp/log; rc=\$?; cat /tmp/log >&2; echo '--- results'; cat /tmp/results.json; exit \$rc"]
+                    resources:
+                      requests: {cpu: 10m, memory: 64Mi}
+                      limits: {memory: 256Mi}
+                    volumeMounts:
+                      - {name: var-lib-kubelet, mountPath: /var/lib/kubelet, readOnly: true}
+                      - {name: etc-systemd, mountPath: /etc/systemd, readOnly: true}
+                      - {name: etc-default, mountPath: /etc/default, readOnly: true}
+                      - {name: etc-kubernetes, mountPath: /etc/kubernetes, readOnly: true}
+                volumes:
+                  - {name: var-lib-kubelet, hostPath: {path: /var/lib/kubelet}}
+                  - {name: etc-systemd, hostPath: {path: /etc/systemd}}
+                  - {name: etc-default, hostPath: {path: /etc/default}}
+                  - {name: etc-kubernetes, hostPath: {path: /etc/kubernetes}}
+          EOF
+            echo "$node $job" >> "$RUNNER_TEMP/jobs"
+          done
+          failed=0
+          while read -r node job; do
+            if ! kubectl -n kube-system wait "job/$job" --for=condition=Complete --timeout=300s; then
+              echo "::error::kube-bench on $node did not complete"
+              kubectl -n kube-system describe "job/$job" | tail -n 20
+              failed=1
+            fi
+            kubectl -n kube-system logs "job/$job" | sed -n '/^--- results$/,$p' | tail -n +2 > "$OUT/kube-bench-$node.json"
+            jq -e .Controls "$OUT/kube-bench-$node.json" >/dev/null || { kubectl -n kube-system logs "job/$job" | tail -n 30; failed=1; }
+          done < "$RUNNER_TEMP/jobs"
+          exit $failed
+
+      - name: Kubescape (section 4)
+        if: ${{ !cancelled() }}
+        run: |
+          asset="kubescape_${KUBESCAPE_VERSION}_linux_amd64"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/kubescape/kubescape/releases/download/v${KUBESCAPE_VERSION}/$asset"
+          curl -sSfL "https://github.com/kubescape/kubescape/releases/download/v${KUBESCAPE_VERSION}/checksums.sha256" | grep " $asset$" | sha256sum -c -
+          install -m 0755 "$asset" kubescape
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/kubescape" scan framework "$KUBESCAPE_FRAMEWORK" --host-scan=false --keep-local \
+            --format json --output "$OUT/kubescape.json" --logger warning
+
+      - name: Clean up
+        if: always()
+        run: kubectl -n kube-system delete job -l app.kubernetes.io/name=kube-bench --ignore-not-found --wait=false || true
+
+      - name: Report
+        if: ${{ !cancelled() }}
+        run: python3 tests/cis/report.py "$OUT" tests/cis/accepted.yaml
+
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: cis-${{ env.CLUSTER }}
+          path: cis-results/
+          retention-days: 90
