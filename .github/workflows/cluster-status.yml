@@ -160,6 +160,12 @@ jobs:
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
           kubectl get helmreleases.helm.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
           kubectl get gitrepositories.source.toolkit.fluxcd.io -A
+          # Pod right-sizing: the VPA add-on, each VPA's mode and target, and the pods' resize state
+          # (PodResizePending / PodResizeInProgress) with the requests they run on now.
+          kubectl get pods -n kube-system -l 'app in (vpa-recommender,vpa-updater,vpa-admission-controller)' -o wide
+          kubectl get verticalpodautoscalers.autoscaling.k8s.io -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,MODE:.spec.updatePolicy.updateMode,TARGET:.status.recommendation.containerRecommendations[*].target'
+          kubectl get pods -A -o jsonpath='{range .items[?(@.metadata.namespace!="kube-system")]}{.metadata.namespace}/{.metadata.name}: requests={.spec.containers[*].resources.requests} restarts={.status.containerStatuses[*].restartCount} conditions={.status.conditions[?(@.type=="PodResizePending")].reason}{.status.conditions[?(@.type=="PodResizeInProgress")].status}{"\n"}{end}'
+          kubectl get events -A --field-selector reason=InPlaceResizedByVPA --sort-by=.lastTimestamp | tail -n 10
           # The gateways: one Traefik per isolation zone and the platform's, their load balancers,
           # Gateways and routes.
           kubectl get gatewayclass,gateway,httproute -A
