@@ -210,11 +210,11 @@ jobs:
           for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-secrets$|^external-secrets$"); do
             kubectl logs -n "$ns" -l app.kubernetes.io/name=external-secrets --tail=20 --prefix
           done
-          # Observability and cost: Grafana's k8s-monitoring (Alloy, kube-state-metrics, OpenCost) and
-          # its secret from the vault.
+          # Observability and cost: Grafana's k8s-monitoring (Alloy with Fleet Management, node-exporter,
+          # kube-state-metrics, Beyla's cache, OpenCost) and its secret from the vault.
           kubectl get pods,alloys.collectors.grafana.com -n infra-observability -o wide
           kubectl get externalsecret -n flux-system grafana-cloud -o jsonpath='{.status.conditions[*].message}'; echo
-          for app in alloy-metrics alloy-logs alloy-singleton opencost; do
+          for app in alloy-daemon alloy-operator kube-state-metrics beyla-k8s-cache opencost; do
             kubectl logs -n infra-observability -l "app.kubernetes.io/name=$app" --tail=15 --prefix
           done
           # Cilium: the platform's baseline and the applications' egress policies.
