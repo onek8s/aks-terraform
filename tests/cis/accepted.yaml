@@ -1,0 +1,7 @@
+# CIS AKS Benchmark failures the platform accepts, each with its reason (report.py, the CIS benchmark
+# workflow). `id` is the CIS recommendation; `objects`, a regular expression (case-insensitive,
+# whole value), limits the acceptance to those failing objects - nodes (`node/<name>`), Kubernetes
+# objects (Kubescape's resource IDs, `<group>/<version>/<namespace>/<Kind>/<name>`), Azure resources -
+# and without it every failing object of the recommendation is accepted. An accepted failure still
+# counts against the score; an entry that no longer matches a failure is reported, to be removed.
+accepted: []
