@@ -95,8 +95,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   Owners told at 80 %/100 % actual and 100 % forecast.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
-  templates + gator tests in `kubernetes/`): 12 mutations **on** (zone placement from the namespace,
-  `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference). **Deny**
+  templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
+  `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,
+  `platform/accelerator: nvidia-gpu` -> GPU toleration). **Deny**
   (2026-10-13, `kubernetes_deny` in `environments/dev/policy.tfvars`, each promoted after zero violations on
   az1): storage, FQDN egress, Gateway only, NodePools, placement labels, `secrets-via-eso` (in a zone's
   namespaces only `<zone>-secrets:external-secrets-<zone>` writes Secrets; the Flux extension's
