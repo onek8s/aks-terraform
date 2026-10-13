@@ -400,11 +400,21 @@ jobs:
             "$(jq -r 'map(.metadata.namespace + "/" + .spec.serviceAccountName) | unique | join(",")' <<<"$ratify")" gatekeeper-system/ratify-admin
           check R14 "Ratify gets a workload identity token" \
             "$(jq -r '[.[].spec.containers[].env[]? | select(.name == "AZURE_FEDERATED_TOKEN_FILE")] | length > 0' <<<"$ratify")" true
+          # Ratify can miss writing an object's status (when it reconciles the object before its cache
+          # has it); then its log says whether it loaded the object.
+          ratify_log="$(jq -r '.[] | .metadata.namespace + " " + .metadata.name' <<<"$ratify" | while read -r ns name; do kubectl logs -n "$ns" "$name" --all-containers --tail=-1 2>/dev/null; done)"
           for kind in keymanagementproviders stores verifiers; do
             status="$(kubectl get "$kind.config.ratify.deislabs.io" platform -o json 2>/dev/null)"
+            case $kind in
+              keymanagementproviders) loaded="certificate\(s\) & [0-9]+ key\(s\) fetched for key management provider platform" ;;
+              stores) loaded="store '$(jq -r '.spec.name' <<<"$status")' added to store map" ;;
+              verifiers) loaded="verifier 'platform' added to verifier map" ;;
+            esac
             if [ -z "$status" ]; then result FAIL R14 "Ratify $kind/platform" "not in the cluster"
             elif [ "$(jq -r '.status.issuccess' <<<"$status")" = true ]; then result PASS R14 "Ratify $kind/platform" "healthy"
-            else result FAIL R14 "Ratify $kind/platform" "$(jq -r '.status.brieferror // .status.error // "no status"' <<<"$status" | head -c 200)"; fi
+            elif [ "$(jq -r '.status.issuccess // "none"' <<<"$status")" = none ] && grep -qE "$loaded" <<<"$ratify_log"; then
+              result PASS R14 "Ratify $kind/platform" "loaded (Ratify's log; it wrote no status)"
+            else result FAIL R14 "Ratify $kind/platform" "$(jq -r '.status.brieferror // .status.error // "no status, and not loaded"' <<<"$status" | head -c 200)"; fi
           done
 
           # Signatures, checked with the trust policy Ratify has: every image in the registry, and the
@@ -431,27 +441,29 @@ jobs:
             result FAIL R14 "Notation set up with the platform's certificate" "$(tail -3 "$RUNNER_TEMP/notation.log" | tr '\n' ' ' | head -c 250)"
           fi
 
-          # Admission (audit while Image Integrity is in preview): Azure Policy's constraint for
-          # "only images signed with Notation" reports the probe pod's unsigned image from Docker Hub
-          # and not the application's signed one. Gatekeeper audits every few minutes.
-          constraint=""
+          # Admission (audit while Image Integrity is in preview): every constraint of the policy
+          # "only images signed with Notation" - stacks/aks-policy's, and any other assignment's, such
+          # as the landing zone's security benchmark - reports the probe pod's unsigned image from
+          # Docker Hub, and none the application's signed one. Gatekeeper audits every few minutes.
+          probe_reported() { jq -e --arg ns "$NAMESPACE" 'length > 0 and all(.[]; any(.status.violations[]?; .namespace == $ns and .name == "probe"))' <<<"$constraints" >/dev/null; }
+          constraints="[]"
           for _ in $(seq 1 10); do
-            constraint="$(kubectl get constraints -o json 2>/dev/null | jq -c '[.items[] | select((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity")))] | first // empty')"
-            if [ -n "$constraint" ] && { [ "${{ steps.probe.outcome }}" != success ] || jq -e --arg ns "$NAMESPACE" 'any(.status.violations[]?; .namespace == $ns and .name == "probe")' <<<"$constraint" >/dev/null; }; then break; fi
+            constraints="$(kubectl get constraints -o json 2>/dev/null | jq -c '[.items[] | select((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity")))]')"
+            if [ "$(jq length <<<"$constraints")" -gt 0 ] && { [ "${{ steps.probe.outcome }}" != success ] || probe_reported; }; then break; fi
             sleep 30
           done
-          if [ -z "$constraint" ]; then
+          if [ "$(jq length <<<"$constraints")" -eq 0 ]; then
             result FAIL R14 "Image Integrity constraint in the cluster" "no constraint of the Notation signature policy"
           else
-            result PASS R14 "Image Integrity constraint in the cluster" "$(jq -r '.kind + "/" + .metadata.name + ", " + (.spec.enforcementAction // "deny")' <<<"$constraint")"
+            result PASS R14 "Image Integrity constraint in the cluster" "$(jq -r 'map(.metadata.name + " (" + (.spec.enforcementAction // "deny") + ")") | join(", ")' <<<"$constraints")"
             if [ "${{ steps.probe.outcome }}" = success ]; then
-              if jq -e --arg ns "$NAMESPACE" 'any(.status.violations[]?; .namespace == $ns and .name == "probe")' <<<"$constraint" >/dev/null; then
-                result PASS R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.status.violations[] | select(.namespace == $ns)][0].message' <<<"$constraint" | head -c 160)"
+              if probe_reported; then
+                result PASS R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.[].status.violations[]? | select(.namespace == $ns)][0].message' <<<"$constraints" | head -c 160)"
               else
-                result FAIL R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "not among the $(jq '.status.totalViolations // 0' <<<"$constraint") violations after 5 minutes"
+                result FAIL R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
               fi
             fi
-            reported="$(jq -r '[.status.violations[]? | select(.namespace == "ext-fi-example")] | length' <<<"$constraint")"
+            reported="$(jq -r '[.[].status.violations[]? | select(.namespace == "ext-fi-example")] | length' <<<"$constraints")"
             check R14 "the signed application is not reported (ext-fi-example)" "$reported violations" "0 violations"
           fi
 
