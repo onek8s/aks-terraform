@@ -142,7 +142,9 @@ jobs:
           check R20 "FQDN policies" "$(jq -r '.networkProfile.advancedNetworking.security.advancedNetworkPolicies' <<<"$c")" FQDN
           check R7b "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
           check R14 "Azure Policy add-on" "$(jq -r '.addonProfiles.azurepolicy.enabled // false' <<<"$c")" true
-          check R14 "Image Integrity (Ratify checks image signatures)" "$(jq -r '.securityProfile.imageIntegrity.enabled // false' <<<"$c")" true
+          # A preview property: the Azure CLI's API version leaves it out, the cluster's preview API has it.
+          check R14 "Image Integrity (Ratify checks image signatures)" \
+            "$(az rest --method get --url "$(jq -r .id <<<"$c")?api-version=2025-09-02-preview" --query 'properties.securityProfile.imageIntegrity.enabled' -o tsv 2>/dev/null || echo false)" true
           check R8 "stateless: no CSI drivers" "$(jq -r '[.storageProfile.diskCsiDriver.enabled, .storageProfile.fileCsiDriver.enabled] | map(. // false) | any' <<<"$c")" false
           check R12 "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
           if out="$(az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --admin --file "$RUNNER_TEMP/admin.kubeconfig" 2>&1)"; then
@@ -414,7 +416,8 @@ jobs:
               else result FAIL "$1" "$2 signed by the platform" "$(tail -1 <<<"$out" | head -c 200)"; fi
             }
             for repository in $(az acr repository list -n "$REGISTRY" -o tsv); do
-              for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv); do
+              # Without the referrers API a signature is also kept under a tag `sha256-<digest>`: not an image.
+              for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv | grep -v '^sha256-'); do
                 verify R14 "registry image $repository:$tag" "$REGISTRY.azurecr.io/$repository@$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
               done
             done
