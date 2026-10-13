@@ -147,7 +147,12 @@ jobs:
           # Report everything, whatever one command says.
           set +e -x
           kubectl version
-          kubectl get nodes -o wide -L platform/zone,karpenter.sh/capacity-type,kubernetes.azure.com/ebpf-host-routing
+          kubectl get nodes -o wide -L platform/zone,karpenter.sh/capacity-type,kubernetes.azure.com/ebpf-host-routing,platform/accelerator,node.kubernetes.io/instance-type
+          # GPU nodes: what they offer (nvidia.com/gpu, from AKS's managed device plugin) and the
+          # managed GPU stack's health conditions.
+          kubectl get nodes -l platform/accelerator -o jsonpath='{range .items[*]}{.metadata.name}: gpu={.status.allocatable.nvidia\.com/gpu} dcgm={.metadata.labels.kubernetes\.azure\.com/dcgm-exporter} {range .status.conditions[?(@.type=="UnhealthyNvidiaDevicePlugin")]}{.type}={.status} {end}{"\n"}{end}'
+          # Who owns each namespace and pays for it (Azure Policy namespace-ownership).
+          kubectl get namespaces -o custom-columns='NAME:.metadata.name,TEAM:.metadata.labels.platform/team,COST_CENTER:.metadata.labels.platform/cost-center,ZONE:.metadata.labels.platform/zone,CONTACT:.metadata.annotations.platform/contact'
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide
           kubectl get pods -A -o wide
@@ -204,6 +209,13 @@ jobs:
           kubectl get secretstores.external-secrets.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[*].message}{"\n"}{end}'
           for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-secrets$|^external-secrets$"); do
             kubectl logs -n "$ns" -l app.kubernetes.io/name=external-secrets --tail=20 --prefix
+          done
+          # Observability and cost: Grafana's k8s-monitoring (Alloy, kube-state-metrics, OpenCost) and
+          # its secret from the vault.
+          kubectl get pods,alloys.collectors.grafana.com -n infra-observability -o wide
+          kubectl get externalsecret -n flux-system grafana-cloud -o jsonpath='{.status.conditions[*].message}'; echo
+          for app in alloy-metrics alloy-logs alloy-singleton opencost; do
+            kubectl logs -n infra-observability -l "app.kubernetes.io/name=$app" --tail=15 --prefix
           done
           # Cilium: the platform's baseline and the applications' egress policies.
           kubectl get ciliumclusterwidenetworkpolicies,ciliumnetworkpolicies -A

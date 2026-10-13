@@ -858,6 +858,11 @@ variable "managed_namespaces" {
       egress  = optional(string)
       ingress = optional(string)
     }), {})
+    owner = optional(object({
+      team        = string
+      cost_center = string
+      contact     = string
+    }))
     pod_security = optional(object({
       audit   = optional(string)
       enforce = optional(string)
@@ -927,6 +932,27 @@ visible rather than silent, and Terraform warns when an exception turns that off
 
 `labels` must not carry `pod-security.kubernetes.io/*` keys of its own; `pod_security` is the one
 place those are set.
+
+`owner` says who owns what runs in the namespace and who pays for it (OneK8s design section 7):
+
+```hcl
+managed_namespaces = {
+  ext-fi-payments = {
+    owner = {
+      team        = "payments"                   # label platform/team
+      cost_center = "cc-4711"                    # label platform/cost-center
+      contact     = "payments-team@example.com"  # annotation platform/contact
+    }
+  }
+}
+```
+
+The team and cost centre become labels - OpenCost and the telemetry group cost and usage by them -
+and the contact an annotation, since a mailbox is not a valid label value; a namespace with `flux`
+also gets its repository as the annotation `platform/repository`. Azure Policy
+(`namespace-ownership`, azure-landing-zone) expects all three on every namespace - the one place
+that is enforced, for namespaces made here and anywhere else alike. `labels` must not set the
+`platform/team` or `platform/cost-center` keys itself.
 
 `access` grants Entra ID groups, service principals and users their rights on that namespace alone,
 as Azure role assignments scoped to it - no cluster-wide grant, and nothing to reach in the
@@ -1011,6 +1037,22 @@ the Kubernetes namespace goes with it is `delete_policy`.
 DESCRIPTION
   nullable    = false
 
+  validation {
+    condition = alltrue([
+      for namespace in var.managed_namespaces : namespace.owner == null || (
+        can(regex("^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", namespace.owner.team))
+        && can(regex("^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", namespace.owner.cost_center))
+        && trimspace(namespace.owner.contact) != ""
+      )
+    ])
+    error_message = "managed_namespaces[*].owner.team and .cost_center must be Kubernetes label values (1 to 63 letters, digits, '-', '_' or '.', starting and ending with a letter or digit), and .contact must not be empty."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in var.managed_namespaces : namespace.owner == null || length(setintersection(keys(namespace.labels), ["platform/team", "platform/cost-center"])) == 0
+    ])
+    error_message = "managed_namespaces[*].labels must not set platform/team or platform/cost-center; owner is where they are set."
+  }
   validation {
     condition = alltrue([
       for name in keys(var.managed_namespaces) : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", name))

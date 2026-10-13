@@ -156,14 +156,14 @@ jobs:
       - name: Register resource providers
         run: |
           set -euo pipefail
-          providers="Microsoft.ContainerService Microsoft.KubernetesConfiguration Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.PolicyInsights Microsoft.OperationalInsights Microsoft.Insights"
+          providers="Microsoft.ContainerService Microsoft.KubernetesConfiguration Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.PolicyInsights Microsoft.OperationalInsights Microsoft.Insights Microsoft.Consumption"
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
-          # The managed Gateway API CRDs, encryption at host on the nodes (design section 18), and
-          # Image Integrity (section 14).
+          # The managed Gateway API CRDs, encryption at host on the nodes (design section 18), Image
+          # Integrity (section 14), and AKS's managed GPU stack on the zones' GPU nodes (section 4).
           for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost \
-            Microsoft.ContainerService/EnableImageIntegrityPreview; do
+            Microsoft.ContainerService/EnableImageIntegrityPreview Microsoft.ContainerService/ManagedGPUExperiencePreview; do
             namespace="${pair%/*}"; feature="${pair#*/}"
             if [ "$(az feature show --namespace "$namespace" --name "$feature" --query properties.state -o tsv)" != Registered ]; then
               az feature register --namespace "$namespace" --name "$feature" -o none

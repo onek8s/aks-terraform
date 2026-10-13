@@ -3802,3 +3802,76 @@ run "rejects_an_unknown_log_category" {
 
   expect_failures = [var.audit_log_categories]
 }
+
+# Who owns a namespace and pays for it (design section 7): the team and cost centre as labels, the
+# contact and the repository as annotations - what Azure Policy's namespace-ownership rule expects.
+run "a_namespace_names_its_owner_in_labels_and_annotations" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      ext-fi-payments = {
+        owner = {
+          team        = "payments"
+          cost_center = "cc-4711"
+          contact     = "payments-team@example.com"
+        }
+        flux = {
+          url = "https://github.com/contoso/payments"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.managed_namespace["ext-fi-payments"].body.properties.labels["platform/team"] == "payments"
+      && azapi_resource.managed_namespace["ext-fi-payments"].body.properties.labels["platform/cost-center"] == "cc-4711"
+    )
+    error_message = "The owner's team and cost centre should be the namespace's platform/team and platform/cost-center labels."
+  }
+  assert {
+    condition = azapi_resource.managed_namespace["ext-fi-payments"].body.properties.annotations == tomap({
+      "platform/contact"    = "payments-team@example.com"
+      "platform/repository" = "https://github.com/contoso/payments"
+    })
+    error_message = "The contact and the namespace's repository should be annotations."
+  }
+}
+
+run "rejects_an_owner_that_is_not_a_label_value" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      ext-fi-payments = {
+        owner = {
+          team        = "Payments Team"
+          cost_center = "cc-4711"
+          contact     = "payments-team@example.com"
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_owner_labels_set_by_hand" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      ext-fi-payments = {
+        labels = { "platform/team" = "someone-else" }
+        owner = {
+          team        = "payments"
+          cost_center = "cc-4711"
+          contact     = "payments-team@example.com"
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}

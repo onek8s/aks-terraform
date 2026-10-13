@@ -97,6 +97,13 @@ default_node_pool = {
 # zone gateway's pods in, and nothing else.
 managed_namespaces = {
   ext-fi-example = {
+    # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
+    # annotation platform/contact (design section 7; Azure Policy namespace-ownership).
+    owner = {
+      team        = "example"
+      cost_center = "example"
+      contact     = "https://github.com/onek8s/aks-fluxcd-example/issues"
+    }
     labels = {
       "platform/zone" = "ext-fi"
     }
