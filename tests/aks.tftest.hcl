@@ -3759,3 +3759,46 @@ run "image_integrity_needs_the_shared_vault_and_the_registry" {
 
   expect_failures = [var.image_integrity_enabled]
 }
+
+run "no_audit_log_without_a_workspace" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_monitor_diagnostic_setting.audit) == 0
+    error_message = "Without log_analytics_workspace_name the cluster should send its logs nowhere."
+  }
+}
+
+run "the_audit_log_goes_to_the_environments_workspace" {
+  command = plan
+
+  variables {
+    log_analytics_workspace_name = "log-test-platform"
+  }
+
+  override_data {
+    target = data.azurerm_log_analytics_workspace.platform
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.OperationalInsights/workspaces/log-test-platform"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_monitor_diagnostic_setting.audit[0].log_analytics_workspace_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.OperationalInsights/workspaces/log-test-platform",
+      azurerm_monitor_diagnostic_setting.audit[0].log_analytics_destination_type == "Dedicated",
+      toset([for l in azurerm_monitor_diagnostic_setting.audit[0].enabled_log : l.category]) == toset(["kube-audit-admin", "guard"]),
+    ])
+    error_message = "The cluster should send kube-audit-admin and guard to the workspace, in resource-specific tables (CIS AKS 2.1.1)."
+  }
+}
+
+run "rejects_an_unknown_log_category" {
+  command = plan
+
+  variables {
+    audit_log_categories = ["kube-audit-everything"]
+  }
+
+  expect_failures = [var.audit_log_categories]
+}

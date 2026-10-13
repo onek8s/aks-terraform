@@ -83,7 +83,8 @@ jobs:
           # The preview API: the stable one leaves preview properties out.
           az rest --method get --url "https://management.azure.com${id}?api-version=2026-05-02-preview" > "$OUT/aks.json"
           az monitor diagnostic-settings list --resource "$id" -o json > "$OUT/diagnostic-settings.json"
-          az security pricing show -n Containers -o json > "$OUT/defender.json" || echo '{}' > "$OUT/defender.json"
+          az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Security/pricings/Containers?api-version=2024-01-01" > "$OUT/defender.json" \
+            || echo '{"properties": {"pricingTier": "Free (Microsoft.Security not readable or not registered)"}}' > "$OUT/defender.json"
           registry="$(az acr show -n "$REGISTRY" -o json)"
           echo "$registry" > "$OUT/registry.json"
           kubelet="$(jq -r '.properties.identityProfile.kubeletidentity.objectId' "$OUT/aks.json")"
@@ -93,9 +94,10 @@ jobs:
         run: |
           sudo az aks install-cli --only-show-errors >/dev/null
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
-          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l azurecli
-          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
-          kubectl get gateways.gateway.networking.k8s.io -A -o json > "$OUT/gateways.json" || rm -f "$OUT/gateways.json"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubelogin convert-kubeconfig -l azurecli
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          kubectl get gateways.gateway.networking.k8s.io -A -o json > "$OUT/gateways.json"
 
       - name: kube-bench on every node (section 3)
         run: |
@@ -118,6 +120,8 @@ jobs:
               spec:
                 nodeName: $node
                 hostPID: true
+                # No resource requests: pinned with nodeName, the pod bypasses the scheduler, and the
+                # kubelet refuses one whose requests do not fit beside what the node already holds.
                 restartPolicy: Never
                 automountServiceAccountToken: false
                 tolerations: [{operator: Exists}]
@@ -125,9 +129,6 @@ jobs:
                   - name: kube-bench
                     image: $KUBE_BENCH_IMAGE
                     command: ["/bin/sh", "-c", "kube-bench run --targets node --benchmark $KUBE_BENCH_BENCHMARK --json > /tmp/results.json 2>/tmp/log; rc=\$?; cat /tmp/log >&2; echo '--- results'; cat /tmp/results.json; exit \$rc"]
-                    resources:
-                      requests: {cpu: 10m, memory: 64Mi}
-                      limits: {memory: 256Mi}
                     volumeMounts:
                       - {name: var-lib-kubelet, mountPath: /var/lib/kubelet, readOnly: true}
                       - {name: etc-systemd, mountPath: /etc/systemd, readOnly: true}
@@ -145,11 +146,11 @@ jobs:
           while read -r node job; do
             if ! kubectl -n kube-system wait "job/$job" --for=condition=Complete --timeout=300s; then
               echo "::error::kube-bench on $node did not complete"
-              kubectl -n kube-system describe "job/$job" | tail -n 20
+              kubectl -n kube-system get pods -l job-name="$job" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} {.status.reason} {.status.message}{"\n"}{end}'
               failed=1
             fi
             kubectl -n kube-system logs "job/$job" | sed -n '/^--- results$/,$p' | tail -n +2 > "$OUT/kube-bench-$node.json"
-            jq -e .Controls "$OUT/kube-bench-$node.json" >/dev/null || { kubectl -n kube-system logs "job/$job" | tail -n 30; failed=1; }
+            jq -e .Controls "$OUT/kube-bench-$node.json" >/dev/null 2>&1 || { kubectl -n kube-system logs "job/$job" 2>&1 | tail -n 30; rm -f "$OUT/kube-bench-$node.json"; failed=1; }
           done < "$RUNNER_TEMP/jobs"
           exit $failed
 

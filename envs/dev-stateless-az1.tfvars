@@ -80,6 +80,10 @@ portable_disks_enabled     = false
 # it as this cluster's identity, with AcrPull - no image pull secret.
 container_registry_name = "acronek8sdev"
 
+# SHARED. The environment's Log Analytics workspace, created by shared/: this cluster's Kubernetes
+# audit log (kube-audit-admin and guard) - design section 19, CIS AKS Benchmark 2.1.1.
+log_analytics_workspace_name = "log-dev-platform"
+
 # AKS Image Integrity (preview): Ratify checks the Notation signature of every image for the Azure
 # Policy add-on, which reports unsigned ones (audit only). Its identity and the signing certificate
 # are shared/'s (image_signing).

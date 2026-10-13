@@ -58,3 +58,8 @@ output "image_verification_client_id" {
   description = "Client ID of the identity the clusters' image signature verifier (Ratify) reads the registry and the signing certificate as. Null without image_signing."
   value       = one(azurerm_user_assigned_identity.image_verification[*].client_id)
 }
+
+output "log_analytics_workspace_id" {
+  description = "ID of the environment's Log Analytics workspace, or null without one."
+  value       = one(azurerm_log_analytics_workspace.platform[*].id)
+}

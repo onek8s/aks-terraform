@@ -363,3 +363,32 @@ linked to every cell's network, so they resolve inside the cells and nowhere els
 DESCRIPTION
   nullable    = false
 }
+
+variable "log_analytics_workspace_name" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+Name of the environment's Log Analytics workspace, created here (OneK8s design section 19,
+`log-<env>-platform`): the Kubernetes audit logs of every cluster of the environment, which each
+cluster sends to it by naming it in its own log_analytics_workspace_name. Null for none.
+DESCRIPTION
+}
+
+variable "log_analytics_retention_in_days" {
+  type        = number
+  default     = 30
+  description = "Days the workspace keeps its data: 30 to 730."
+  nullable    = false
+
+  validation {
+    condition     = var.log_analytics_retention_in_days >= 30 && var.log_analytics_retention_in_days <= 730
+    error_message = "log_analytics_retention_in_days must be from 30 to 730."
+  }
+}
+
+variable "log_analytics_daily_quota_gb" {
+  type        = number
+  default     = 1
+  description = "The workspace's daily ingestion cap in GB, -1 for none."
+  nullable    = false
+}

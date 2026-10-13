@@ -29,6 +29,7 @@ reads; job logs via `get_job_logs`).
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-stateless-az1` / `dev-stateless-az2` / `dev-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota, every policy constraint's violations per object, and who wrote each Secret of the zone namespaces (managed fields). `node_iptables` option for eBPF debugging. Read it before promoting a policy to deny. |
 | `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
+| `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. Runs after every Deploy apply of a stateless cell, Mondays 06:20 UTC, and by hand. |
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
@@ -69,6 +70,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **App Routing's Gateway API on az1** (2026-10-13): all five Gateways (`<zone>` and `platform`) are
   `approuting-istio`, Programmed, 2 Envoy pods each on the system pool; Traefik removed. Isolation tests
   green on it (healthz through the gateway and Traffic Manager, cross-zone blocked, Flux webhook).
+- **CIS AKS Benchmark** (2026-10-13): first run on az1 55 % (23 of 42 automated recommendations); every
+  node check passes. Improved: audit logs (`log-dev-platform` workspace in shared/, diagnostic setting
+  `kube-audit-admin` + `guard` per cluster, 1 GB/day cap), Cilium policies and token-less default
+  service accounts in the platform's namespaces (fleet). Accepted with reasons in `tests/cis/accepted.yaml`:
+  the dev lab exceptions (public API server, Defender off), AKS's and Flux's own RBAC, ESO's Secret access,
+  gateway namespaces on baseline PSS. Follow-ups in the design (section 17, "CIS benchmark").
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 12 mutations **on** (zone placement from the namespace,
@@ -170,6 +177,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   write into team namespaces (the Flux extension's `<config>-auth/-genkey/-protected-parameters`).
   Cluster status lists Secret writers from managed fields (`kubectl get -o json` hides them unless
   `--show-managed-fields`). An assignment display name over 128 characters fails only at apply.
+- **kube-bench pinned with `nodeName` must request no resources**: it bypasses the scheduler, and the
+  kubelet of a full system node rejects the pod at once (BackoffLimitExceeded, no logs).
+- **Kubescape's CIS AKS control names number section 3 differently from kube-bench's `aks-1.8`**, and
+  without a host scanner it has no node data; report.py takes section 3 from kube-bench only.
+  Microsoft.Security is not registered in the build subscription (Defender plan unreadable = off).
 - `az aks install-cli` can fail on GitHub's API rate limit (kubelogin lookup) - re-run.
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.

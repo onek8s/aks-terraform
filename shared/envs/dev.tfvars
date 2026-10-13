@@ -61,6 +61,10 @@ zone_key_vault_names = {
   ext-se = "kv-onek8s-dev-ext-se"
 }
 
+# The environment's Log Analytics workspace (design section 19): every cluster's Kubernetes audit log
+# (CIS AKS Benchmark 2.1.1), 30 days, at most 1 GB a day.
+log_analytics_workspace_name = "log-dev-platform"
+
 # The environment's container registry, which every cluster pulls from as its kubelet identity. Not
 # part of the landing zone. Registry names are global; pick another if this one is taken.
 container_registry_name = "acronek8sdev"

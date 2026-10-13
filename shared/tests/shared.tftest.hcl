@@ -585,3 +585,21 @@ run "refuses_a_signing_subject_without_a_country" {
 
   expect_failures = [var.image_signing]
 }
+
+run "the_workspace_takes_only_entra_id_and_caps_its_ingestion" {
+  command = plan
+
+  variables {
+    log_analytics_workspace_name = "log-test-platform"
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_log_analytics_workspace.platform[0].name == "log-test-platform",
+      azurerm_log_analytics_workspace.platform[0].local_authentication_enabled == false,
+      azurerm_log_analytics_workspace.platform[0].daily_quota_gb == 1,
+      azurerm_log_analytics_workspace.platform[0].retention_in_days == 30,
+    ])
+    error_message = "The workspace should accept only Entra ID, keep 30 days and cap ingestion at 1 GB a day."
+  }
+}
