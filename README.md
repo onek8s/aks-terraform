@@ -557,8 +557,11 @@ configuration provides is the API itself; the controller serving it is deployed 
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on the `2025-09-02-preview` API, the only one that knows the setting. |
 
 The Flux repository runs [Traefik Proxy][traefik] once per isolation zone - in `<zone>-gateway`, on
-the zone's own nodes, with a GatewayClass `traefik-<zone>` and one Gateway - and once for the
-platform, in `platform-gateway` on the system pool, for Flux's webhook receivers. Each is behind a
+the system pool, with a GatewayClass `traefik-<zone>` and one Gateway - and once for the platform,
+in `platform-gateway`, also on the system pool, for Flux's webhook receivers. The zones' gateways
+are on the system pool so that a zone's own nodes exist only for its applications: a zone without
+any has none. The system subnet's NSG therefore lets HTTPS in from the internet and from the
+virtual network. Each is behind a
 `LoadBalancer` Service of its own:
 
 - **An internal zone's** is an [internal load balancer][ilb] in the zone's `snet-<zone>-ilb`
