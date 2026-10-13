@@ -156,6 +156,14 @@ jobs:
           kubectl get events -A --field-selector reason=FailedScheduling --sort-by=.lastTimestamp | tail -n 20
           kubectl get pods -n kube-system -l app=azure-policy -o wide
           kubectl get constrainttemplates
+          # Policy violations, per constraint and object: what has to be fixed (or recorded) before a
+          # rule in audit can deny. The add-on's PrintMutationsAnnotations constraints only note that a
+          # mutation changed a pod, and are left out.
+          kubectl get constraints -o json | jq -r '.items[] | select(.kind | test("(?i)printmutations") | not) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", (.status.violations[:15][]? | "  \(.kind) \(.namespace // "-")/\(.name): \(.message | .[0:240])")'
+          # Who writes the Secrets of the isolation zones' namespaces (the ESO-only rule is judged on
+          # the admission request's user, which Gatekeeper's audit does not see): the managers of
+          # each Secret, from its managed fields.
+          kubectl get secrets -A -o json | jq -r '.items[] | select(.metadata.namespace | test("^(int|ext)-(fi|se)-")) | "\(.metadata.namespace)/\(.metadata.name) \(.type) managers=\([.metadata.managedFields[]?.manager] | unique | join(","))"'
           kubectl get resourcequota -A
           kubectl get crd | grep -E "gateway.networking.k8s.io|cilium.io"
           kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A
