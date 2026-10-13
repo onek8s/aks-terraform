@@ -66,6 +66,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   is not reported, the unsigned probe is. Two Notation constraints exist: ours and the landing zone's
   `Deploy-MCSB2-Monitoring` one (default exclusions); both report the platform's upstream images
   (ESO, Flux), which are not signed by the platform - expected for now.
+- **App Routing's Gateway API on az1** (2026-10-13): all five Gateways (`<zone>` and `platform`) are
+  `approuting-istio`, Programmed, 2 Envoy pods each on the system pool; Traefik removed. Isolation tests
+  green on it (healthz through the gateway and Traffic Manager, cross-zone blocked, Flux webhook).
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the
@@ -134,6 +137,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   cluster (`InvalidPolicyAliasFormat` otherwise, only at apply - the plan does not catch it); scope by
   assignment `not_scopes`. Custom mutations cannot be parameterized: render one definition per value.
 - **An NSG rule takes one service tag**; `Internet` + `VirtualNetwork` in one rule is a 400.
+- **App Routing's istiod requests 500m + 2 GiB per replica, min 2, not customizable**: one 8 GiB system
+  node filled to 99 % memory and left gateways, ESO, apps and Ratify Pending - hence two system nodes.
+  Its gateway pods have no seccomp profile (PSS restricted would refuse them: gateway namespaces are
+  baseline). The Image Integrity policy's ID also tags `K8sAzureV1PrintMutationsAnnotations`
+  constraints, which report every mutated pod - filter them out when counting signature violations.
 - **Quota errors** show up as `ErrCode_InsufficientVCPUQuota` on the cluster PUT; check the
   "vCPU quota" step of Cluster status.
 - `az vm list-usage` values are strings (JMESPath `currentValue != '0'`, not `> 0`).

@@ -175,7 +175,7 @@ jobs:
           for pod in $(kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | grep ratify); do
             kubectl logs -n "${pod%%/*}" "${pod#*/}" --all-containers --tail=30 --prefix
           done
-          kubectl get constraints -o json | jq -r '.items[] | select((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", "  match: \(.spec.match | tostring)", "  parameters: \(.spec.parameters | tostring)", (.status.violations[]? | "  \(.namespace)/\(.name): \(.message)")'
+          kubectl get constraints -o json | jq -r '.items[] | select(((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) and (.kind | test("(?i)printmutations") | not)) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", "  match: \(.spec.match | tostring)", "  parameters: \(.spec.parameters | tostring)", (.status.violations[]? | "  \(.namespace)/\(.name): \(.message)")'
           # The gateways: App Routing's Istio control plane, one Gateway per isolation zone and the
           # platform's - their Envoy Deployments, autoscalers, load balancers and routes.
           kubectl get pods,hpa,configmap -n aks-istio-system -o wide
