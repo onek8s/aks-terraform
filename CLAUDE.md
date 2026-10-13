@@ -49,6 +49,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   running). Its tfvars, fleet directory and Traffic Manager endpoint stay; Traffic Manager just sees
   the endpoint as down. To bring it back: Deploy `dev-stateless-az2` apply with `allow_empty_state`,
   then Flux webhooks, Cluster status and Isolation tests on it. Do not rebuild it unless asked.
+- **VPA add-on on** (`vertical_pod_autoscaler_enabled`, default true; applied to az1 2026-10-13).
+  aks-hello has a `VerticalPodAutoscaler` in `InPlaceOrRecreate` (RequestsOnly, CPU 3m-20m, memory
+  64Mi-128Mi, `minReplicas: 1`) and `resizePolicy: NotRequired`; Cluster status shows VPAs, targets
+  and resize conditions. First in-place resize not yet observed.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - Region swedencentral. Quotas: regional vCPUs 52, Dpsv6 24, Dalv6 16, low-priority (spot) 3 - a
   raise to 8 was throttled by Azure ("retry after 3600 s", each retry restarts the wait); re-run
