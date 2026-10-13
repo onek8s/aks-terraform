@@ -456,9 +456,9 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
     condition = (
       azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
       azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-system/https"].source_address_prefix == "Internet"
+      toset(azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-system/https"].source_address_prefixes) == toset(["Internet", "VirtualNetwork"])
     )
-    error_message = "HTTPS comes from the internet to the external zones and the platform gateway, from the network to the internal zones."
+    error_message = "HTTPS comes from the internet to the external zones, from the network to the internal zones, and from both to the system pool, where every zone's gateway runs."
   }
   assert {
     condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-stateless-az1/snet-ext-fi-ilb/https")

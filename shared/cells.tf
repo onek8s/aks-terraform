@@ -78,7 +78,8 @@ locals {
     ]...),
     # HTTPS to the entry points: an external zone's and the platform gateway's public load balancer
     # from the internet, an internal zone's load balancer from the virtual network. Port 443 only -
-    # no plain HTTP anywhere (section 13).
+    # no plain HTTP anywhere (section 13). Every zone's gateway runs on the system pool (so that a
+    # zone without applications has no nodes), which therefore takes both.
     merge([
       for key, subnet in local.cell_subnets : {
         "${key}/https" = {
@@ -86,7 +87,10 @@ locals {
           priority = 200
           protocol = "Tcp"
           ports    = ["443"]
-          sources  = [subnet.kind == "system" || try(var.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
+          sources = (
+            subnet.kind == "system" ? ["Internet", "VirtualNetwork"] :
+            try(var.isolation_zones[subnet.zone].exposure, "") == "ext" ? ["Internet"] : ["VirtualNetwork"]
+          )
         }
       } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(var.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
