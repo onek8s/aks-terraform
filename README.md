@@ -509,8 +509,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik Proxy
-behind an Azure internal load balancer - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by App Routing's
+Gateway API implementation - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -519,7 +519,7 @@ otherwise duplicate them are off on every cluster, with no variable to turn them
 | [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
 | Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
 | [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
-| [Application Routing][approuting] (`webAppRouting`) | Installs and manages the default NGINX ingress controller, or an Istio based Gateway API implementation. |
+| [Application Routing][approuting]'s NGINX (`webAppRouting.enabled`, `nginx`) | Installs and manages the NGINX ingress controller for the Ingress API, which the platform does not use. App Routing's Gateway API implementation is separate, see below. |
 | [Application Gateway for Containers][agcaddon] (`applicationLoadBalancer`) | Runs the ALB Controller add-on, which programs an Azure-hosted, public Gateway API load balancer. |
 
 Most of them are stated as disabled rather than simply left unconfigured, because Azure turns them
@@ -546,6 +546,7 @@ assigned to the subscription or resource group are enforced inside the cluster r
 reported on. AKS Automatic always runs it.
 
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
+[approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
 [costanalysis]: https://learn.microsoft.com/azure/aks/cost-analysis
 [defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
@@ -561,15 +562,18 @@ configuration provides is the API itself; the controller serving it is deployed 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on the `2025-09-02-preview` API, the only one that knows the setting. |
+| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `app_routing_gateway_api_enabled` (the stateless cells), else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. Stated either way, because AKS Automatic turns it on by default from Kubernetes 1.36. |
+| `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - patched to `2026-05-02-preview`, which also knows App Routing Istio (`modules/avm-managedcluster/VENDORED.md`). |
 
-The Flux repository runs [Traefik Proxy][traefik] once per isolation zone - in `<zone>-gateway`, on
-the system pool, with a GatewayClass `traefik-<zone>` and one Gateway - and once for the platform,
-in `platform-gateway`, also on the system pool, for Flux's webhook receivers. The zones' gateways
-are on the system pool so that a zone's own nodes exist only for its applications: a zone without
-any has none. The system subnet's NSG therefore lets HTTPS in from the internet and from the
-virtual network. Each is behind a
-`LoadBalancer` Service of its own:
+For every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
+Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
+shaped by the ConfigMap the Gateway names in `spec.infrastructure.parametersRef` - within the
+add-on's allow list. The Flux repository runs one such Gateway per isolation zone - `<zone>` in
+`<zone>-gateway` - and one for the platform, in `platform-gateway`, for Flux's webhook receivers,
+all on the system pool. The zones' gateways are on the system pool so that a zone's own nodes exist
+only for its applications: a zone without any has none. The system subnet's NSG therefore lets
+HTTPS in from the internet and from the virtual network. Each is behind a `LoadBalancer` Service
+of its own:
 
 - **An internal zone's** is an [internal load balancer][ilb] in the zone's `snet-<zone>-ilb`
   (`service.beta.kubernetes.io/azure-load-balancer-internal-subnet`), reachable from inside the
@@ -578,15 +582,20 @@ virtual network. Each is behind a
 - **An external zone's**, and the platform gateway's, is public: Azure Traffic Manager
   (`global_hostnames` in `shared/`) points an application's one hostname at it in every cell.
 
-Traffic reaches the pods from the zone's Traefik pods inside the cluster, which the platform's
+Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
 Cilium baseline lets in - from the zone's own gateway only.
+
+What the implementation does not offer: rate limits, request size limits and `EnvoyFilter` (the
+Gateway API has no standard fields for them), egress gateways, and customizing the access log. It
+cannot run beside the Istio service mesh add-on.
 
 ### Certificates and DNS
 
-The Gateway terminates TLS with certificates it reads from Kubernetes Secrets, and Traefik has no Key
-Vault or Azure DNS integration of its own - AKS's, through the App Routing operator, serves the Istio
-based GatewayClasses only. So both are done from inside the cluster, by workloads the Flux repository
-deploys, each acting as an identity created here:
+The Gateway terminates TLS with certificates it reads from Kubernetes Secrets. App Routing's own Key
+Vault and Azure DNS integration is not used: it would read the vault through the Secrets Store CSI
+driver, which the design leaves off (R7b), and write DNS as one identity for every zone. So both are
+done from inside the cluster, by workloads the Flux repository deploys, each acting as an identity
+created here:
 
 - **Certificates** are kept in the environment's platform [Key Vault](#key-vault) as
   `<zone>-gateway--wildcard` - the share of the vault that belongs to the zone's gateway namespace,
@@ -737,7 +746,6 @@ defaults to true - with its namespaces' identities named after it
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
 [ilb]: https://learn.microsoft.com/azure/aks/internal-lb
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
-[traefik]: https://doc.traefik.io/traefik/reference/install-configuration/providers/kubernetes/kubernetes-gateway/
 
 ## Node auto provisioning
 
@@ -894,7 +902,7 @@ own row in the portal's GitOps view of the cluster.
   through Terraform or Azure: the Flux repository syncs it from the namespace's share of the Key
   Vault (onek8s/aks-fluxcd-platform, `tenants/<team>/key-vault.yaml`).
 - The rest of what a tenant needs inside the cluster - the `key-vault` service account and
-  SecretStore, the ExternalSecrets, the NetworkPolicy that lets Traefik in - stays in the Flux
+  SecretStore, the ExternalSecrets, the Cilium baseline that lets the zone's gateway in - stays in the Flux
   repository, under `tenants/<team>/`.
 
 [flux]: https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2

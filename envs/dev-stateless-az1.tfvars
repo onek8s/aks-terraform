@@ -85,6 +85,10 @@ container_registry_name = "acronek8sdev"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
+# App Routing's Gateway API implementation (GatewayClass approuting-istio) for the zones' and the
+# platform's Gateways, which aks-fluxcd-platform deploys.
+app_routing_gateway_api_enabled = true
+
 # A public API server - the one exception of the dev lab to design section 3, which has no network
 # path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
 private_cluster_enabled         = false

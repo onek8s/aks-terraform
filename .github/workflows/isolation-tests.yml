@@ -256,10 +256,10 @@ jobs:
           for zone in $ZONES; do
             blocked R7b "Key Vault $VAULT_PREFIX-$zone" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-$zone.vault.azure.net/healthstatus"
             [ "$zone" = "$ZONE" ] && continue
-            gw_pod="$(kubectl -n "$zone-gateway" get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-            gw_lb="$(kubectl -n "$zone-gateway" get svc -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
+            gw_pod="$(kubectl -n "$zone-gateway" get pod -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
+            gw_lb="$(kubectl -n "$zone-gateway" get svc -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
             eso_pod="$(kubectl -n "$zone-secrets" get pod -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-            [ -z "$gw_pod" ] || blocked "R2, R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:8443"
+            [ -z "$gw_pod" ] || blocked "R2, R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:443"
             [ -z "$gw_lb" ] || blocked "R2, R3, R5" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
             [ -z "$eso_pod" ] || blocked "R2, R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
           done

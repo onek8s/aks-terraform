@@ -1,7 +1,7 @@
 locals {
   # API version of the AKS resource provider used by the resources written directly rather than
   # through the module. One place to bump, so that the two cannot drift apart.
-  aks_api_version = "2025-09-02-preview"
+  aks_api_version = "2026-05-02-preview"
 
   # API version of the Kubernetes Configuration resource provider, which owns cluster extensions.
   kubernetes_configuration_api_version = "2024-11-01"
