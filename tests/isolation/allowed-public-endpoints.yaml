@@ -1,0 +1,22 @@
+# What the Resource Graph check of the Isolation tests workflow (check-public-endpoints.py) allows:
+# the designed public endpoints, and the dev lab's recorded exceptions with their reason. Anything
+# else public, or with local authentication on, fails the run. Fields are regular expressions
+# (case-insensitive, whole value); `check` is public-ip, public-endpoint or local-auth.
+allowed:
+  # Designed (design sections 8 and 13): the external zones' gateways are published on a public load
+  # balancer in every cell; AKS creates its frontend IPs in the node resource group.
+  - check: public-ip
+    resourceGroup: mc_rg-aks-dev_aks-dev-stateless-az[0-9]+_swedencentral
+    reason: "AKS load balancer: the ext-* zones' gateways (designed) and, in the lab's sandbox network mode, the cell's outbound IP (lab exception: no hub Firewall)"
+  # Lab exceptions
+  - check: public-endpoint
+    type: microsoft.containerservice/managedclusters
+    reason: "Lab exception: public API server in dev (authorized ranges, Entra ID only, local accounts off)"
+  - check: public-endpoint
+    type: microsoft.keyvault/vaults
+    name: kv-onek8s-dev-.*
+    reason: "Lab exception: the vaults are reached over their public endpoints with Entra ID (no private endpoints in the lab)"
+  - check: public-endpoint
+    type: microsoft.containerregistry/registries
+    name: acronek8sdev
+    reason: "Lab exception: the registry builds the images with ACR Tasks and is pulled over its public endpoint"
