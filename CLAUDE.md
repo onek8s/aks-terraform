@@ -86,16 +86,21 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   starts at 0 (`vcpu-quota.yml` `gpu`). A GPU node is ~7 USD/hour: **the user does not want GPU nodes
   run in the lab** - the cells' `gpu_cpu_limit: "0"` (fleet cluster-settings.yaml) keeps NAP from creating
   any, and the quota stays 0; GPU checks are dry runs only.
+- **Observability up on az1** (2026-10-13): Grafana k8s-monitoring 4.5.2 via Flux (fleet
+  `infrastructure/observability`, namespace `infra-observability`) as **Grafana Cloud Fleet Management**
+  sets it up (user's choice, design D48): `alloy-daemon` DaemonSet (privileged, hostNetwork/PID, requests
+  100m/256Mi, `system-node-critical`) takes its pipelines from Fleet Management (stack region
+  prod-eu-north-0) - collection is changed in Grafana Cloud, not in Git; node-exporter, kube-state-metrics
+  (namespace owner labels), Beyla k8s cache. All Running, Alloy registered, no errors. Credentials: vault
+  secret `flux-system--grafana-cloud` (JSON remote-config-url/-username/-password), stored with the Store
+  secret workflow. **OpenCost not running yet**: needs a Grafana token with metrics:read added to that
+  secret (prometheus-query-url, prometheus-username, prometheus-read-token).
 - **Cost and ownership** (2026-10-13): AKS cost analysis add-on NOT used (needs Standard tier and the
-  Disk CSI driver, which the stateless cells keep off); instead the user chose **Grafana k8s-monitoring
-  with OpenCost via Flux** (fleet `infrastructure/observability`, namespace `infra-observability`).
-  It waits for the vault secret `flux-system--grafana-cloud` (JSON: prometheus-url,
-  prometheus-query-url, prometheus-username, loki-url, loki-username, token with metrics:write,
-  metrics:read, logs:write) - to be created by the user from their Grafana Cloud stack. Every namespace
-  carries labels `platform/team`, `platform/cost-center` and annotation `platform/contact`
-  (`managed_namespaces.<ns>.owner` here; `platform` for the fleet's own); Azure Policy
-  `namespace-ownership` in audit. shared/ `monthly_budget` (budget.tf): subscription budget 600/month,
-  Owners told at 80 %/100 % actual and 100 % forecast.
+  Disk CSI driver, which the stateless cells keep off; D46). Every namespace carries labels
+  `platform/team`, `platform/cost-center` and annotation `platform/contact` (`managed_namespaces.<ns>.owner`
+  here; `platform` for the fleet's own); Azure Policy `namespace-ownership` **deny** (0 violations).
+  shared/ `monthly_budget` (budget.tf): subscription budget 600/month, Owners told at 80 %/100 % actual and
+  100 % forecast. CIS on az1 59 % (24 of 41).
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
@@ -214,8 +219,17 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **New parameters on an assigned Azure Policy definition need a `defaultValue`**, or the update fails.
 - **Karpenter's `sku-series` does not name the GPU** (`NDisr_v5` is H100 and H200): also require
   `karpenter.azure.com/sku-gpu-name`.
-- **k8s-monitoring (v4) requires OpenCost to use the metrics destination's own secret and keys**; with
-  inline credentials that is `<destination lowercased>-<release>` with keys `username`/`password`.
-  Flux `valuesFrom` reads Secrets of the HelmRelease's namespace only (flux-system).
+- **Flux `valuesFrom.targetPath` parses values like `helm --set`**: a numeric user ID became `1.872197e+06`
+  and Fleet Management refused the login. Merge a whole YAML document instead (ESO template, values
+  quoted with `toJson`); ESO's template data is `map[string]string`, so sprig `hasKey` fails - use `index`.
+  `valuesFrom` reads Secrets of the HelmRelease's namespace only (flux-system).
+- **k8s-monitoring on AKS** refuses to render without the pod annotation
+  `kubernetes.azure.com/set-kube-service-host-fqdn: "true"` on every Alloy collector and kube-state-metrics
+  (detected from live node labels via `lookup`, so offline `helm template` misses it); with it, pods
+  resolve `*.hcp.<region>.azmk8s.io`, which their Cilium DNS rules must allow.
+- **The system nodes are full**: memory requests ~99 % / 92 % of ~5.8 GiB allocatable per D4als_v6, mostly
+  AKS's own pods (istiod 2 GiB). New system-pool workloads need small requests or node-critical priority.
+- **Credentials handed over in chat** go to the vault with `store-secret.yml` (encrypted to the vault key
+  `secret-transport`), never into Git or a workflow input.
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.
