@@ -374,7 +374,11 @@ jobs:
             name: $NAMESPACE
             labels:
               platform/zone: $ZONE
+              platform/team: platform
+              platform/cost-center: platform
               pod-security.kubernetes.io/enforce: restricted
+            annotations:
+              platform/contact: https://github.com/onek8s/aks-terraform/issues
           ---
           apiVersion: v1
           kind: Pod

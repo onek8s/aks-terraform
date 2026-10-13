@@ -48,13 +48,17 @@ accepted:
     objects: "/(external-secrets|(int|ext)-(fi|se)-secrets)/ServiceAccount/external-secrets[a-z0-9-]*/.*"
     reason: "External Secrets Operator writes Secrets and requests tokens for its stores' service accounts by design (design section 6); its cert controller keeps the CA bundle of its own webhook configurations. Follow-up: the zones' ESO hold the chart's cluster-wide Secret access; scoping each to its zone's namespaces is in the CIS follow-ups (design section 17)"
 
+  - ids: ["4.1.2"]
+    objects: "/infra-observability/ServiceAccount/k8s-monitoring-(alloy-daemon|alloy-operator|kube-state-metrics)/.*"
+    reason: "Grafana's k8s-monitoring (decision D48): Alloy reads its own Fleet Management credentials Secret through the API, the Alloy operator manages the collectors' Secrets, kube-state-metrics lists Secrets' metadata for its metrics (no values exported)"
+
   # --- Service accounts and tokens ---
   - id: "4.1.5"
     objects: "(/v1//Namespace/(default|kube-public|kube-node-lease)|/v1/(kube-system|aks-istio-system|gatekeeper-system)/ServiceAccount/default)"
     reason: "Kubernetes' own empty namespaces have no account but `default` (whose token is off), and kube-system and the add-ons' namespaces are AKS's"
   - id: "4.1.6"
-    objects: "[a-z.]*/v1/(kube-system|aks-istio-system|gatekeeper-system|flux-system|external-secrets|external-dns|(int|ext)-(fi|se)-secrets)/[A-Za-z]+/.*"
-    reason: "Controllers that call the API server and need their token: AKS's add-ons, Flux, External Secrets Operator, external-dns. Application pods mount none (aks-hello: automountServiceAccountToken false)"
+    objects: "[a-z.]*/v1/(kube-system|aks-istio-system|gatekeeper-system|flux-system|external-secrets|external-dns|infra-observability|(int|ext)-(fi|se)-secrets)/[A-Za-z]+/.*"
+    reason: "Controllers that call the API server and need their token: AKS's add-ons, Flux, External Secrets Operator, external-dns, Grafana's collectors (Alloy, its operator, kube-state-metrics, Beyla's cache - service discovery and metadata). Application pods mount none (aks-hello: automountServiceAccountToken false)"
 
   # --- Pod security ---
   - id: "4.2.8"
@@ -70,3 +74,6 @@ accepted:
   - id: "4.4.2"
     objects: "/v1//Namespace/(aks-istio-system|gatekeeper-system)"
     reason: "Namespaces of AKS add-ons (App Routing's istiod, Azure Policy/Gatekeeper and Ratify), managed by AKS"
+  - id: "4.5.1"
+    objects: "apps/v1/infra-observability/DaemonSet/k8s-monitoring-alloy-daemon"
+    reason: "The k8s-monitoring chart hands Alloy its own settings as environment variables from the chart's Secret (decision D48, Grafana's Fleet Management setup); the platform cannot change the chart's templates"
