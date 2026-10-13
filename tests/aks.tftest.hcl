@@ -371,6 +371,51 @@ run "cluster_operations_are_given_longer_than_the_provider_default" {
   }
 }
 
+# Pod right-sizing (OneK8s design section 4): the VPA add-on is on unless a cluster says otherwise,
+# so the applications' VerticalPodAutoscalers in InPlaceOrRecreate mode have something to act on.
+run "the_vpa_add_on_is_on_by_default" {
+  command = plan
+
+  assert {
+    condition     = local.workload_auto_scaler_profile.vertical_pod_autoscaler.enabled
+    error_message = "Every cluster should run the VPA add-on unless told otherwise."
+  }
+
+  assert {
+    condition     = !can(local.workload_auto_scaler_profile.keda.enabled)
+    error_message = "KEDA should be left to AKS, not sent."
+  }
+}
+
+run "the_vpa_add_on_can_be_turned_off" {
+  command = plan
+
+  variables {
+    vertical_pod_autoscaler_enabled = false
+  }
+
+  assert {
+    condition     = local.workload_auto_scaler_profile.vertical_pod_autoscaler.enabled == false
+    error_message = "vertical_pod_autoscaler_enabled = false should be sent, so AKS removes the add-on."
+  }
+}
+
+run "an_automatic_cluster_is_sent_no_workload_auto_scaler_profile" {
+  command = plan
+
+  variables {
+    sku_name             = "Automatic"
+    sku_tier             = "Standard"
+    virtual_network_name = null
+    node_subnet_name     = null
+  }
+
+  assert {
+    condition     = local.workload_auto_scaler_profile == null
+    error_message = "AKS Automatic manages the VPA itself."
+  }
+}
+
 run "rejects_a_cluster_timeout_that_is_not_a_duration" {
   command = plan
 

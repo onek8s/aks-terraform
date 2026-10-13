@@ -304,6 +304,8 @@ module "aks" {
     }
   }
   tags = local.cluster_tags
+  # The Vertical Pod Autoscaler add-on - see vertical_pod_autoscaler_enabled.
+  workload_auto_scaler_profile = local.workload_auto_scaler_profile
 
   disable_local_accounts = true
   # Workload identity federates Kubernetes service accounts with Entra ID, which only works when the

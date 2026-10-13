@@ -1409,6 +1409,22 @@ variable "virtual_network_resource_group_name" {
   description = "Resource group of the existing virtual network. Defaults to `resource_group_name`."
 }
 
+variable "vertical_pod_autoscaler_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether AKS runs the [Vertical Pod Autoscaler][vpa] add-on (`--enable-vpa`): its recommender,
+updater and admission controller, and the `VerticalPodAutoscaler` CRD. On in every cluster (OneK8s
+design section 4, pod right-sizing): each application's `VerticalPodAutoscaler` in its own
+repository resizes its pods in place (`updateMode: InPlaceOrRecreate`, Kubernetes 1.35+), within
+the bounds stated there. Turning it off removes the add-on and with it every resize; the
+`VerticalPodAutoscaler` objects then do nothing. Ignored for AKS Automatic, which runs it anyway.
+
+[vpa]: https://learn.microsoft.com/en-us/azure/aks/vertical-pod-autoscaler
+DESCRIPTION
+  nullable    = false
+}
+
 variable "cost_analysis_enabled" {
   type    = bool
   default = false

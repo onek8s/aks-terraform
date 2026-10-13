@@ -243,6 +243,15 @@ locals {
   # Feeding them back keeps the tags out of the plan instead of having Terraform delete them.
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)
 
+  # The VPA add-on, which resizes the applications' pods in place - see
+  # vertical_pod_autoscaler_enabled. Not sent for AKS Automatic, which manages it. KEDA is left to
+  # AKS (null is not sent).
+  workload_auto_scaler_profile = local.is_automatic ? null : {
+    vertical_pod_autoscaler = {
+      enabled = var.vertical_pod_autoscaler_enabled
+    }
+  }
+
   # Cost analysis breaks the cluster spend down by namespace and deployment in Azure Cost
   # Management. Azure sells it with the paid tiers only and refuses the request on Free.
   cost_analysis_enabled = var.cost_analysis_enabled == null ? null : var.cost_analysis_enabled
