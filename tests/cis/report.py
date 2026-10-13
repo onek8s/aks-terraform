@@ -88,6 +88,13 @@ def kubescape(report, directory):
         if not match:
             continue
         cis, title = match.groups()
+        # Section 3 is kube-bench's: without a host scanner Kubescape has no node data, and its
+        # numbering of the kubelet checks differs from the benchmark kube-bench implements.
+        # 5.4.5 is judged on the Gateways' listeners (azure() below): Kubescape's control fails every
+        # Service, ClusterIP ones included, that lacks an Azure load balancer TLS annotation, while
+        # TLS ends at the Gateways here.
+        if cis.startswith("3.") or cis == "5.4.5":
+            continue
         status = {"passed": "PASS", "failed": "FAIL"}.get(control.get("status"), "MANUAL")
         info = control.get("statusInfo", {}).get("info", "")
         # Passed because nothing in the cluster is of the kind the control looks at: no evidence.
@@ -219,6 +226,10 @@ def main():
               + (f" - accepted: {row['reason']}" if row["reason"] else ""))
         if row["status"] == "FAIL":
             print(f"::error::CIS {row['id']} {row['title']}: {', '.join(failing[:10])}")
+        if row["failing"] and row["status"] in ("FAIL", "ACCEPTED"):
+            print(f"::group::{row['id']}: {len(row['failing'])} failing objects")
+            print("\n".join(row["failing"]))
+            print("::endgroup::")
     for e in stale:
         print(f"::warning::accepted.yaml: {e['id']} ({e.get('objects', 'all')}) no longer fails - remove it")
     print(f"\nScore {score:.0f} % ({counts['PASS']} of {automated} automated recommendations pass), "

@@ -83,7 +83,7 @@ jobs:
           # The preview API: the stable one leaves preview properties out.
           az rest --method get --url "https://management.azure.com${id}?api-version=2026-05-02-preview" > "$OUT/aks.json"
           az monitor diagnostic-settings list --resource "$id" -o json > "$OUT/diagnostic-settings.json"
-          az security pricing show -n Containers -o json > "$OUT/defender.json" || echo '{}' > "$OUT/defender.json"
+          az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Security/pricings/Containers?api-version=2024-01-01" > "$OUT/defender.json"
           registry="$(az acr show -n "$REGISTRY" -o json)"
           echo "$registry" > "$OUT/registry.json"
           kubelet="$(jq -r '.properties.identityProfile.kubeletidentity.objectId' "$OUT/aks.json")"
@@ -93,9 +93,10 @@ jobs:
         run: |
           sudo az aks install-cli --only-show-errors >/dev/null
           az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
-          KUBECONFIG="$RUNNER_TEMP/kubeconfig" kubelogin convert-kubeconfig -l azurecli
-          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
-          kubectl get gateways.gateway.networking.k8s.io -A -o json > "$OUT/gateways.json" || rm -f "$OUT/gateways.json"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubelogin convert-kubeconfig -l azurecli
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          kubectl get gateways.gateway.networking.k8s.io -A -o json > "$OUT/gateways.json"
 
       - name: kube-bench on every node (section 3)
         run: |
