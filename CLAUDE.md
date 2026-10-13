@@ -61,9 +61,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `image-signing` in `kv-onek8s-dev-platform` (non-exportable key) and identity
   `id-sec-dev-shared-ratify` (AcrPull, Secrets User on that one secret), federated per cluster with
   `gatekeeper-system/ratify-admin`. Fleet `infrastructure/image-verification` configures Ratify.
-  The vendored AVM module has a second patch for `securityProfile.imageIntegrity`. Not yet confirmed
-  on a running cluster: the add-on's service account name and that its pod gets the workload
-  identity token (Cluster status and Isolation tests show both).
+  The vendored AVM module has a second patch for `securityProfile.imageIntegrity`. Verified on az1
+  2026-10-13: Ratify runs as `gatekeeper-system/ratify-admin` with the WI token, the signed aks-hello
+  is not reported, the unsigned probe is. Two Notation constraints exist: ours and the landing zone's
+  `Deploy-MCSB2-Monitoring` one (default exclusions); both report the platform's upstream images
+  (Traefik, ESO, Flux), which are not signed by the platform - expected for now.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the
@@ -125,6 +127,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Quota errors** show up as `ErrCode_InsufficientVCPUQuota` on the cluster PUT; check the
   "vCPU quota" step of Cluster status.
 - `az vm list-usage` values are strings (JMESPath `currentValue != '0'`, not `> 0`).
+- **Preview properties are invisible to `az aks show`** (its API version leaves them out, e.g.
+  `securityProfile.imageIntegrity`): read them with `az rest` and `?api-version=2025-09-02-preview`.
+- The Image Integrity add-on's Ratify CRDs are older than Ratify's docs (no
+  `KeyManagementProvider.spec.refreshInterval`), and Ratify may not write a new object's status;
+  its log says whether it loaded it. The registry keeps signatures also under `sha256-<digest>` tags.
+- Notation cannot `notation login` on a runner (no credential store); `az acr login` (Docker) works.
 - The `az quota` CLI extension's `--limit-object` syntax is broken; use `az rest` against
   `Microsoft.Quota/quotas/<name>?api-version=2023-02-01`.
 - Renew Certificate matrix jobs need `max-parallel: 1` and per-cert concurrency groups; DNS-01 can
