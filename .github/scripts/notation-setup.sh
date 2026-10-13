@@ -6,9 +6,9 @@
 #
 #   .github/scripts/notation-setup.sh <vault> <certificate> <registry>
 #
-# Puts `notation` on the PATH of the later steps, logs Notation in to <registry> as the Azure CLI's
-# identity, and exports NOTATION_KEY_ID (the certificate's key, for signing) and
-# NOTATION_SUBJECT through GITHUB_ENV.
+# Puts `notation` on the PATH of the later steps, logs Docker - whose credentials Notation reads - in
+# to <registry> as the Azure CLI's identity, and exports NOTATION_KEY_ID (the certificate's key, for
+# signing) and NOTATION_SUBJECT through GITHUB_ENV.
 set -euo pipefail
 vault=$1 certificate=$2 registry=$3
 
@@ -44,8 +44,9 @@ jq -n --arg subject "$subject" '{
 }' > "$dir/trustpolicy.json"
 "$notation" policy import --force "$dir/trustpolicy.json"
 
-az acr login -n "$registry" --expose-token --query accessToken -o tsv \
-  | "$notation" login -u 00000000-0000-0000-0000-000000000000 --password-stdin "$registry.azurecr.io"
+# Docker's login, which Notation reads: Notation itself refuses to save a credential without a
+# credential store, and the runner has none.
+az acr login -n "$registry" --only-show-errors
 
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "$dir/bin" >> "$GITHUB_PATH"
