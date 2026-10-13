@@ -221,17 +221,19 @@ module "aks" {
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
   # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
-  # channel), and the controller serving them - Traefik Proxy, behind an Azure internal load balancer -
-  # is deployed through Flux, together with the Gateways, their listeners and their certificates. See
-  # the README.
+  # channel) and, with app_routing_gateway_api_enabled, App Routing's Gateway API implementation - a
+  # sidecar-less Istio control plane serving the GatewayClass `approuting-istio`, no service mesh. The
+  # Gateways themselves, their listeners, load balancers and certificates are deployed through Flux.
+  # See the README.
   #
-  # Every managed ingress AKS offers stays off: the Application Gateway for Containers ALB Controller
-  # add-on, App Routing with its NGINX controller and the Istio based Gateway API implementation App
-  # Routing can provide. All of it is stated rather than left out, because AKS Automatic enables App
-  # Routing unless the create request says otherwise, because a cluster that had the ALB Controller
-  # add-on only loses it when told to - and because the module cannot validate a partially filled
-  # ingress_profile: it reads through the nested objects and fails on the ones left null. Stating the
-  # add-on keeps the module on the 2025-09-02-preview cluster API, the only one that knows it.
+  # Every other managed ingress AKS offers stays off: the Application Gateway for Containers ALB
+  # Controller add-on and App Routing's NGINX controller. All of it is stated rather than left out,
+  # because AKS Automatic enables App Routing unless the create request says otherwise, because a
+  # cluster that had the ALB Controller add-on only loses it when told to - and because the module
+  # cannot validate a partially filled ingress_profile: it reads through the nested objects and fails
+  # on the ones left null. Stating the add-on keeps the module on a preview cluster API (patched to
+  # 2026-05-02-preview, modules/avm-managedcluster/VENDORED.md), which knows both it and App Routing
+  # Istio.
   ingress_profile = {
     application_load_balancer = {
       enabled = false
@@ -241,13 +243,11 @@ module "aks" {
     }
     web_app_routing = {
       enabled = false
-      /* Commented out because not supported by API version 2025-09-02-preview
       gateway_api_implementations = {
         app_routing_istio = {
-          mode = "Disabled"
+          mode = var.app_routing_gateway_api_enabled ? "Enabled" : "Disabled"
         }
       }
-      */
       nginx = {
         default_ingress_controller_type = "None"
       }

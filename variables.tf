@@ -172,6 +172,23 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "app_routing_gateway_api_enabled" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether AKS runs [App Routing's Gateway API implementation][approutinggw]: a sidecar-less Istio
+control plane (`istiod` in `aks-istio-system`) that serves the GatewayClass `approuting-istio` and
+creates a Deployment, `LoadBalancer` Service, autoscaler and disruption budget for every Gateway of
+that class - no service mesh, no sidecars, no Istio CRDs. AKS upgrades it in place with the cluster.
+The stateless cells' zone and platform Gateways use it (OneK8s design section 13); the stateful
+cluster has no Gateway API implementation (R9a). It cannot run beside the Istio service mesh add-on,
+which this configuration never enables. Needs the managed Gateway API CRDs, which every cluster has.
+
+[approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
+DESCRIPTION
+  nullable    = false
+}
+
 variable "image_integrity_enabled" {
   type        = bool
   default     = false
@@ -380,7 +397,7 @@ variable "dns_zone_name" {
 Name of the DNS zone the cluster publishes its Gateway hostnames in, for example `contoso.com` - a
 public Azure DNS zone, or an Azure Private DNS zone with `dns_zone_private`; an existing one, unless
 `dns_zone_create` is set. external-dns, deployed through Flux, keeps a record in it for every
-hostname a Gateway listener serves, pointing at the address of the load balancer in front of Traefik
+hostname a Gateway listener serves, pointing at the address of the Gateway's load balancer
 - a public one for a public zone, an internal one for a private zone. An identity is created for it
 here, federated with its Kubernetes service account and granted on the zone. Leave it unset and
 nothing is published.
@@ -395,7 +412,7 @@ Whether the zone of `dns_zone_name` is an Azure Private DNS zone - a domain that
 the networks the zone is linked to - rather than a public Azure DNS zone: the one switch between the
 two, set alike here and in shared/, which creates a private zone and links it to the clusters'
 network. external-dns writes it with its `azure-private-dns` provider instead of `azure`, and is
-granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`; Traefik's load balancer is
+granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`; the Gateway's load balancer is
 internal. The Flux repository is told which (`dns_zone_private`, `dns_provider`).
 DESCRIPTION
   nullable    = false

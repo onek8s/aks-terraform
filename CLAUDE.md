@@ -11,7 +11,7 @@ something here changes.
 |---|---|
 | `onek8s.github.io` | The design (docs/01-21, requirements.md, open-questions.md). Code follows it; change it when a decision changes it. |
 | `aks-terraform` (this one) | The clusters (root module, vendored AVM AKS module in `modules/avm-managedcluster`) and what an environment's clusters share (`shared/`: cell VNets + NSGs, platform and zone Key Vaults, private DNS, Traffic Manager, ACR). All deployment and status workflows live here. |
-| `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Traefik, ESO, Cilium), NAP NodePools, external-dns, tenants. `clusters/<cluster>/` per cluster. |
+| `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Gateway, ESO, Cilium), NAP NodePools, external-dns, tenants. `clusters/<cluster>/` per cluster. |
 | `aks-fluxcd-example` | An application team's repo (namespace `ext-fi-example`, app aks-hello). |
 | `azure-landing-zone` | Build tenant, ALZ, hub, AKS policy assignments. No AKS clusters any more (the old `stacks/aks-stateless-cell` was removed). |
 | `aks-hello` | The sample app image (amd64 only). |
@@ -65,7 +65,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   2026-10-13: Ratify runs as `gatekeeper-system/ratify-admin` with the WI token, the signed aks-hello
   is not reported, the unsigned probe is. Two Notation constraints exist: ours and the landing zone's
   `Deploy-MCSB2-Monitoring` one (default exclusions); both report the platform's upstream images
-  (Traefik, ESO, Flux), which are not signed by the platform - expected for now.
+  (ESO, Flux), which are not signed by the platform - expected for now.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`, applied 2026-10-13): storage rules **Deny** (they replaced the
@@ -89,12 +89,21 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Traffic Manager, not Front Door.** External zones get a public LB per zone per cell; one Traffic
   Manager profile per global hostname (e.g. `hello.ext-fi.dev.onek8s.lol`). Design uses Subnet routing
   with nested Priority profiles; the dev lab uses Weighted.
+- **App Routing's Gateway API (`approuting-istio`), not Traefik** (2026-10-13, the user prefers the Azure
+  standard offering): AKS runs a sidecar-less istiod (`aks-istio-system`, `app_routing_gateway_api_enabled`)
+  and creates per Gateway an Envoy Deployment + LB Service + HPA (min 2, cannot go lower) + PDB, shaped by
+  the ConfigMap in the Gateway's `spec.infrastructure.parametersRef` (allow list: nodeSelector,
+  tolerations, resources, Service annotations/ETP...). No Istio service mesh add-on (mutually exclusive).
+  Accepted losses: no rate limits / request size limits / EnvoyFilter in the gateway. Needs a preview
+  cluster API that knows `appRoutingIstio`: the vendored AVM module's third patch moves its pinned
+  `2025-09-02-preview` to `2026-05-02-preview` (newest azapi 2.13 validates); upstream request drafted on
+  the PR.
 - **Public API server in dev** (authorized ranges, Entra ID only, local accounts off) - a lab
   exception the user asked for. Private API server stays the design for acc/prd.
 - **Isolation zones** int-fi, int-se, ext-fi, ext-se: per cell a /24 each (nodes /25, ILB /27),
-  own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own Traefik
-  gateway and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.
-- **Zone nodes only for applications.** Each zone's Traefik and ESO run on the system pool (with the
+  own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own
+  Gateway (class `approuting-istio`) and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.
+- **Zone nodes only for applications.** Each zone's gateway pods and ESO run on the system pool (with the
   platform gateway and platform ESO), so a zone without application pods has zero nodes and its
   NodePools scale to zero. Consequence: the system subnet NSG allows 443 from Internet *and* (a
   separate rule) from VirtualNetwork.
@@ -103,8 +112,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   spot when available, else on-demand; one that does not stays on on-demand. amd64 and arm64 both
   offered; a pod pins `kubernetes.io/arch` or takes either. aks-hello is amd64 only.
 - **eBPF host routing (BpfVeth) only at cluster creation**: AKS refuses to enable it on a running
-  cluster ("User-installed iptables rules found"). That is why the AVM module is vendored with one
-  patch (`network_profile.advanced_networking.performance.acceleration_mode`), see
+  cluster ("User-installed iptables rules found"). That is why the AVM module is vendored (first patch:
+  `network_profile.advanced_networking.performance.acceleration_mode`), see
   `modules/avm-managedcluster/VENDORED.md`. An upstream feature request was drafted on PR #65.
 - **CMK**: per cluster `key-<cluster>-kms` and `key-<cluster>-disk` in `kv-onek8s-dev-platform`
   (purge protection), DES `des-<cluster>`, encryption at host. Azure Linux, SSH off, system pool
@@ -128,7 +137,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   "vCPU quota" step of Cluster status.
 - `az vm list-usage` values are strings (JMESPath `currentValue != '0'`, not `> 0`).
 - **Preview properties are invisible to `az aks show`** (its API version leaves them out, e.g.
-  `securityProfile.imageIntegrity`): read them with `az rest` and `?api-version=2025-09-02-preview`.
+  `securityProfile.imageIntegrity`): read them with `az rest` and `?api-version=2026-05-02-preview`.
 - The Image Integrity add-on's Ratify CRDs are older than Ratify's docs (no
   `KeyManagementProvider.spec.refreshInterval`), and Ratify may not write a new object's status;
   its log says whether it loaded it. The registry keeps signatures also under `sha256-<digest>` tags.

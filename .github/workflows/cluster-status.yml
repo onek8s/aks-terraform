@@ -12,7 +12,7 @@ name: Cluster status
 #   - Image Integrity: Ratify's pods, service account and workload identity, its configuration and
 #     what the Notation signature policy reports;
 #   - through `az aks command invoke`, the Gateways and HTTPRoutes and their status, the Flux
-#     Kustomizations and HelmReleases, and the recent logs of Traefik and external-dns. This part
+#     Kustomizations and HelmReleases, and the recent logs of the gateways and external-dns. This part
 #     needs the principal to hold a Kubernetes RBAC role on the cluster (Azure Kubernetes Service RBAC
 #     Reader at least); without one it is reported as forbidden and the rest still runs.
 #
@@ -176,14 +176,17 @@ jobs:
             kubectl logs -n "${pod%%/*}" "${pod#*/}" --all-containers --tail=30 --prefix
           done
           kubectl get constraints -o json | jq -r '.items[] | select((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", "  match: \(.spec.match | tostring)", "  parameters: \(.spec.parameters | tostring)", (.status.violations[]? | "  \(.namespace)/\(.name): \(.message)")'
-          # The gateways: one Traefik per isolation zone and the platform's, their load balancers,
-          # Gateways and routes.
+          # The gateways: App Routing's Istio control plane, one Gateway per isolation zone and the
+          # platform's - their Envoy Deployments, autoscalers, load balancers and routes.
+          kubectl get pods,hpa,configmap -n aks-istio-system -o wide
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -A -o yaml
           kubectl get httproute -A -o yaml
           kubectl get svc -A -o wide | grep -E "NAMESPACE|LoadBalancer"
           for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-gateway$"); do
-            kubectl logs -n "$ns" -l app.kubernetes.io/name=traefik --tail=30 --prefix
+            kubectl get deploy,hpa,pdb,pods -n "$ns" -o wide
+            kubectl get pods -n "$ns" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{range .items[*]}{.metadata.name}: securityContext={.spec.securityContext} seccomp={.spec.containers[0].securityContext.seccompProfile}{"\n"}{end}'
+            kubectl logs -n "$ns" -l gateway.networking.k8s.io/gateway-name --tail=30 --prefix
             kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -n 15
           done
           # External Secrets Operator: the platform's and one per zone, and every store and secret.

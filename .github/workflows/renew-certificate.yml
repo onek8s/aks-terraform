@@ -4,9 +4,9 @@ name: Renew Certificate
 # one for the platform gateway (OneK8s design section 13) - on the schedule and whenever this file
 # changes on main, or the one given when run by hand:
 #
-#   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Traefik
+#   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Gateway
 #
-#   platform-gateway--wildcard   *.onek8s.lol                Flux webhooks, Traefik dashboards
+#   platform-gateway--wildcard   *.onek8s.lol                Flux webhooks
 #   int-fi-gateway--wildcard     *.int-fi.dev.onek8s.lol     the int-fi zone's gateway
 #   int-se-gateway--wildcard     *.int-se.dev.onek8s.lol
 #   ext-fi-gateway--wildcard     *.ext-fi.dev.onek8s.lol

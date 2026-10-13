@@ -89,8 +89,8 @@ default_node_pool = {
 
 # The `example` team. Its own Flux configuration deploys apps/ of onek8s/aks-fluxcd-example into it -
 # a public repository, read without a credential - and its apps publish themselves through the shared
-# Gateway. It keeps the default closed ingress: a NetworkPolicy from aks-fluxcd-platform lets the
-# Traefik pods in, and nothing else.
+# Gateway. It keeps the default closed ingress: a Cilium policy from aks-fluxcd-platform lets the
+# zone gateway's pods in, and nothing else.
 managed_namespaces = {
   ext-fi-example = {
     labels = {
