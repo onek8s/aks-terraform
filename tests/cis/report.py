@@ -59,8 +59,12 @@ class Report:
 def kube_bench(report, directory):
     for path in sorted(glob.glob(os.path.join(directory, "kube-bench-*.json"))):
         node = os.path.basename(path)[len("kube-bench-"):-len(".json")]
-        with open(path) as f:
-            data = json.load(f)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except ValueError:
+            print(f"::warning::{path}: no kube-bench results")
+            continue
         for control in data.get("Controls", []):
             for group in control.get("tests", []):
                 for test in group.get("results", []):

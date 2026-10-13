@@ -118,6 +118,8 @@ jobs:
               spec:
                 nodeName: $node
                 hostPID: true
+                # No resource requests: pinned with nodeName, the pod bypasses the scheduler, and the
+                # kubelet refuses one whose requests do not fit beside what the node already holds.
                 restartPolicy: Never
                 automountServiceAccountToken: false
                 tolerations: [{operator: Exists}]
@@ -125,9 +127,6 @@ jobs:
                   - name: kube-bench
                     image: $KUBE_BENCH_IMAGE
                     command: ["/bin/sh", "-c", "kube-bench run --targets node --benchmark $KUBE_BENCH_BENCHMARK --json > /tmp/results.json 2>/tmp/log; rc=\$?; cat /tmp/log >&2; echo '--- results'; cat /tmp/results.json; exit \$rc"]
-                    resources:
-                      requests: {cpu: 10m, memory: 64Mi}
-                      limits: {memory: 256Mi}
                     volumeMounts:
                       - {name: var-lib-kubelet, mountPath: /var/lib/kubelet, readOnly: true}
                       - {name: etc-systemd, mountPath: /etc/systemd, readOnly: true}
@@ -145,11 +144,11 @@ jobs:
           while read -r node job; do
             if ! kubectl -n kube-system wait "job/$job" --for=condition=Complete --timeout=300s; then
               echo "::error::kube-bench on $node did not complete"
-              kubectl -n kube-system describe "job/$job" | tail -n 20
+              kubectl -n kube-system get pods -l job-name="$job" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} {.status.reason} {.status.message}{"\n"}{end}'
               failed=1
             fi
             kubectl -n kube-system logs "job/$job" | sed -n '/^--- results$/,$p' | tail -n +2 > "$OUT/kube-bench-$node.json"
-            jq -e .Controls "$OUT/kube-bench-$node.json" >/dev/null || { kubectl -n kube-system logs "job/$job" | tail -n 30; failed=1; }
+            jq -e .Controls "$OUT/kube-bench-$node.json" >/dev/null 2>&1 || { kubectl -n kube-system logs "job/$job" 2>&1 | tail -n 30; rm -f "$OUT/kube-bench-$node.json"; failed=1; }
           done < "$RUNNER_TEMP/jobs"
           exit $failed
 
