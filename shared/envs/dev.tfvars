@@ -79,6 +79,11 @@ container_registry_builds = {
     dockerfile   = "Dockerfile.arm64" # cross-compiles on the registry's amd64 host
     architecture = "arm64"
   }
+  # /status, /health/live and /health/ready
+  "aks-hello:0.3.0" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "260b0ca972b5d1949d7fde4b86c077dd98b50258"
+  }
 }
 
 # Every namespace with a share of a vault in any of the clusters. In the platform vault: flux-system
