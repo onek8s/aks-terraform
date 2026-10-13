@@ -170,6 +170,10 @@ jobs:
               result FAIL R14 "constraint template $t" "not in the cluster"
             fi
           done
+          # Stateless: the storage rule is enforced in every environment (it replaced the fleet's
+          # ValidatingAdmissionPolicy).
+          storage="$(kubectl get k8splatformnopersistentstorage -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
+          case "$storage" in *deny*) result PASS "R8, R14" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R8, R14" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
           if [ "${mutations:-0}" -ge 12 ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of 12"; fi
           kubectl get constrainttemplates -o custom-columns=NAME:.metadata.name,CREATED:.status.created || true
 
@@ -307,7 +311,8 @@ jobs:
                 *) result AUDIT "$req" "refused: $what" "$rule is in audit ($action) until phase 3" ;;
               esac
             else
-              result PASS "$req" "refused: $what" "$(grep -oiE '(denied|forbidden|violates|is not allowed|no matches for kind)[^"]{0,140}' <<<"$out" | head -1)"
+              # The reason, without kubectl's "Error from server (Forbidden): error when creating ...:"
+              result PASS "$req" "refused: $what" "$(tail -1 <<<"$out" | sed -E 's/^Error from server \([A-Za-z]+\): (error when creating "STDIN": )?//' | head -c 220)"
             fi
           }
           # A pod the restricted Pod Security Standard admits, so that each manifest is refused for

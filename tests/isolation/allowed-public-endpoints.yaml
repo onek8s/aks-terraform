@@ -20,3 +20,13 @@ allowed:
     type: microsoft.containerregistry/registries
     name: acronek8sdev
     reason: "Lab exception: the registry builds the images with ACR Tasks and is pulled over its public endpoint"
+  - check: public-endpoint
+    type: microsoft.storage/storageaccounts
+    name: stonek8sdevtfstate
+    resourceGroup: rg-aks-dev-tfstate
+    reason: "Lab exception: the Terraform state of the Deploy workflow, read over its public endpoint (GitHub-hosted runners)"
+  - check: local-auth
+    type: microsoft.storage/storageaccounts
+    name: stonek8sdevtfstate
+    resourceGroup: rg-aks-dev-tfstate
+    reason: "Lab exception: the azurerm backend reads the Terraform state with the account key (Deploy workflow)"
