@@ -58,8 +58,8 @@ accepted:
 
   # --- Pod security ---
   - id: "4.2.8"
-    objects: "/v1//Namespace/(kube-system|aks-istio-system|gatekeeper-system|flux-system|((int|ext)-(fi|se)|platform)-gateway)"
-    reason: "Namespaces not on the restricted Pod Security Standard: AKS's (kube-system, add-ons, flux-system) and the gateways' (baseline: App Routing's gateway pods set no seccomp profile and cannot be configured to - design section 14). Application pods are held to restricted by Azure Policy"
+    objects: "/v1//Namespace/(kube-system|aks-istio-system|gatekeeper-system|flux-system|((int|ext)-(fi|se)|platform)-gateway|infra-observability)"
+    reason: "Namespaces not on the restricted Pod Security Standard: AKS's (kube-system, add-ons, flux-system), the gateways' (baseline: App Routing's gateway pods set no seccomp profile and cannot be configured to - design section 14) and infra-observability (privileged: Grafana's Fleet Management collectors, Alloy and node-exporter, run privileged on the host network - decision D48). Application pods are held to restricted by Azure Policy"
   - id: "4.7.2"
     reason: "Kubescape's C-0211 fails any workload that leaves an optional securityContext field unset (fsGroup, supplementalGroups, SELinux, ...), the hardened ones included. The platform's measure is the restricted Pod Security Standard (enforced in the platform's namespaces, Azure Policy for the applications) and the read-only root file system rule in deny"
   - id: "4.7.3"
