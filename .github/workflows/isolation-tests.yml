@@ -198,12 +198,15 @@ jobs:
           templates="k8splatformnopersistentstorage k8splatformzoneplacement k8splatformplacementlabels k8splatformfqdnegress k8splatformgatewayonly k8splatformnodepools
             k8splatformsecretsviaeso k8splatformesoobjects k8splatformserviceaccounts k8splatformrolloutguardrails k8splatformverticalpodautoscalers
             k8splatformnamespaceownership"
+          # The mutations of the subscription's exposure (azure-landing-zone stacks/aks-policy): five for
+          # every pod, and two per isolation zone (node selector, toleration) - only the cell's own zones.
+          want=$((5 + 2 * $(wc -w <<<"$ZONES")))
           for _ in $(seq 1 20); do
             missing=""
             for t in $templates; do kubectl get constrainttemplate "$t" >/dev/null 2>&1 || missing="$missing $t"; done
             mutations="$(kubectl get assign,modifyset -o json 2>/dev/null | jq '.items | length')"
-            [ -z "$missing" ] && [ "${mutations:-0}" -ge 13 ] && break
-            echo "waiting for the add-on: missing templates:${missing:- none}, mutations ${mutations:-0}/13"; sleep 60
+            [ -z "$missing" ] && [ "${mutations:-0}" -ge "$want" ] && break
+            echo "waiting for the add-on: missing templates:${missing:- none}, mutations ${mutations:-0}/$want"; sleep 60
           done
           for t in $templates; do
             if kubectl get constrainttemplate "$t" >/dev/null 2>&1; then
@@ -217,7 +220,7 @@ jobs:
           # ValidatingAdmissionPolicy).
           storage="$(kubectl get k8splatformnopersistentstorage -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
           case "$storage" in *deny*) result PASS "R8, R14" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R8, R14" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
-          if [ "${mutations:-0}" -ge 13 ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of 13"; fi
+          if [ "${mutations:-0}" -ge "$want" ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of $want"; fi
           kubectl get constrainttemplates -o custom-columns=NAME:.metadata.name,CREATED:.status.created || true
 
       # Key Vault ABAC (R7): a namespace's identity - the `key-vault` service account's, what its
