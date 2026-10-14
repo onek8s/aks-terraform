@@ -163,7 +163,10 @@ jobs:
           az_wanted="$(sed -nE 's/^[[:space:]]*availability_zones[[:space:]]*=[[:space:]]*\["([0-9])"\].*/\1/p' "$tfvars" | head -1)"
           check R11 "system pool in one availability zone, the cell's ($tfvars)" "$(jq -r '.agentPoolProfiles[0].availabilityZones | join(",")' <<<"$c")" "$az_wanted"
           check R11 "node auto provisioning" "$(jq -r '.nodeProvisioningProfile.mode' <<<"$c")" Auto
-          check R11 "VPA add-on (in-place right-sizing)" "$(jq -r '.workloadAutoScalerProfile.verticalPodAutoscaler.enabled // false' <<<"$c")" true
+          # The VPA add-on as the tfvars say: on unless vertical_pod_autoscaler_enabled = false (the dev
+          # cells' lab cost exception).
+          vpa_wanted="$(sed -nE 's/^vertical_pod_autoscaler_enabled[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$tfvars")"
+          check R11 "VPA add-on (in-place right-sizing) as $tfvars says" "$(jq -r '.workloadAutoScalerProfile.verticalPodAutoscaler.enabled // false' <<<"$c")" "${vpa_wanted:-true}"
           version_wanted="$(sed -nE 's/^kubernetes_version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars")"
           version="$(jq -r .currentKubernetesVersion <<<"$c")"
           case "$version" in "$version_wanted"|"$version_wanted".*) result PASS R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; *) result FAIL R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; esac
@@ -657,11 +660,15 @@ jobs:
             | forbidden R12 "PodDisruptionBudget that blocks every drain" k8splatformrolloutguardrails
           printf 'apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata: {name: one}\nspec: {minReplicas: 1, maxReplicas: 3, scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: x}}\n' \
             | forbidden R11 "HorizontalPodAutoscaler with minReplicas 1" k8splatformrolloutguardrails
-          # Right-sizing within bounds (R11).
-          printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: evicts}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: Recreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly, maxAllowed: {cpu: 100m, memory: 128Mi}}]}}\n' \
-            | forbidden R11 "VerticalPodAutoscaler that evicts (Recreate)" k8splatformverticalpodautoscalers
-          printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: unbounded}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: InPlaceOrRecreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly}]}}\n' \
-            | forbidden R11 "VerticalPodAutoscaler without maxAllowed" k8splatformverticalpodautoscalers
+          # Right-sizing within bounds (R11) - where the VPA add-on runs, which brings the CRD.
+          if kubectl api-resources --api-group=autoscaling.k8s.io -o name 2>/dev/null | grep -q '^verticalpodautoscalers'; then
+            printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: evicts}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: Recreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly, maxAllowed: {cpu: 100m, memory: 128Mi}}]}}\n' \
+              | forbidden R11 "VerticalPodAutoscaler that evicts (Recreate)" k8splatformverticalpodautoscalers
+            printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: unbounded}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: InPlaceOrRecreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly}]}}\n' \
+              | forbidden R11 "VerticalPodAutoscaler without maxAllowed" k8splatformverticalpodautoscalers
+          else
+            result AUDIT R11 "refused: VerticalPodAutoscalers out of bounds" "no VPA add-on in this cell (vertical_pod_autoscaler_enabled = false)"
+          fi
 
       # The Azure CLI signed in with the job's GitHub OIDC token, which expires after a few minutes: a
       # token for a resource it has not asked for yet (the registry's, for `az acr login`) cannot be
