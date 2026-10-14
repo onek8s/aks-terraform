@@ -39,6 +39,13 @@ jobs:
           echo "::add-mask::$secret"
           az login --service-principal -u "$client_id" -p "$secret" --tenant "$tenant" --allow-no-subscriptions --only-show-errors -o none
 
+      # What the owner may do in Microsoft Graph: its application roles and directory roles.
+      - name: Graph permissions
+        run: |
+          token="$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)"
+          payload="$(cut -d. -f2 <<<"$token" | tr '_-' '/+')"; while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="$payload="; done
+          base64 -d <<<"$payload" | jq '{roles, wids, scp}'
+
       - name: Groups and testers
         run: |
           set -euo pipefail
