@@ -534,6 +534,10 @@ run "an_external_exposure_with_its_zones_plans" {
     condition     = length(azurerm_network_security_group.cell) == 5
     error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets."
   }
+  assert {
+    condition     = output.exposure == "ext"
+    error_message = "The stack says which exposure it serves."
+  }
 }
 
 run "rejects_a_cell_that_is_not_a_slash_20" {

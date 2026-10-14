@@ -63,3 +63,8 @@ output "log_analytics_workspace_id" {
   description = "ID of the environment's Log Analytics workspace, or null without one."
   value       = one(azurerm_log_analytics_workspace.platform[*].id)
 }
+
+output "exposure" {
+  description = "The exposure these shared resources serve (`int` or `ext`, OneK8s design decision D52), or null when none is stated."
+  value       = var.exposure
+}
