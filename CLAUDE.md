@@ -143,6 +143,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `readMetadata` (names, never values). Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
   admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
 - `dev-ext-stateful`: defined (`envs/dev-ext-stateful.tfvars`), never deployed (only with an approved exception).
+- **Plan review 2026-10-14** (design PR: Firewall per exposure D53, IPv6 D54, V13/V22/V23, H14): the design's
+  network picture now has a hub and Firewall per exposure; no code changed anywhere. Open follow-ups when the user
+  asks: azure-landing-zone `firewall` mode with the external hub (V22), the firewall rules rewrite, nothing for IPv6.
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): mutations **on** - 5 + 2 per zone, so 9 in the ext subscription (zone placement from the namespace,
   `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,
@@ -212,6 +215,23 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **One policy engine (R14)**: no ValidatingAdmissionPolicies in the fleet; every admission rule is an
   Azure Policy definition. Placement (R17) is stated by applications only as labels `platform/arch`
   and `platform/capacity`; the mutations do the rest.
+- **A hub VNet and Azure Firewall Premium per exposure, no peering or route between them** (D53, 2026-10-14,
+  plan only): `vnet-hub-int` (ExpressRoute/VPN gateway, Private DNS Resolver, Bastion, the corporate path, the lab's
+  client VNet), `vnet-hub-ext` (Firewall + Private DNS links only, no gateway); the management VNet is the one network
+  peered to both (not transitive); one parent Firewall Policy (platform FQDNs, IDPS, deny tail) with a child per
+  exposure; a Grafana private endpoint per hub. int -> ext business flows go to the public entry point like any
+  Internet client; ext -> int has no path (a design change, not a rule). Cost: one more Firewall Premium per tenant
+  (~1.75 USD/h list), platform owner confirms (H05). **Nothing built**: the lab runs azure-landing-zone's `sandbox`
+  network mode (no Firewall, cells not peered to any hub) and has no internal subscription. When `firewall` mode is
+  built (external hub first, V22), rewrite `stacks/platform-extensions/main.firewall.tf` there: today one rule
+  collection group per environment with both exposures in one `frontend` IP group, plus the removed NGINXaaS edge rules.
+- **IPv4 only; IPv6 reserved, not built** (D54, 2026-10-14): dual stack only at the external edge (gateway IPv6
+  frontend + AAAA, dual-stack external cells by rebuild), and only once NAP accepts `ipFamilies` IPv4+IPv6 (AKS issue
+  4867, still open Oct 2026) and the user / H14 asks for it. Never IPv6 egress or east-west: Azure Firewall dual stack
+  is a preview without application rules or IP groups, Private Link IPv6 a preview (5 regions, not swedencentral).
+  Address plan reserves `/48` per environment (`fd00:16::/48` dev), `/56` per cell VNet, `/64` per node subnet.
+- **Stateful cluster OS channel is unverified** (V13 re-opened 2026-10-14): the network isolated cluster docs list
+  only `NodeImage` and `None`; D10's `SecurityPatch` is tried first, `NodeImage` in the same window if refused.
 
 ## Lessons learned (gotchas)
 
