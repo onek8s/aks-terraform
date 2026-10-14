@@ -641,6 +641,18 @@ jobs:
           printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: unbounded}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: InPlaceOrRecreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly}]}}\n' \
             | forbidden R11 "VerticalPodAutoscaler without maxAllowed" k8splatformverticalpodautoscalers
 
+      # The Azure CLI signed in with the job's GitHub OIDC token, which expires after a few minutes: a
+      # token for a resource it has not asked for yet (the registry's, for `az acr login`) cannot be
+      # fetched ten minutes in. Signing in again keeps the later steps independent of how long the
+      # earlier ones took.
+      - name: Sign in to Azure again
+        if: ${{ !cancelled() }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Supply chain
         if: ${{ !cancelled() }}
         run: |
