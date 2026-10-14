@@ -283,7 +283,7 @@ jobs:
   isolation-tests:
     name: isolation tests
     needs: deploy
-    if: inputs.action == 'apply' && startsWith(inputs.stack, 'dev-stateless-')
+    if: inputs.action == 'apply' && contains(inputs.stack, '-stateless-az')
     uses: ./.github/workflows/isolation-tests.yml
     with:
       cluster: aks-${{ inputs.stack }}
