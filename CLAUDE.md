@@ -143,6 +143,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `readMetadata` (names, never values). Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
   admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
 - `dev-ext-stateful`: defined (`envs/dev-ext-stateful.tfvars`), never deployed (only with an approved exception).
+- **Firewall Policies without a Firewall** (2026-10-14, azure-landing-zone `stacks/platform-extensions/main.firewall.policies.tf`,
+  applied by its Platform workflow on merge): in sub-hub `rg-hub-fwpolicy-swedencentral`, parent `afwp-hub-parent-swedencentral`
+  (Premium, threat intelligence + IDPS Deny, DNS proxy; `rcg-platform`: exposure guard rails Deny, Entra ID, AKS FQDN tag,
+  Policy, Monitor, Defender, GitOps/ARM) and child `afwp-hub-ext-swedencentral` (`rcg-aks-dev`: vaults, ACR, Grafana, zone
+  allow-lists) with IP groups of the real cell prefixes (`firewall_exposures` in its terraform.tfvars - keep in step with
+  `shared/envs/dev.tfvars` and the fleet's `policy/egress-allow-lists.yaml`). No Firewall is associated (free); review in the portal.
+  A parent's rule collection groups are evaluated before every child's, so no explicit deny-all in the parent.
 - **Plan review 2026-10-14** (design PR: Firewall per exposure D53, no IPv6 D54, V13/V22): the design's
   network picture now has a hub and Firewall per exposure; no code changed anywhere. Open follow-ups when the user
   asks: azure-landing-zone `firewall` mode with the external hub (V22) and the firewall rules rewrite. IPv6: dropped.
