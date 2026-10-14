@@ -650,3 +650,59 @@ run "rejects_a_budget_start_that_is_not_the_first_of_a_month" {
 
   expect_failures = [var.monthly_budget]
 }
+
+# A namespace's groups (the clusters' managed_namespaces.<ns>.groups) get on its share what their
+# Kubernetes role gets on Secrets: edit and admin manage its secrets, view sees the vault's metadata.
+run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      example = {
+        groups = {
+          view  = "AAAAAAAA-1111-1111-1111-111111111111"
+          edit  = "22222222-2222-2222-2222-222222222222"
+          admin = "44444444-4444-4444-4444-444444444444"
+        }
+        # A writer that is also the edit group is granted once.
+        writers = [{ principal_id = "22222222-2222-2222-2222-222222222222" }]
+      }
+      other = {}
+    }
+  }
+
+  assert {
+    condition = toset(keys(azurerm_role_assignment.key_vault_namespace_writer)) == toset([
+      "example/writer/22222222-2222-2222-2222-222222222222",
+      "example/writer/44444444-4444-4444-4444-444444444444",
+    ])
+    error_message = "The edit and admin groups should manage the namespace's secrets, each once."
+  }
+  assert {
+    condition = alltrue([
+      azurerm_role_assignment.key_vault_namespace_writer["example/writer/44444444-4444-4444-4444-444444444444"].role_definition_name == "Key Vault Secrets Officer",
+      strcontains(azurerm_role_assignment.key_vault_namespace_writer["example/writer/44444444-4444-4444-4444-444444444444"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
+    ])
+    error_message = "The admin group should be held to the namespace's secrets by its condition."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_viewer) == ["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"],
+      azurerm_role_assignment.key_vault_namespace_viewer["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Reader",
+      azurerm_role_assignment.key_vault_namespace_viewer["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"].principal_type == "Group",
+    ])
+    error_message = "The view group should get Key Vault Reader - metadata, never a value."
+  }
+}
+
+run "rejects_a_namespace_group_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      example = { groups = { view = "example-readers" } }
+    }
+  }
+
+  expect_failures = [var.key_vault_namespaces]
+}

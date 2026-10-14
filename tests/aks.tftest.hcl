@@ -4040,3 +4040,60 @@ run "rejects_a_namespace_with_groups_and_a_name_too_long_for_its_kustomizations"
 
   expect_failures = [var.managed_namespaces]
 }
+
+# Beside the cluster's own vault, the groups get on the namespace's secrets what their Kubernetes role
+# gets on Secrets; shared/ does the same for the environment's shared vaults.
+run "namespace_groups_get_their_kubernetes_role_on_the_namespaces_secrets" {
+  command = plan
+
+  variables {
+    key_vault_name      = "kv-aks-test"
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    managed_namespaces = {
+      team-payments = {
+        groups = {
+          view  = "11111111-1111-1111-1111-111111111111"
+          edit  = "22222222-2222-2222-2222-222222222222"
+          admin = "33333333-3333-3333-3333-333333333333"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = toset(keys(azurerm_role_assignment.key_vault_namespace_writer)) == toset([
+      "team-payments/writer/22222222-2222-2222-2222-222222222222",
+      "team-payments/writer/33333333-3333-3333-3333-333333333333",
+    ])
+    error_message = "The edit and admin groups should manage the namespace's secrets."
+  }
+  assert {
+    condition     = strcontains(azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].condition, "StringStartsWith 'team-payments--'")
+    error_message = "The groups should be held to the namespace's secrets."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_viewer) == ["team-payments/viewer/11111111-1111-1111-1111-111111111111"],
+      azurerm_role_assignment.key_vault_namespace_viewer["team-payments/viewer/11111111-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Reader",
+    ])
+    error_message = "The view group should get Key Vault Reader."
+  }
+}
+
+run "namespace_groups_get_nothing_on_a_shared_vault_from_the_cluster" {
+  command = plan
+
+  variables {
+    key_vault_name      = "kv-sec-test-shared"
+    key_vault_create    = false
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    managed_namespaces = {
+      team-payments = { groups = { view = "11111111-1111-1111-1111-111111111111", edit = "22222222-2222-2222-2222-222222222222" } }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0 && length(azurerm_role_assignment.key_vault_namespace_viewer) == 0
+    error_message = "A shared vault's grants are shared/'s: the cells would both make them."
+  }
+}

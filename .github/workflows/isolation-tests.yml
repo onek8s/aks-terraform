@@ -31,9 +31,10 @@ name: Isolation tests
 #     but takes a signed one.
 #   - Azure Resource Graph (R1, R5, R7a): public IPs, public PaaS endpoints and local authentication -
 #     none but the designed ones and the recorded lab exceptions (tests/isolation/).
-#   - Namespace access (R6): each Entra ID group of managed_namespaces[*].groups has its RoleBinding
+#   - Namespace access (R6, R7): each Entra ID group of managed_namespaces[*].groups has its RoleBinding
 #     (view, edit, admin) in its namespace, and a member - impersonated, and signed in for real as a
-#     tester application where one is recorded - has exactly that role there and nothing elsewhere.
+#     tester application where one is recorded - has exactly that role there and nothing elsewhere;
+#     on the namespace's Key Vault share view sees names only, edit and admin manage its secrets.
 #   - Key Vault (R7, R7a): a namespace's own identity - a token for its `key-vault` service account,
 #     exchanged at Entra ID as External Secrets Operator does - reads its own secret and gets 403
 #     for another namespace's and another zone's; no application identity holds a Key Vault
@@ -264,9 +265,10 @@ jobs:
             result FAIL R7 "$ZONE-gateway's Key Vault identity signs in" "no token for its key-vault service account"
           fi
 
-      # Namespace access (R6): the Entra ID groups of managed_namespaces[*].groups get Kubernetes'
-      # view, edit or admin in their namespace and nothing elsewhere - by impersonating a member,
-      # and signed in as a real member where tests/isolation/namespace-access-testers.yaml names one.
+      # Namespace access (R6, R7): the Entra ID groups of managed_namespaces[*].groups get Kubernetes'
+      # view, edit or admin in their namespace and nothing elsewhere - by impersonating a member, and
+      # signed in as a real member where tests/isolation/namespace-access-testers.yaml names one - and
+      # the matching rights on the namespace's secrets in its Key Vault.
       - name: Namespace access - each group its role in its namespace only
         if: ${{ !cancelled() }}
         env:
@@ -274,7 +276,7 @@ jobs:
         run: |
           . "$RUNNER_TEMP/lib.sh"
           pip install --quiet python-hcl2==8.1.4
-          python3 tests/isolation/check-namespace-access.py "envs/${CLUSTER#aks-}.tfvars" tests/isolation/namespace-access-testers.yaml \
+          python3 tests/isolation/check-namespace-access.py "envs/${CLUSTER#aks-}.tfvars" tests/isolation/namespace-access-testers.yaml shared/envs/dev.tfvars \
             || echo x >> "$RUNNER_TEMP/failures"
 
       - name: Key Vault - no data-plane role on an application identity

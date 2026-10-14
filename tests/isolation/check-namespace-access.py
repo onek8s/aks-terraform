@@ -3,7 +3,7 @@
 the Entra ID groups of `managed_namespaces[*].groups` (view, edit, admin) get exactly their
 Kubernetes role in their own namespace and nothing anywhere else.
 
-    check-namespace-access.py <envs/<cluster>.tfvars> <testers.yaml>
+    check-namespace-access.py <envs/<cluster>.tfvars> <testers.yaml> [<shared/envs/<env>.tfvars>]
 
 Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolation tests' own).
 
@@ -18,6 +18,13 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
    (the group is among the caller's groups), the same matrix without impersonation, and one write
    as a server-side dry run. A group without a tester is reported as AUDIT.
 
+4. Key Vault (with the shared tfvars): shared/ names the same groups for the namespace as the
+   cell; on the namespace's vault each group holds exactly its role - `view` Key Vault Reader,
+   `edit` and `admin` Key Vault Secrets Officer under the ABAC condition on `<namespace>--` - and no
+   other Key Vault data-plane role anywhere (`az role assignment list`); and each tester, signed in
+   with a Key Vault token: `view` lists the secrets and reads no value, `edit` and `admin` read the
+   namespace's secret, write and delete one of its own and are refused another namespace's.
+
 Prints one line per check and a Markdown table to $RESULTS; exits 1 when a check failed.
 """
 import json
@@ -25,6 +32,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -58,6 +66,8 @@ CLUSTER_WIDE = [
     ("create", "clusterrolebindings.rbac.authorization.k8s.io"),
 ]
 AKS_SERVER_APP = "6dae42f8-4368-4678-94ff-3960e28e3630"
+VAULT_SCOPE = "https://vault.azure.net/.default"
+VAULT_API = "api-version=7.4"
 failed = False
 
 
@@ -87,7 +97,8 @@ def can_i(verb, resource, namespace, auth, kubeconfig=None):
     if namespace:
         args += ["-n", namespace]
     out = kubectl(*args, kubeconfig=kubeconfig)
-    answer = out.stdout.strip()
+    # "yes" or "no", which with Azure RBAC comes with a reason: "no - Azure does not have opinion...".
+    answer = (out.stdout.split() or [""])[0]
     if answer not in ("yes", "no"):
         raise RuntimeError(f"kubectl auth can-i {verb} {resource}: {out.stderr.strip()[:200]}")
     return answer == "yes"
@@ -166,8 +177,8 @@ def check_bindings(groups):
         result("FAIL", "no namespace access binding the tfvars do not name", f"{namespace}/{name}")
 
 
-def tester_kubeconfig(client_id, tenant, workdir):
-    """A kubeconfig that calls the cluster with a token of the tester application, no impersonation."""
+def tester_token(client_id, tenant, scope):
+    """A token of the tester application for `scope`, signed in with the workflow's OIDC token."""
     request = urllib.request.Request(
         os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=api://AzureADTokenExchange",
         headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
@@ -176,13 +187,19 @@ def tester_kubeconfig(client_id, tenant, workdir):
     body = urllib.parse.urlencode({
         "client_id": client_id,
         "grant_type": "client_credentials",
-        "scope": f"{AKS_SERVER_APP}/.default",
+        "scope": scope,
         "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
         "client_assertion": assertion,
     }).encode()
     token = json.load(urllib.request.urlopen(
         f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", data=body, timeout=30))["access_token"]
     print(f"::add-mask::{token}")
+    return token
+
+
+def tester_kubeconfig(client_id, tenant, workdir):
+    """A kubeconfig that calls the cluster with a token of the tester application, no impersonation."""
+    token = tester_token(client_id, tenant, f"{AKS_SERVER_APP}/.default")
     config = yaml.safe_load(kubectl("config", "view", "--raw", "--minify").stdout)
     config["users"] = [{"name": "tester", "user": {"token": token}}]
     config["contexts"][0]["context"]["user"] = "tester"
@@ -226,8 +243,125 @@ def check_tester(namespace, role, group, client_id, tenant, workdir):
                (write.stdout + write.stderr).strip()[:200])
 
 
+def parse(tfvars):
+    with open(tfvars) as f:
+        return hcl2.load(f)
+
+
+def unquoted(value):
+    return value.strip('"') if isinstance(value, str) else value
+
+
+def shared_groups(shared_tfvars):
+    """managed namespace -> {role: group} as shared/ grants them on the vault."""
+    shares = parse(shared_tfvars).get("key_vault_namespaces", {})
+    groups = {}
+    for name, share in shares.items():
+        given = (share or {}).get("groups") or {}
+        given = {unquoted(k): unquoted(v).lower() for k, v in given.items() if v is not None}
+        groups[unquoted(name)] = {role: given[role] for role in ROLES if given.get(role)}
+    return groups
+
+
+def namespace_vault(tfvars, namespace):
+    parsed = parse(tfvars)
+    vaults = {unquoted(k): unquoted(v) for k, v in (parsed.get("key_vault_namespace_vaults") or {}).items()}
+    return vaults.get(namespace) or unquoted(parsed.get("key_vault_name"))
+
+
+def az(*args):
+    out = subprocess.run(["az", *args, "-o", "json"], capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip()[:200])
+    return json.loads(out.stdout or "null")
+
+
+def check_vault_roles(namespace, roles, vault):
+    """Each group's Key Vault data-plane roles: exactly its own, on the namespace's vault."""
+    for role, group in roles.items():
+        check = f"{namespace}: the {role} group's Key Vault roles"
+        try:
+            assignments = az("role", "assignment", "list", "--assignee", group, "--all", "--include-inherited")
+        except RuntimeError as e:
+            result("FAIL", check, str(e))
+            continue
+        data = [a for a in assignments if (a.get("roleDefinitionName") or "").startswith("Key Vault ")
+                and a.get("roleDefinitionName") != "Key Vault Contributor"]
+        expected = "Key Vault Reader" if role == "view" else "Key Vault Secrets Officer"
+        problems = []
+        for a in data:
+            where = (a.get("scope") or "").rsplit("/", 1)[-1]
+            if a["roleDefinitionName"] != expected or where != vault:
+                problems.append(f"{a['roleDefinitionName']} on {where}")
+            elif role != "view" and f"'{namespace}--'" not in (a.get("condition") or ""):
+                problems.append(f"{a['roleDefinitionName']} on {where} without the condition on {namespace}--")
+        if not any(a["roleDefinitionName"] == expected and (a.get("scope") or "").endswith("/" + vault) for a in data):
+            problems.append(f"no {expected} on {vault}")
+        if problems:
+            result("FAIL", check, "; ".join(problems))
+        else:
+            result("PASS", check, f"{expected} on {vault}" + ("" if role == "view" else f" under {namespace}--"))
+
+
+def vault_call(method, url, token, body=None):
+    request = urllib.request.Request(url, method=method, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                                     data=json.dumps(body).encode() if body is not None else None)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read()
+            return response.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+
+def check_vault_tester(namespace, role, client_id, tenant, vault, other):
+    label = f"{namespace}: signed in as a member of the {role} group, Key Vault {vault}"
+    try:
+        token = tester_token(client_id, tenant, VAULT_SCOPE)
+    except Exception as e:  # noqa: BLE001
+        result("FAIL", f"{label}: signs in", str(e)[:200])
+        return
+    base = f"https://{vault}.vault.azure.net/secrets"
+    wrong = []
+    status, listing = vault_call("GET", f"{base}?{VAULT_API}", token)
+    own = sorted(i["id"].rsplit("/", 1)[-1] for i in listing.get("value", []) if i["id"].rsplit("/", 1)[-1].startswith(f"{namespace}--"))
+    if status != 200:
+        wrong.append(f"list: HTTP {status}")
+    if own:
+        status, _ = vault_call("GET", f"{base}/{own[0]}?{VAULT_API}", token)
+        if status != (403 if role == "view" else 200):
+            wrong.append(f"read {own[0]}: HTTP {status}")
+    elif status == 200:
+        wrong.append(f"no secret under {namespace}-- to read")
+    status, _ = vault_call("GET", f"{base}/{other}--isolation-test?{VAULT_API}", token)
+    if status != 403:
+        wrong.append(f"read {other}--isolation-test: HTTP {status}")
+    # A write of another namespace's name is refused whatever the role; one of its own only edit and admin may.
+    status, _ = vault_call("PUT", f"{base}/{other}--namespace-access-test?{VAULT_API}", token, {"value": "x"})
+    if status != 403:
+        wrong.append(f"write {other}--namespace-access-test: HTTP {status}")
+    name = f"{namespace}--namespace-access-test-{os.environ.get('GITHUB_RUN_ID', 'local')}-{role}"
+    status, _ = vault_call("PUT", f"{base}/{name}?{VAULT_API}", token, {"value": "x"})
+    if status != (403 if role == "view" else 200):
+        wrong.append(f"write {name}: HTTP {status}")
+    if status == 200:
+        vault_call("DELETE", f"{base}/{name}?{VAULT_API}", token)
+        # Soft delete keeps it for the retention period; purge it, as the role allows.
+        for _ in range(10):
+            purge, _ = vault_call("DELETE", f"https://{vault}.vault.azure.net/deletedsecrets/{name}?{VAULT_API}", token)
+            if purge in (204, 200, 404):
+                break
+            subprocess.run(["sleep", "3"])
+    what = "lists, reads no value, writes nothing" if role == "view" else f"reads and writes {namespace}-- only"
+    if wrong:
+        result("FAIL", f"{label}: {what}", "; ".join(wrong))
+    else:
+        result("PASS", f"{label}: {what}", f"{len(own)} own secret(s) listed")
+
+
 def main():
     tfvars, testers_file = sys.argv[1:3]
+    shared_tfvars = sys.argv[3] if len(sys.argv) > 3 else None
     groups = expected_groups(tfvars)
     with open(testers_file) as f:
         testers = (yaml.safe_load(f) or {}).get("testers") or {}
@@ -235,6 +369,19 @@ def main():
     if not any(groups.values()):
         result("AUDIT", "namespace access groups", f"{os.path.basename(tfvars)} names no managed_namespaces[*].groups")
     check_bindings(groups)
+    vaults = {}
+    if shared_tfvars:
+        in_shared = shared_groups(shared_tfvars)
+        for namespace, roles in groups.items():
+            if not roles:
+                continue
+            if in_shared.get(namespace) != roles:
+                result("FAIL", f"{namespace}: shared/ grants the same groups on the vault",
+                       f"cell {roles}, shared {in_shared.get(namespace)}")
+            else:
+                result("PASS", f"{namespace}: shared/ grants the same groups on the vault", ", ".join(sorted(roles)))
+            vaults[namespace] = namespace_vault(tfvars, namespace)
+            check_vault_roles(namespace, roles, vaults[namespace])
     with tempfile.TemporaryDirectory() as workdir:
         for namespace, roles in groups.items():
             for role, group in roles.items():
@@ -243,6 +390,10 @@ def main():
                 client_id = (testers.get(namespace) or {}).get(role)
                 if client_id:
                     check_tester(namespace, role, group, client_id, tenant, workdir)
+                    if namespace in vaults:
+                        # Another application of the same zone: its secrets' names in the same vault.
+                        other = f"{namespace.split('-')[0]}-{namespace.split('-')[1]}-other"
+                        check_vault_tester(namespace, role, client_id, tenant, vaults[namespace], other)
                 else:
                     result("AUDIT", f"{namespace}: signed in as a member of the {role} group",
                            f"no tester in {os.path.basename(testers_file)}; checked by impersonation only")
