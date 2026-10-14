@@ -62,6 +62,18 @@ locals {
     CONDITION
   }
 
+  # What a namespace's `edit` group may do to the namespace's secrets (OneK8s design section 7, D51):
+  # write and update them, and read their attributes, never their value - Kubernetes' `edit` writes a
+  # Secret, and a person who may write a secret need not read the one already there. No delete,
+  # purge, backup or restore: those stay with `admin` (`Key Vault Secrets Officer`). A custom role -
+  # Azure has no built-in one without `getSecret` - held to the namespace's secrets by the write
+  # condition below, like the Secrets Officer; its `readMetadata` is by name, so it lists nothing.
+  key_vault_secrets_editor_data_actions = [
+    "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+    "Microsoft.KeyVault/vaults/secrets/update/action",
+  ]
+
   # Everything `Key Vault Secrets Officer` can do to a secret, on the namespace's secrets only: an
   # existing one by its name, a new or restored one by the name in the request - so no secret named
   # anything but `<namespace>--...` can be created. Listing is refused, as for reading.

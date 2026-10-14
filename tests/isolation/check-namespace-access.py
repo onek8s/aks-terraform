@@ -19,11 +19,13 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
    as a server-side dry run. A group without a tester is reported as AUDIT.
 
 4. Key Vault (with the shared tfvars), soft multi-tenancy: shared/ names the same groups for the
-   namespace as the cell; `edit` and `admin` hold exactly Key Vault Secrets Officer on the
-   namespace's vault under the ABAC condition on `<namespace>--` (values and metadata), `view` no
-   Key Vault role at all (`az role assignment list`); and each tester, signed in with a Key Vault
-   token, lists nothing, reads and writes no other namespace's secret and creates none outside the
-   naming - `edit` and `admin` write, read and read the metadata of one of their own, by name.
+   namespace as the cell; `admin` holds exactly Key Vault Secrets Officer and `edit` exactly the
+   custom role `OneK8s Key Vault Secrets Editor (<resource group>)` (D51) on the namespace's vault
+   under the ABAC condition on `<namespace>--` (metadata included), `view` no Key Vault role at all
+   (`az role assignment list`); and each tester, signed in with a Key Vault token, lists nothing,
+   reads and writes no other namespace's secret and creates none outside the naming - `admin`
+   writes, reads and reads the metadata of one of their own, by name; `edit` writes, updates and
+   reads the metadata of one, but reads no value and deletes nothing.
 5. Platform viewers (shared/ platform_viewer_group_object_ids): their custom role is defined and
    assignable at the environment's resource group only and held by each group there; signed in as
    the tester, they list the clusters' namespaces and nothing inside them, and list each vault's
@@ -280,9 +282,11 @@ def az(*args):
     return json.loads(out.stdout or "null")
 
 
-def check_vault_roles(namespace, roles, vault):
-    """Each group's Key Vault data-plane roles: `edit` and `admin` exactly Secrets Officer on the
-    namespace's vault under its condition, metadata included; `view` none at all."""
+def check_vault_roles(namespace, roles, vault, editor):
+    """Each group's Key Vault data-plane roles on the namespace's vault, under its condition (metadata
+    included): `admin` exactly Secrets Officer, `edit` exactly the Secrets Editor custom role (write,
+    no value - D51), `view` none at all."""
+    wanted_by_role = {"admin": "Key Vault Secrets Officer", "edit": editor}
     for role, group in roles.items():
         check = f"{namespace}: the {role} group's Key Vault roles"
         try:
@@ -290,27 +294,30 @@ def check_vault_roles(namespace, roles, vault):
         except RuntimeError as e:
             result("FAIL", check, str(e))
             continue
-        data = [a for a in assignments if (a.get("roleDefinitionName") or "").startswith("Key Vault ")
+        data = [a for a in assignments if "Key Vault " in (a.get("roleDefinitionName") or "")
                 and a.get("roleDefinitionName") != "Key Vault Contributor"]
         problems = []
+        wanted = wanted_by_role.get(role)
         if role == "view":
             problems = [f"{a['roleDefinitionName']} on {(a.get('scope') or '').rsplit('/', 1)[-1]}" for a in data]
         else:
             for a in data:
                 where = (a.get("scope") or "").rsplit("/", 1)[-1]
                 condition = a.get("condition") or ""
-                if a["roleDefinitionName"] != "Key Vault Secrets Officer" or where != vault:
+                if a["roleDefinitionName"] != wanted or where != vault:
                     problems.append(f"{a['roleDefinitionName']} on {where}")
                 elif f"'{namespace}--'" not in condition or "secrets/readMetadata/action" not in condition:
                     problems.append(f"{a['roleDefinitionName']} on {where} without the condition on {namespace}-- (metadata included)")
-            if not any(a["roleDefinitionName"] == "Key Vault Secrets Officer" and (a.get("scope") or "").endswith("/" + vault) for a in data):
-                problems.append(f"no Key Vault Secrets Officer on {vault}")
+            if not any(a["roleDefinitionName"] == wanted and (a.get("scope") or "").endswith("/" + vault) for a in data):
+                problems.append(f"no {wanted} on {vault}")
         if problems:
             result("FAIL", check, "; ".join(problems))
         elif role == "view":
             result("PASS", check, "none: Kubernetes' view sees no Secret either")
+        elif role == "edit":
+            result("PASS", check, f"{wanted} on {vault}: write and metadata under {namespace}--, no value")
         else:
-            result("PASS", check, f"Key Vault Secrets Officer on {vault}, values and metadata under {namespace}--")
+            result("PASS", check, f"{wanted} on {vault}, values and metadata under {namespace}--")
 
 
 def vault_call(method, url, token, body=None):
@@ -352,20 +359,33 @@ def check_vault_tester(namespace, role, client_id, tenant, vault, other):
            vault_call("PUT", f"{endpoint}/secrets/{other}--namespace-access-test?{VAULT_API}", token, {"value": "x"})[0], 403)
     expect("write namespace-access-test (no namespace's name)",
            vault_call("PUT", f"{endpoint}/secrets/namespace-access-test-{run}?{VAULT_API}", token, {"value": "x"})[0], 403)
-    name = f"{namespace}--namespace-access-test-{run}-{role}"
-    status = vault_call("PUT", f"{endpoint}/secrets/{name}?{VAULT_API}", token, {"value": "x"})[0]
-    expect(f"write {name}", status, 200 if writes else 403)
-    expect(f"read {name}", vault_call("GET", f"{endpoint}/secrets/{name}?{VAULT_API}", token)[0], 200 if writes else 403)
-    expect(f"read the metadata of {name}", vault_call("GET", f"{endpoint}/secrets/{name}/versions?{VAULT_API}", token)[0], 200 if writes else 403)
-    if status == 200:
-        vault_call("DELETE", f"{endpoint}/secrets/{name}?{VAULT_API}", token)
-        # Soft delete keeps it for the retention period; purge it, as the role allows.
-        for _ in range(10):
-            purge = vault_call("DELETE", f"{endpoint}/deletedsecrets/{name}?{VAULT_API}", token)[0]
-            if purge in (200, 204, 404):
-                break
-            subprocess.run(["sleep", "3"])
-    what = "lists nothing, reads nothing, writes nothing" if not writes else f"lists nothing, reads and writes {namespace}-- only, by name"
+    if role == "edit":
+        # The edit role writes and updates but neither reads a value nor deletes (D51): one fixed name,
+        # overwritten each run with a new version, so no secret is left behind per run.
+        name = f"{namespace}--namespace-access-test-edit"
+        expect(f"write {name}", vault_call("PUT", f"{endpoint}/secrets/{name}?{VAULT_API}", token, {"value": run})[0], 200)
+        expect(f"update the attributes of {name}",
+               vault_call("PATCH", f"{endpoint}/secrets/{name}?{VAULT_API}", token, {"contentType": "text/plain"})[0], 200)
+        expect(f"read the metadata of {name}", vault_call("GET", f"{endpoint}/secrets/{name}/versions?{VAULT_API}", token)[0], 200)
+        expect(f"read {name} (its value)", vault_call("GET", f"{endpoint}/secrets/{name}?{VAULT_API}", token)[0], 403)
+        expect(f"delete {name}", vault_call("DELETE", f"{endpoint}/secrets/{name}?{VAULT_API}", token)[0], 403)
+    else:
+        name = f"{namespace}--namespace-access-test-{run}-{role}"
+        status = vault_call("PUT", f"{endpoint}/secrets/{name}?{VAULT_API}", token, {"value": "x"})[0]
+        expect(f"write {name}", status, 200 if writes else 403)
+        expect(f"read {name}", vault_call("GET", f"{endpoint}/secrets/{name}?{VAULT_API}", token)[0], 200 if writes else 403)
+        expect(f"read the metadata of {name}", vault_call("GET", f"{endpoint}/secrets/{name}/versions?{VAULT_API}", token)[0], 200 if writes else 403)
+        if status == 200:
+            vault_call("DELETE", f"{endpoint}/secrets/{name}?{VAULT_API}", token)
+            # Soft delete keeps it for the retention period; purge it, as the role allows.
+            for _ in range(10):
+                purge = vault_call("DELETE", f"{endpoint}/deletedsecrets/{name}?{VAULT_API}", token)[0]
+                if purge in (200, 204, 404):
+                    break
+                subprocess.run(["sleep", "3"])
+    what = ("lists nothing, reads nothing, writes nothing" if not writes
+            else f"lists nothing, writes {namespace}-- only, by name, reads no value" if role == "edit"
+            else f"lists nothing, reads and writes {namespace}-- only, by name")
     if wrong:
         result("FAIL", f"{label}: {what}", "; ".join(wrong))
     else:
@@ -459,6 +479,9 @@ def main():
     vaults = {}
     if shared_tfvars:
         in_shared = shared_groups(shared_tfvars)
+        parsed = parse(shared_tfvars)
+        editor = (unquoted(parsed.get("key_vault_secrets_editor_role_name"))
+                  or f"OneK8s Key Vault Secrets Editor ({unquoted(parsed.get('resource_group_name'))})")
         for namespace, roles in groups.items():
             if not roles:
                 continue
@@ -468,7 +491,7 @@ def main():
             else:
                 result("PASS", f"{namespace}: shared/ grants the same groups on the vault", ", ".join(sorted(roles)))
             vaults[namespace] = namespace_vault(tfvars, namespace)
-            check_vault_roles(namespace, roles, vaults[namespace])
+            check_vault_roles(namespace, roles, vaults[namespace], editor)
     with tempfile.TemporaryDirectory() as workdir:
         for namespace, roles in groups.items():
             for role, group in roles.items():

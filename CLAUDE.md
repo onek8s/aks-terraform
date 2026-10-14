@@ -118,8 +118,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   namespace because **Azure refuses two Kustomizations of one Flux configuration on the same path** - plus Azure
   role `Azure Kubernetes Service Namespace User` on the namespace for each group.
   Kubernetes RBAC, so it works beside Azure RBAC. The older `access` list (Azure RBAC roles) still exists.
-  On the namespace's Key Vault share the same groups get the matching rights: `edit`/`admin` Key Vault Secrets
-  Officer under the `<ns>--` ABAC write condition, `view` nothing - granted by shared/
+  On the namespace's Key Vault share the same groups get the matching rights: `admin` Key Vault Secrets
+  Officer, `edit` the custom role `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51, 2026-10-14: `setSecret`,
+  `update`, `readMetadata` - writes and updates, never reads a value, no delete; defined and assignable at the
+  resource group; root module's own-vault variant `Key Vault Secrets Editor (<cluster>)`), both under the
+  `<ns>--` ABAC write condition, `view` nothing - granted by shared/
   (`key_vault_namespaces.<ns>.groups`, same IDs; the isolation test checks they agree) or by the root module
   for a cluster's own vault.
 - **Soft multi-tenancy** (2026-10-14, design section 6/7, D50): the ABAC conditions gate `readMetadata` too, so
