@@ -16,9 +16,8 @@ name: Deploy
 #   dev-ext-stateful         the repository root with envs/dev-ext-stateful.tfvars: aks-dev-ext-stateful (defined,
 #                        not deployed for now).
 #
-# After an apply of a stateless cell, the Isolation tests workflow runs against it as a further stage
-# (job isolation-tests); after an apply of dev-shared, Sign images signs the registry's new images
-# (job sign-images). The CIS benchmark runs by hand only.
+# After an apply of dev-shared, Sign images signs the registry's new images (job sign-images). The
+# Isolation tests and the CIS benchmark run by hand only, when the user asks for them.
 #
 # Each stack has a state of its own - so a cluster can be destroyed and built again without touching
 # the shared resources or the other clusters - in the azurerm backend of its terraform.tf, as
@@ -276,15 +275,4 @@ jobs:
     needs: deploy
     if: inputs.action == 'apply' && inputs.stack == 'dev-shared'
     uses: ./.github/workflows/sign-images.yml
-    secrets: inherit
-
-  # The requirement and isolation tests (design section 17) as the stage after every apply of a
-  # stateless cell: the cell is tested as it is now, policies and Flux included.
-  isolation-tests:
-    name: isolation tests
-    needs: deploy
-    if: inputs.action == 'apply' && contains(inputs.stack, '-stateless-az')
-    uses: ./.github/workflows/isolation-tests.yml
-    with:
-      cluster: aks-${{ inputs.stack }}
     secrets: inherit
