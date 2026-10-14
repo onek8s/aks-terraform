@@ -67,7 +67,7 @@ locals {
   # Secret, and a person who may write a secret need not read the one already there. No delete,
   # purge, backup or restore: those stay with `admin` (`Key Vault Secrets Officer`). A custom role -
   # Azure has no built-in one without `getSecret` - held to the namespace's secrets by the write
-  # condition below, like the Secrets Officer; its `readMetadata` is by name, so it lists nothing.
+  # condition key_vault_edit_conditions; its `readMetadata` is by name, so it lists nothing.
   key_vault_secrets_editor_data_actions = [
     "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
     "Microsoft.KeyVault/vaults/secrets/setSecret/action",
@@ -106,6 +106,35 @@ locals {
         !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/setSecret/action'})
         AND
         !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/restore/action'})
+       )
+       OR
+       (
+        @Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
+       )
+      )
+    CONDITION
+  }
+
+  # The same for the `edit` groups' Secrets Editor role: Azure refuses a condition that names an
+  # action the role does not have, so this one names only the role's own - an existing secret's
+  # attributes and update by its name, a new one by the name in the request. Listing is refused.
+  key_vault_edit_conditions = {
+    for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
+      (
+       (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/update/action'})
+       )
+       OR
+       (
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${prefix}'
+       )
+      )
+      AND
+      (
+       (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/setSecret/action'})
        )
        OR
        (

@@ -265,6 +265,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **GitHub OIDC subjects of this org carry immutable IDs** (`repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`),
   not `repo:onek8s/aks-terraform:...`: a federated credential on the short form gets 401 at Entra ID.
 - **Azure refuses two Kustomizations of one Flux configuration on the same path** (`InvalidInputParameter`).
+- **An ABAC condition may name only actions its role has** (`InvalidRoleAssignmentCondition: Action pattern ... is not
+  referenced in role`, only at apply): a custom role needs its own condition (conventions `key_vault_edit_conditions`).
 - `kubectl auth can-i` on an Azure RBAC cluster answers `no - Azure does not have opinion...`: parse the first word.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml` (encrypted to the vault key
   `secret-transport`), never into Git or a workflow input.
