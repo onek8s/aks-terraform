@@ -218,7 +218,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_editor" {
   role_definition_id = azurerm_role_definition.key_vault_secrets_editor[0].role_definition_resource_id
   principal_type     = "Group"
   condition_version  = "2.0"
-  condition          = module.conventions.key_vault_write_conditions[each.value.namespace]
+  condition          = module.conventions.key_vault_edit_conditions[each.value.namespace]
 }
 
 # Every vault, whole: the platform's secrets and certificates - the gateways' listener certificates

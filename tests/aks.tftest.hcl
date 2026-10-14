@@ -4097,6 +4097,9 @@ run "namespace_groups_get_their_kubernetes_role_on_the_namespaces_secrets" {
     condition = alltrue([
       strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'team-payments--'"),
       strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+      # Azure refuses a condition naming an action the role lacks (InvalidRoleAssignmentCondition).
+      !strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "getSecret"),
+      !strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "secrets/delete"),
     ])
     error_message = "The edit group should be held to the namespace's secrets - and list nothing."
   }

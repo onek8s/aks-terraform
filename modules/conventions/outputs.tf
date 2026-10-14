@@ -9,8 +9,13 @@ output "key_vault_read_conditions" {
 }
 
 output "key_vault_write_conditions" {
-  description = "Per namespace, the ABAC condition that holds `Key Vault Secrets Officer` - and the `edit` groups' Secrets Editor role - to managing its own secrets."
+  description = "Per namespace, the ABAC condition that holds `Key Vault Secrets Officer` to managing its own secrets."
   value       = local.key_vault_write_conditions
+}
+
+output "key_vault_edit_conditions" {
+  description = "Per namespace, the ABAC condition that holds the `edit` groups' Secrets Editor role to writing its own secrets."
+  value       = local.key_vault_edit_conditions
 }
 
 output "key_vault_secrets_editor_data_actions" {

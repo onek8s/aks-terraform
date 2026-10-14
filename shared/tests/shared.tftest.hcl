@@ -714,6 +714,9 @@ run "an_edit_group_writes_secrets_without_reading_them" {
       azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].principal_type == "Group",
       strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
       strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+      # Azure refuses a condition naming an action the role lacks (InvalidRoleAssignmentCondition).
+      !strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "getSecret"),
+      !strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "secrets/delete"),
     ])
     error_message = "The edit group should get the Secrets Editor role, held to the namespace's secrets; the admin group Secrets Officer."
   }
