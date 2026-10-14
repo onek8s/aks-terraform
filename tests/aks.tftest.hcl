@@ -4073,11 +4073,32 @@ run "namespace_groups_get_their_kubernetes_role_on_the_namespaces_secrets" {
   }
 
   assert {
-    condition = toset(keys(azurerm_role_assignment.key_vault_namespace_writer)) == toset([
-      "team-payments/writer/22222222-2222-2222-2222-222222222222",
-      "team-payments/writer/33333333-3333-3333-3333-333333333333",
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_writer) == ["team-payments/writer/33333333-3333-3333-3333-333333333333"],
+      azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].role_definition_name == "Key Vault Secrets Officer",
+      keys(azurerm_role_assignment.key_vault_namespace_editor) == ["team-payments/editor/22222222-2222-2222-2222-222222222222"],
     ])
-    error_message = "The edit and admin groups should manage the namespace's secrets - and the view group get nothing."
+    error_message = "The admin group should manage the namespace's secrets, the edit group only write them - and the view group get nothing."
+  }
+  assert {
+    condition = alltrue([
+      toset(one(azurerm_role_definition.key_vault_secrets_editor[0].permissions).data_actions) == toset([
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/update/action",
+      ]),
+      length(coalesce(one(azurerm_role_definition.key_vault_secrets_editor[0].permissions).actions, [])) == 0,
+      azurerm_role_definition.key_vault_secrets_editor[0].name == "Key Vault Secrets Editor (aks-test)",
+      azurerm_role_definition.key_vault_secrets_editor[0].assignable_scopes == tolist([data.azurerm_resource_group.this.id]),
+    ])
+    error_message = "The edit group's role should write, update and read the attributes of secrets - never getSecret, delete or purge - and be the cluster's own, at the resource group."
+  }
+  assert {
+    condition = alltrue([
+      strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'team-payments--'"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_editor["team-payments/editor/22222222-2222-2222-2222-222222222222"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+    ])
+    error_message = "The edit group should be held to the namespace's secrets - and list nothing."
   }
   assert {
     condition     = strcontains(azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].condition, "StringStartsWith 'team-payments--'")
@@ -4102,7 +4123,7 @@ run "namespace_groups_get_nothing_on_a_shared_vault_from_the_cluster" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0
+    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0 && length(azurerm_role_assignment.key_vault_namespace_editor) == 0 && length(azurerm_role_definition.key_vault_secrets_editor) == 0
     error_message = "A shared vault's grants are shared/'s: the cells would both make them."
   }
 }

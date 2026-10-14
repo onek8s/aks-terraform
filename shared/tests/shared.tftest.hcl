@@ -676,7 +676,7 @@ run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
       "example/writer/22222222-2222-2222-2222-222222222222",
       "example/writer/44444444-4444-4444-4444-444444444444",
     ])
-    error_message = "The edit and admin groups should manage the namespace's secrets, each once - and the view group get nothing."
+    error_message = "The admin group and the writers should manage the namespace's secrets, each once - an edit group that is also a writer stays one - and the view group get nothing."
   }
   assert {
     condition = alltrue([
@@ -684,6 +684,60 @@ run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
       strcontains(azurerm_role_assignment.key_vault_namespace_writer["example/writer/44444444-4444-4444-4444-444444444444"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
     ])
     error_message = "The admin group should be held to the namespace's secrets by its condition."
+  }
+  assert {
+    condition     = length(azurerm_role_assignment.key_vault_namespace_editor) == 0
+    error_message = "An edit group that is also a writer should not get the narrower Secrets Editor role too."
+  }
+}
+
+# An edit group writes and updates the namespace's secrets and reads their attributes, never a value:
+# a custom role at the resource group, under the namespace's condition.
+run "an_edit_group_writes_secrets_without_reading_them" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      example = {
+        groups = {
+          edit  = "22222222-2222-2222-2222-222222222222"
+          admin = "44444444-4444-4444-4444-444444444444"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_writer) == ["example/writer/44444444-4444-4444-4444-444444444444"],
+      keys(azurerm_role_assignment.key_vault_namespace_editor) == ["example/editor/22222222-2222-2222-2222-222222222222"],
+      azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].principal_type == "Group",
+      strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_editor["example/editor/22222222-2222-2222-2222-222222222222"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+    ])
+    error_message = "The edit group should get the Secrets Editor role, held to the namespace's secrets; the admin group Secrets Officer."
+  }
+  assert {
+    condition = alltrue([
+      toset(one(azurerm_role_definition.key_vault_secrets_editor[0].permissions).data_actions) == toset([
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/update/action",
+      ]),
+      length(coalesce(one(azurerm_role_definition.key_vault_secrets_editor[0].permissions).actions, [])) == 0,
+      azurerm_role_definition.key_vault_secrets_editor[0].name == "OneK8s Key Vault Secrets Editor (${var.resource_group_name})",
+      azurerm_role_definition.key_vault_secrets_editor[0].assignable_scopes == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/${var.resource_group_name}"]),
+    ])
+    error_message = "The role should write, update and read the attributes of secrets - never getSecret, delete or purge - defined and assignable at the resource group."
+  }
+}
+
+run "no_edit_groups_no_editor_role" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_definition.key_vault_secrets_editor) == 0 && length(azurerm_role_assignment.key_vault_namespace_editor) == 0
+    error_message = "Without edit groups there should be no custom role."
   }
 }
 

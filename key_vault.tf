@@ -103,7 +103,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_reader" {
 }
 
 # The people and pipelines who may write in a namespace - its `writer` and `admin` grants and its
-# `edit` and `admin` groups in managed_namespaces - manage its secrets in the vault too, and only its secrets: they can create,
+# `admin` group in managed_namespaces - manage its secrets in the vault too, and only its secrets: they can create,
 # change, delete and recover the ones under the namespace's prefix. They work with secrets only; a
 # certificate is imported by someone holding Key Vault Administrator. On the cluster's own vault only:
 # shared/ grants the shared one's writers.
@@ -116,6 +116,33 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   principal_type       = each.value.principal_type
   condition_version    = "2.0"
   condition            = local.key_vault_write_conditions[each.value.namespace]
+}
+
+# The `edit` groups' role (design section 7, D51): write and update a secret and read its attributes,
+# never its value - see modules/conventions. On the cluster's own vault only, like the writers; defined
+# at the resource group, named after the cluster (custom role names are unique in the tenant).
+resource "azurerm_role_definition" "key_vault_secrets_editor" {
+  count = length(local.key_vault_editor_role_assignments) > 0 ? 1 : 0
+
+  name              = "Key Vault Secrets Editor (${var.name})"
+  scope             = data.azurerm_resource_group.this.id
+  assignable_scopes = [data.azurerm_resource_group.this.id]
+  description       = "Writes and updates the secrets of ${var.name}'s Key Vault and reads their attributes, without reading a value. Assigned under an ABAC condition holding it to one namespace's secrets."
+
+  permissions {
+    data_actions = module.conventions.key_vault_secrets_editor_data_actions
+  }
+}
+
+resource "azurerm_role_assignment" "key_vault_namespace_editor" {
+  for_each = local.key_vault_editor_role_assignments
+
+  principal_id       = each.value.principal_id
+  scope              = local.key_vault_id
+  role_definition_id = azurerm_role_definition.key_vault_secrets_editor[0].role_definition_resource_id
+  principal_type     = "Group"
+  condition_version  = "2.0"
+  condition          = local.key_vault_write_conditions[each.value.namespace]
 }
 
 # The cluster's admin groups run the whole vault: the platform's secrets and certificates - the

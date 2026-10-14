@@ -658,7 +658,8 @@ cluster, which tells the Flux repository each namespace's vault as `key_vault_ur
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
 | The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or, on the shared vault, as the environment's `id-<region>-<environment>-shared-kv-<namespace>` | `Key Vault Secrets User` | Reads the value and the metadata of a secret only if it is the namespace's own; lists nothing |
-| The namespace's `writer` and `admin` grants and its `edit` and `admin` groups in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, reads, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only; lists nothing |
+| The namespace's `writer` and `admin` grants and its `admin` group in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, reads, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only; lists nothing |
+| The namespace's `edit` group in `managed_namespaces` (D51) | Custom `OneK8s Key Vault Secrets Editor (<resource group>)` (shared/; `Key Vault Secrets Editor (<cluster>)` beside a cluster's own vault): `setSecret`, `update`, `readMetadata` | Creates and changes the namespace's own secrets and reads their attributes, by name - never a value; no delete, purge or restore; lists nothing |
 | The platform viewers (shared/ `platform_viewer_group_object_ids`) | Custom `OneK8s Platform Viewer (<resource group>)`, defined and assigned at the resource group | Lists every secret's name and attributes, never a value; lists the clusters' namespaces |
 | `entra_admin_group_object_ids` | `Key Vault Administrator` | None: the whole vault, certificates included |
 

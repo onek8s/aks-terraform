@@ -97,8 +97,10 @@ condition. Object IDs, not names.
 
 `groups` are the namespace's Entra ID groups of the clusters' `managed_namespaces.<ns>.groups` - the
 same object IDs - granted on the share what their Kubernetes role grants on Secrets (OneK8s design
-section 7): `edit` and `admin` manage the namespace's secrets like `writers` (`Key Vault Secrets
-Officer` under the namespace's condition: its own secrets, by name), `view` gets nothing. Nobody
+section 7): `admin` manages the namespace's secrets like `writers` (`Key Vault Secrets Officer`
+under the namespace's condition: its own secrets, by name); `edit` writes and updates them and reads
+their attributes, never a value (the custom role `OneK8s Key Vault Secrets Editor (<resource
+group>)`, same condition); `view` gets nothing. Nobody
 with a share lists the vault - see platform_viewer_group_object_ids. The Isolation tests check that
 the two lists agree.
 DESCRIPTION
@@ -452,6 +454,12 @@ DESCRIPTION
     condition     = alltrue([for group in var.platform_viewer_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", group))])
     error_message = "platform_viewer_group_object_ids must be Entra ID group object IDs."
   }
+}
+
+variable "key_vault_secrets_editor_role_name" {
+  type        = string
+  default     = null
+  description = "Name of the namespace `edit` groups' custom Key Vault role. Unique in the tenant; defaults to `OneK8s Key Vault Secrets Editor (<resource group>)`."
 }
 
 variable "platform_viewer_role_name" {

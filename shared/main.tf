@@ -73,13 +73,14 @@ locals {
     ]) : "${writer.namespace}/writer/${writer.principal_id}" => writer
   }
 
-  # The namespace's groups, as on its Kubernetes Secrets: `edit` and `admin` manage its secrets, like
-  # its writers - and merged with them, so a group that is both is granted once; `view` gets nothing,
-  # as Kubernetes' `view` sees no Secret.
+  # The namespace's groups, as on its Kubernetes Secrets: `admin` manages its secrets, like its
+  # writers - and merged with them, so a group that is both is granted once; `edit` writes and updates
+  # them without reading a value (the Secrets Editor role below), unless it is also the admin group or
+  # a writer, which grants more; `view` gets nothing, as Kubernetes' `view` sees no Secret.
   key_vault_group_writers = merge({
     for grant in flatten([
       for namespace, share in var.key_vault_namespaces : [
-        for group in distinct(compact([share.groups.edit, share.groups.admin])) : {
+        for group in compact([share.groups.admin]) : {
           namespace      = namespace
           principal_id   = lower(group)
           principal_type = "Group"
@@ -87,6 +88,18 @@ locals {
       ]
     ]) : "${grant.namespace}/writer/${grant.principal_id}" => grant
   }, local.key_vault_writers)
+
+  key_vault_group_editors = {
+    for grant in flatten([
+      for namespace, share in var.key_vault_namespaces : [
+        for group in compact([share.groups.edit]) : {
+          namespace    = namespace
+          principal_id = lower(group)
+        }
+      ]
+    ]) : "${grant.namespace}/editor/${grant.principal_id}" => grant
+    if !contains(keys(local.key_vault_group_writers), "${grant.namespace}/writer/${grant.principal_id}")
+  }
 }
 
 # The vault, on the Azure RBAC permission model - access policies know no conditions - and reached
@@ -175,6 +188,37 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   principal_type       = each.value.principal_type
   condition_version    = "2.0"
   condition            = module.conventions.key_vault_write_conditions[each.value.namespace]
+}
+
+# The `edit` groups' role (OneK8s design section 7, D51): write and update a secret and read its
+# attributes, never its value - see modules/conventions. Defined and assignable at the environment's
+# resource group, like the platform viewers' role; custom role names are unique in the tenant, hence
+# the resource group in the name.
+resource "azurerm_role_definition" "key_vault_secrets_editor" {
+  count = length(local.key_vault_group_editors) > 0 ? 1 : 0
+
+  name              = coalesce(var.key_vault_secrets_editor_role_name, "OneK8s Key Vault Secrets Editor (${local.resource_group_name})")
+  scope             = local.resource_group_id
+  assignable_scopes = [local.resource_group_id]
+  description       = "Writes and updates Key Vault secrets and reads their attributes, without reading a value. Assigned under an ABAC condition holding it to one namespace's secrets."
+
+  permissions {
+    data_actions = module.conventions.key_vault_secrets_editor_data_actions
+  }
+
+  depends_on = [azurerm_resource_group.this]
+}
+
+# Writing the namespace's own secrets without reading them, and no others.
+resource "azurerm_role_assignment" "key_vault_namespace_editor" {
+  for_each = var.create_role_assignments ? local.key_vault_group_editors : {}
+
+  principal_id       = each.value.principal_id
+  scope              = local.namespace_key_vault_ids[each.value.namespace]
+  role_definition_id = azurerm_role_definition.key_vault_secrets_editor[0].role_definition_resource_id
+  principal_type     = "Group"
+  condition_version  = "2.0"
+  condition          = module.conventions.key_vault_write_conditions[each.value.namespace]
 }
 
 # Every vault, whole: the platform's secrets and certificates - the gateways' listener certificates
