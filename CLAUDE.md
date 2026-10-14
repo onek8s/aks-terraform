@@ -146,6 +146,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Plan review 2026-10-14** (design PR: Firewall per exposure D53, no IPv6 D54, V13/V22): the design's
   network picture now has a hub and Firewall per exposure; no code changed anywhere. Open follow-ups when the user
   asks: azure-landing-zone `firewall` mode with the external hub (V22) and the firewall rules rewrite. IPv6: dropped.
+- **Backlog**: 17 items in priority order in design section 17 ("Backlog, in priority order", 2026-10-14), four
+  tiers: A now (1 promote the remaining policies to deny, 2 external hub Firewall in `firewall` mode, 3 private
+  endpoints for vaults and ACR, 4 private API server), B before acceptance (5 version pipeline, 6 agents on the build
+  tenant, 7 internal exposure, 8 second cell + cross-cell tests, 9 CIS follow-ups, 10 observability completion,
+  11 backups, 12 manifest CI checks), C phase 3 (13 open verifications and acceptance tests, 14 pentest / review),
+  D on trigger (15 stateful cluster, 16 WAF, 17 image promotion tests). Pick from the top unless the user says otherwise;
+  update the list there when an item is done.
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): mutations **on** - 5 + 2 per zone, so 9 in the ext subscription (zone placement from the namespace,
   `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,
