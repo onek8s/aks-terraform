@@ -31,7 +31,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 
 | Path | Purpose |
 | --- | --- |
-| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module], vendored in `modules/avm-managedcluster` with one input added (eBPF host routing at creation): looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
+| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
 | `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node, no uptime SLA. The two stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own, with the isolation zones' nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys and no persistent storage (`persistent_storage_enabled = false`); both serve `hello.ext-fi.dev.onek8s.lol` behind Traffic Manager. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
@@ -41,7 +41,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
 | `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, the manual deploy workflow for the dev environment's stacks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
-[module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.1
+[module]: https://registry.terraform.io/modules/Azure/avm-res-containerservice-managedcluster/azurerm/0.8.5
 
 ## Prerequisites
 
@@ -563,7 +563,7 @@ configuration provides is the API itself; the controller serving it is deployed 
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
 | `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `app_routing_gateway_api_enabled` (the stateless cells), else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. Stated either way, because AKS Automatic turns it on by default from Kubernetes 1.36. |
-| `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - patched to `2026-05-02-preview`, which also knows App Routing Istio (`modules/avm-managedcluster/VENDORED.md`). |
+| `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - `2026-03-02-preview`, which also knows App Routing Istio. |
 
 For every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
@@ -786,7 +786,7 @@ The `dev` stateless clusters are the design's cells. Beyond node auto provisioni
 | Variable | What it does | Design |
 | --- | --- | --- |
 | `isolation_zones` | Each zone's node subnet in the cell's network; the Flux repository is told its ID as `nap_subnet_id_<zone>` for the zone's `AKSNodeClass`, so a zone's nodes are in the zone's subnet behind the zone's NSG | sections 2, 4, 5 |
-| `advanced_networking` | Advanced Container Networking Services: Hubble, FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The last is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the vendored AVM module ([`modules/avm-managedcluster`](modules/avm-managedcluster/VENDORED.md), 0.8.3 with this one input added); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 16 |
+| `advanced_networking` | Advanced Container Networking Services: Hubble, FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The last is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 16 |
 | `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 18 |
 | `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 3, 4, 18 |
 | `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 12 |
@@ -992,7 +992,7 @@ DNS service IP  10.0.0.10
 This is the AVM module rather than AKS. `podCidr`, `serviceCidr` and `dnsServiceIP` are three of the
 four network properties the Automatic SKU *does* accept, but the module nulls the whole network
 profile before it filters it, for any Automatic cluster whose `outbound_type` is `loadBalancer`
-(`locals.network_profile.tf` in version 0.8.1). Nothing is sent, so Azure fills in its defaults.
+(`locals.network_profile.tf`, still so in version 0.8.5). Nothing is sent, so Azure fills in its defaults.
 
 It matters because `10.0.0.0/16` collides with a great many existing networks, and **the ranges are
 fixed at creation** - a cluster on the wrong ones has to be rebuilt. Terraform warns on every plan
@@ -1006,8 +1006,8 @@ There are three ways out, in order of how much they cost:
 2. **Set `outbound_type` to something other than `loadBalancer`.** The profile is then sent and the
    configured ranges survive - but `userDefinedRouting` needs a route table and somewhere for egress
    to go, so this is a real change to the network rather than a flag.
-3. **Carry a patched module.** The condition is one expression; upstream has no newer release with
-   it fixed as of 0.8.1.
+3. **Carry a patched module.** The condition is one expression; upstream has no release with
+   it fixed as of 0.8.5.
 
 Two more things worth knowing:
 

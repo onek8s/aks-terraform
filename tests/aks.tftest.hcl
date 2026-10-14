@@ -3723,6 +3723,14 @@ run "image_integrity_federates_ratify_with_the_shared_identity" {
   }
   assert {
     condition = alltrue([
+      azapi_update_resource.image_integrity.resource_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ContainerService/managedClusters/aks-test",
+      azapi_update_resource.image_integrity.type == "Microsoft.ContainerService/managedClusters@2026-05-02-preview",
+      azapi_update_resource.image_integrity.body.properties.securityProfile.imageIntegrity.enabled == true,
+    ])
+    error_message = "Image Integrity should be turned on in the cluster beside the module, on the preview API that knows it."
+  }
+  assert {
+    condition = alltrue([
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.image_verification_client_id == "88888888-8888-8888-8888-888888888888",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.image_signing_certificate_name == "image-signing",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.container_registry_login_server == "acrtest.azurecr.io",
@@ -3747,6 +3755,10 @@ run "no_image_integrity_by_default" {
       !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "image_verification_client_id")
     )
     error_message = "Without image_integrity_enabled there is no Ratify credential and nothing for Flux to configure."
+  }
+  assert {
+    condition     = azapi_update_resource.image_integrity.body.properties.securityProfile.imageIntegrity.enabled == false
+    error_message = "Image Integrity should be stated off, so that turning it off turns it off."
   }
 }
 

@@ -31,3 +31,24 @@ resource "azurerm_federated_identity_credential" "image_verification" {
   issuer                    = module.aks.oidc_issuer_profile_issuer_url
   subject                   = "system:serviceaccount:${replace(var.image_integrity_service_account, "/", ":")}"
 }
+
+# The cluster setting itself. The AVM module has no input for securityProfile.imageIntegrity, so it is
+# set beside the module, the way the module sets the Kubernetes version: a read, merge and PUT of the
+# cluster on the preview API (local.aks_api_version), after everything the module does to it. Stated
+# when off as well, so that turning it off turns it off.
+resource "azapi_update_resource" "image_integrity" {
+  resource_id = module.aks.resource_id
+  type        = "Microsoft.ContainerService/managedClusters@${local.aks_api_version}"
+  body = {
+    properties = {
+      securityProfile = {
+        imageIntegrity = {
+          enabled = var.image_integrity_enabled
+        }
+      }
+    }
+  }
+  locks = [module.aks.resource_id]
+
+  depends_on = [module.aks]
+}

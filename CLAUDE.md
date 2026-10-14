@@ -10,7 +10,7 @@ something here changes.
 | Repo | Role |
 |---|---|
 | `onek8s.github.io` | The design (docs/01-21, requirements.md, open-questions.md). Code follows it; change it when a decision changes it. |
-| `aks-terraform` (this one) | The clusters (root module, vendored AVM AKS module in `modules/avm-managedcluster`) and what an environment's clusters share (`shared/`: cell VNets + NSGs, platform and zone Key Vaults, private DNS, Traffic Manager, ACR). All deployment and status workflows live here. |
+| `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5) and what an environment's clusters share (`shared/`: cell VNets + NSGs, platform and zone Key Vaults, private DNS, Traffic Manager, ACR). All deployment and status workflows live here. |
 | `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Gateway, ESO, Cilium), NAP NodePools, external-dns, tenants. `clusters/<cluster>/` per cluster. |
 | `aks-fluxcd-example` | An application team's repo (namespace `ext-fi-example`, app aks-hello). |
 | `azure-landing-zone` | Build tenant, ALZ, hub, AKS policy assignments. No AKS clusters any more (the old `stacks/aks-stateless-cell` was removed). |
@@ -71,7 +71,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `image-signing` in `kv-onek8s-dev-platform` (non-exportable key) and identity
   `id-sec-dev-shared-ratify` (AcrPull, Secrets User on that one secret), federated per cluster with
   `gatekeeper-system/ratify-admin`. Fleet `infrastructure/image-verification` configures Ratify.
-  The vendored AVM module has a second patch for `securityProfile.imageIntegrity`. Verified on az1
+  The AVM module has no input for `securityProfile.imageIntegrity`: the root module sets it with an
+  `azapi_update_resource` beside the module (`image_integrity.tf`, API `aks_api_version`). Verified on az1
   2026-10-13: Ratify runs as `gatekeeper-system/ratify-admin` with the WI token, the signed aks-hello
   is not reported, the unsigned probe is. Two Notation constraints exist: ours and the landing zone's
   `Deploy-MCSB2-Monitoring` one (default exclusions); both report the platform's upstream images
@@ -170,9 +171,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   the ConfigMap in the Gateway's `spec.infrastructure.parametersRef` (allow list: nodeSelector,
   tolerations, resources, Service annotations/ETP...). No Istio service mesh add-on (mutually exclusive).
   Accepted losses: no rate limits / request size limits / EnvoyFilter in the gateway. Needs a preview
-  cluster API that knows `appRoutingIstio`: the vendored AVM module's third patch moves its pinned
-  `2025-09-02-preview` to `2026-05-02-preview` (newest azapi 2.13 validates); upstream request drafted on
-  the PR.
+  cluster API that knows `appRoutingIstio`: AVM 0.8.5 (upstream fix of our report) pins
+  `2026-03-02-preview` when the ALB setting is stated, which knows it.
 - **Public API server in dev** (authorized ranges, Entra ID only, local accounts off) - a lab
   exception the user asked for. Private API server stays the design for acc/prd.
 - **Isolation zones** int-fi, int-se, ext-fi, ext-se: per cell a /24 each (nodes /25, ILB /27),
@@ -191,9 +191,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   spot when available, else on-demand; one that does not stays on on-demand. amd64 and arm64 both
   offered; a pod pins `kubernetes.io/arch` or takes either. aks-hello is amd64 only.
 - **eBPF host routing (BpfVeth) only at cluster creation**: AKS refuses to enable it on a running
-  cluster ("User-installed iptables rules found"). That is why the AVM module is vendored (first patch:
-  `network_profile.advanced_networking.performance.acceleration_mode`), see
-  `modules/avm-managedcluster/VENDORED.md`. An upstream feature request was drafted on PR #65.
+  cluster ("User-installed iptables rules found"). AVM 0.8.5 has the input
+  (`network_profile.advanced_networking.performance.acceleration_mode`, our upstream report); the module
+  was vendored with patches until 2026-10-14 and is back on the registry.
 - **CMK**: per cluster `key-<cluster>-kms` and `key-<cluster>-disk` in `kv-onek8s-dev-platform`
   (purge protection), DES `des-<cluster>`, encryption at host. Azure Linux, SSH off, system pool
   tainted `CriticalAddonsOnly`, Kubernetes 1.36, auto-upgrade none, Free tier.
