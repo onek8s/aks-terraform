@@ -93,7 +93,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   Service labelled `gateway.networking.k8s.io/gateway-name: <gateway>` like App Routing's, Cilium policy
   `gateway-traefik` for the API server), applied by one Flux configuration `traefik-<gateway>` per Gateway
   (`traefik.tf`; zones + platform). The fleet's Gateways name `${gateway_class_name}` from the settings
-  `gateway_class_name_<gateway>`; the fleet's ConfigMap `gateway` only matters for App Routing. App Routing
+  `gateway_class_name_<gateway>` and add the kustomize component `gateway-implementations/${gateway_implementation}`
+  (setting `gateway_implementation`): App Routing's ConfigMap `gateway` + `parametersRef` only there, because Traefik
+  refuses a `parametersRef` (`Accepted: False`). Verified on az1 2026-10-14: three Gateways Programmed on
+  `traefik-<gateway>`, DNS followed the new LB IPs, no Pending pods, system node at 71 % memory requests. App Routing
   (`approuting-istio`) stays a supported choice: switch the tfvars back (and `node_count = 2`); the Gateways carry
   Flux `force`, so a class change re-creates them (a few minutes without gateways).
 - **CIS AKS Benchmark** (2026-10-13): first run on az1 55 % (23 of 42 automated recommendations); every
@@ -190,9 +193,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - A cell with no applications is **one** 4-vCPU system node (Standard_D4als_v6, 2026-10-14) - only with Traefik and
   without the VPA add-on: then ~3.8 GiB of requests of the 5.8 GiB allocatable (with either, more than 5.8). Each zone with
   application pods adds NAP nodes.
-- aks-hello runs **2 replicas** (rollout guardrails), still on the system nodes.
+- **One zone spot node stays with one system node** (seen 2026-10-14): AKS's `cilium-operator` runs 2 replicas with
+  required host anti-affinity and tolerates every taint, so the second replica made NAP create a small zone node
+  (`aks-extsespot-*`, Standard_D2ps_v6 spot, arm64) and stays there (hubble-relay joined it); NAP cannot consolidate it.
+  AKS-managed - accepted (a spot D2ps_v6 costs a fraction of the second D4als_v6 it replaced).
+- aks-hello runs **2 replicas** (rollout guardrails), still on the system node.
 - **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
-  the system node too, so dev normally runs zero zone nodes: az1 is just its system nodes. The
+  the system node too, so dev runs no zone node for applications (only the cilium-operator one above). The
   Isolation tests' probe pod still uses the ext-fi zone, so a test run briefly creates a zone node
   (NAP removes it ~5 min after). Remove the patch to put the app back on zone nodes.
 
