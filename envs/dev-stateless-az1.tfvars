@@ -148,6 +148,12 @@ managed_namespaces = {
     labels = {
       "platform/zone" = "ext-fi"
     }
+    # TRIAL ONLY (branch namespace-groups-trial, not merged): placeholder group IDs.
+    groups = {
+      view  = "0a0a0a0a-0000-4000-8000-000000000001"
+      edit  = "0a0a0a0a-0000-4000-8000-000000000002"
+      admin = "0a0a0a0a-0000-4000-8000-000000000003"
+    }
     network_policy = {
       ingress = "AllowSameNamespace"
       egress  = "AllowSameNamespace"
