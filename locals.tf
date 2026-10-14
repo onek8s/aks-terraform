@@ -157,6 +157,35 @@ locals {
   }
 
 
+  # The role bindings of managed_namespaces[*].groups, as one Flux configuration per namespace that
+  # names a group: cluster scope in flux-system, reading the cluster's own repository, with one
+  # Kustomization per role that applies `<namespace_access_path>/<role>` with the namespace and the
+  # group filled in. One configuration per namespace because Azure refuses two Kustomizations of one
+  # configuration on the same path - and every namespace's view binding is made from the same one.
+  # Removing a group removes its Kustomization, and Flux deletes the binding with it.
+  managed_namespace_access_flux_configurations = local.flux_enabled ? {
+    for name, namespace in var.managed_namespaces : name => {
+      properties = merge(local.flux_configuration_body.properties, {
+        kustomizations = {
+          for binding in values(local.managed_namespace_role_bindings) : binding.role => {
+            path                   = "${trimsuffix(var.namespace_access_path, "/")}/${binding.role}"
+            prune                  = true
+            syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
+            retryIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
+            wait                   = true
+            postBuild = {
+              substitute = {
+                namespace       = binding.namespace
+                role            = binding.role
+                group_object_id = binding.group_object_id
+              }
+            }
+          } if binding.namespace == name
+        }
+      })
+    } if length([for role in ["view", "edit", "admin"] : role if namespace.groups[role] != null]) > 0
+  } : {}
+
   # The Kubernetes service accounts the workload identities are federated with. They are created by
   # the Flux repository, which has to use exactly these names and namespaces: a federated credential
   # trusts one subject and nothing else. Every namespace with a share of the Key Vault reads it as a
@@ -197,9 +226,24 @@ locals {
 
   # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
   # manages its share of the vault as well. Keyed like the grants they come from.
-  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_owned ? {
+  # The groups of `groups` get the same as their Kubernetes role (design section 6): `edit` and `admin`
+  # manage the namespace's secrets, `view` sees their names and attributes - `Key Vault Reader`,
+  # never a value, as Kubernetes' `view` reads no Secret.
+  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_owned ? merge({
+    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/writer/${binding.group_object_id}" => {
+      namespace      = binding.namespace
+      principal_id   = binding.group_object_id
+      principal_type = "Group"
+    } if binding.role != "view"
+    }, {
     for key, grant in local.managed_namespace_access_grants : key => grant
     if contains(["admin", "writer"], grant.role)
+  }) : {}
+  key_vault_viewer_role_assignments = var.create_role_assignments && local.key_vault_owned ? {
+    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/viewer/${binding.group_object_id}" => {
+      namespace    = binding.namespace
+      principal_id = binding.group_object_id
+    } if binding.role == "view"
   } : {}
 
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
@@ -511,7 +555,18 @@ locals {
   # Every grant asked for, keyed by what it grants rather than by its position in the list: an entry
   # removed from the middle of `access` must not renumber the assignments after it and have Azure
   # drop and recreate them.
-  managed_namespace_access_grants = {
+  #
+  # Every group of `groups` comes with `namespace_user`, so that its members can fetch a kubeconfig
+  # for the namespace; merged rather than listed twice, since `access` may grant the same.
+  managed_namespace_access_grants = merge({
+    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/namespace_user/${binding.group_object_id}" => {
+      key            = "${binding.namespace}/namespace_user/${binding.group_object_id}"
+      namespace      = binding.namespace
+      principal_id   = binding.group_object_id
+      principal_type = "Group"
+      role           = "namespace_user"
+    }
+    }, {
     for grant in flatten([
       for name, namespace in var.managed_namespaces : [
         for access in namespace.access : {
@@ -523,6 +578,20 @@ locals {
         }
       ]
     ]) : grant.key => grant
+  })
+
+  # The Kubernetes RoleBindings of `managed_namespaces[*].groups`: one per namespace and role that
+  # names a group, keyed `<namespace>-<role>`. Which ones there are follows from the inputs alone.
+  managed_namespace_role_bindings = {
+    for binding in flatten([
+      for name, namespace in var.managed_namespaces : [
+        for role in ["view", "edit", "admin"] : {
+          namespace       = name
+          role            = role
+          group_object_id = lower(namespace.groups[role])
+        } if namespace.groups[role] != null
+      ]
+    ]) : "${binding.namespace}-${binding.role}" => binding
   }
 
   # ... and the ones made here. An estate with role assignments managed elsewhere gets these from

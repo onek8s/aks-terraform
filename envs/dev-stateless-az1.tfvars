@@ -148,6 +148,14 @@ managed_namespaces = {
     labels = {
       "platform/zone" = "ext-fi"
     }
+    # Who may work in the namespace (design section 7, D49): an Entra ID group per Kubernetes role,
+    # bound by RoleBindings platform-<role>. Lab groups grp-onek8s-dev-ext-fi-example-<role>, each with
+    # a tester application the isolation tests sign in as (tests/isolation/namespace-access-testers.yaml).
+    groups = {
+      view  = "6d9ae939-5e03-4ddb-b378-baa7fa5b5180"
+      edit  = "88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc"
+      admin = "71438fbc-0666-4d82-be17-54b61236d657"
+    }
     network_policy = {
       ingress = "AllowSameNamespace"
       egress  = "AllowSameNamespace"

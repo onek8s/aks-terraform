@@ -16,9 +16,9 @@ name: Deploy
 #   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
 #                        not deployed for now).
 #
-# After an apply of a stateless cell, the Isolation tests and CIS benchmark workflows run against it
-# as further stages (jobs isolation-tests, cis-benchmark); after an apply of dev-shared, Sign images
-# signs the registry's new images (job sign-images).
+# After an apply of a stateless cell, the Isolation tests workflow runs against it as a further stage
+# (job isolation-tests); after an apply of dev-shared, Sign images signs the registry's new images
+# (job sign-images). The CIS benchmark runs by hand only.
 #
 # Each stack has a state of its own - so a cluster can be destroyed and built again without touching
 # the shared resources or the other clusters - in the azurerm backend of its terraform.tf, as
@@ -285,16 +285,6 @@ jobs:
     needs: deploy
     if: inputs.action == 'apply' && startsWith(inputs.stack, 'dev-stateless-')
     uses: ./.github/workflows/isolation-tests.yml
-    with:
-      cluster: aks-${{ inputs.stack }}
-    secrets: inherit
-
-  # The CIS AKS Benchmark (design sections 14 and 17) on the cell as applied.
-  cis-benchmark:
-    name: cis benchmark
-    needs: deploy
-    if: inputs.action == 'apply' && startsWith(inputs.stack, 'dev-stateless-')
-    uses: ./.github/workflows/cis-benchmark.yml
     with:
       cluster: aks-${{ inputs.stack }}
     secrets: inherit

@@ -3875,3 +3875,225 @@ run "rejects_owner_labels_set_by_hand" {
 
   expect_failures = [var.managed_namespaces]
 }
+
+# managed_namespaces[*].groups: an Entra ID group per built-in role, bound inside the namespace by a
+# RoleBinding that a Flux configuration of the namespace's own applies, one Kustomization per role.
+run "namespace_groups_get_a_role_binding_each_through_flux" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url  = "https://github.com/example/cluster-config"
+      path = "./clusters/aks-test"
+    }
+    managed_namespaces = {
+      team-payments = {
+        groups = {
+          view  = "11111111-1111-1111-1111-111111111111"
+          edit  = "22222222-2222-2222-2222-222222222222"
+          admin = "33333333-3333-3333-3333-333333333333"
+        }
+      }
+      # One role only: no binding for the other two.
+      team-search = {
+        groups = { view = "AAAAAAAA-4444-4444-4444-444444444444" }
+      }
+      team-batch = {}
+    }
+  }
+
+  assert {
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration)) == toset(["team-payments", "team-search"])
+    error_message = "Every namespace that names a group, and only those, should get a Flux configuration for its bindings."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].name == "team-payments-access"
+    error_message = "A namespace's binding configuration should be named <namespace>-access."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations)) == toset(["view", "edit", "admin"])
+    error_message = "Every role that names a group should get a Kustomization."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations)) == toset(["view"])
+    error_message = "A role without a group should get no Kustomization."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.path == "./infrastructure/namespace-access/edit"
+    error_message = "A binding should be applied from its role's directory under namespace_access_path: Azure refuses two Kustomizations on one path."
+  }
+  assert {
+    condition = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.postBuild.substitute == {
+      namespace       = "team-payments"
+      role            = "edit"
+      group_object_id = "22222222-2222-2222-2222-222222222222"
+    }
+    error_message = "A binding's Kustomization should be told its namespace, its role and its group."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations.view.postBuild.substitute.group_object_id == "aaaaaaaa-4444-4444-4444-444444444444"
+    error_message = "The group's object ID should be sent in lower case, as Entra ID puts it into the token."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.prune
+    error_message = "A binding's Kustomization should prune, so that removing the group removes the binding."
+  }
+  assert {
+    condition = (
+      azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.scope == "cluster"
+      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.namespace == "flux-system"
+      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.gitRepository.url == "https://github.com/example/cluster-config"
+    )
+    error_message = "The binding configuration should read the cluster's repository at cluster scope from flux-system."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations)) == toset(["platform"])
+    error_message = "The platform configuration should be unchanged by the bindings."
+  }
+}
+
+# Each group's members can fetch a kubeconfig for the namespace, and only for it.
+run "namespace_groups_get_namespace_user_on_their_namespace" {
+  command = plan
+
+  variables {
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    managed_namespaces = {
+      team-payments = {
+        groups = {
+          view = "11111111-1111-1111-1111-111111111111"
+          edit = "22222222-2222-2222-2222-222222222222"
+        }
+        # The same grant through access as well: made once.
+        access = [{ role = "namespace_user", principal_id = "22222222-2222-2222-2222-222222222222" }]
+      }
+    }
+  }
+
+  assert {
+    condition = toset(keys(azurerm_role_assignment.managed_namespace)) == toset([
+      "team-payments/namespace_user/11111111-1111-1111-1111-111111111111",
+      "team-payments/namespace_user/22222222-2222-2222-2222-222222222222",
+    ])
+    error_message = "Every group should get Namespace User on its namespace, once."
+  }
+  assert {
+    condition = alltrue([
+      for assignment in azurerm_role_assignment.managed_namespace :
+      assignment.role_definition_name == "Azure Kubernetes Service Namespace User" && assignment.principal_type == "Group"
+    ])
+    error_message = "The groups should get Azure Kubernetes Service Namespace User, as groups."
+  }
+}
+
+run "namespace_access_path_can_be_moved" {
+  command = plan
+
+  variables {
+    flux_git_repository   = { url = "https://github.com/example/cluster-config" }
+    namespace_access_path = "./rbac"
+    managed_namespaces = {
+      team-payments = { groups = { admin = "33333333-3333-3333-3333-333333333333" } }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.path == "./rbac/admin"
+    error_message = "The bindings should be applied from namespace_access_path."
+  }
+}
+
+run "namespace_groups_without_flux_are_warned_about" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = { groups = { view = "11111111-1111-1111-1111-111111111111" } }
+    }
+  }
+
+  expect_failures = [check.namespace_groups_need_flux]
+}
+
+run "rejects_a_namespace_group_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      team-payments = { groups = { edit = "team-payments-developers" } }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+run "rejects_a_namespace_with_groups_and_a_name_too_long_for_its_kustomizations" {
+  command = plan
+
+  variables {
+    managed_namespaces = {
+      "team-payments-with-a-name-far-too-long-to-be-labelled" = { groups = { view = "11111111-1111-1111-1111-111111111111" } }
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
+# Beside the cluster's own vault, the groups get on the namespace's secrets what their Kubernetes role
+# gets on Secrets; shared/ does the same for the environment's shared vaults.
+run "namespace_groups_get_their_kubernetes_role_on_the_namespaces_secrets" {
+  command = plan
+
+  variables {
+    key_vault_name      = "kv-aks-test"
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    managed_namespaces = {
+      team-payments = {
+        groups = {
+          view  = "11111111-1111-1111-1111-111111111111"
+          edit  = "22222222-2222-2222-2222-222222222222"
+          admin = "33333333-3333-3333-3333-333333333333"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = toset(keys(azurerm_role_assignment.key_vault_namespace_writer)) == toset([
+      "team-payments/writer/22222222-2222-2222-2222-222222222222",
+      "team-payments/writer/33333333-3333-3333-3333-333333333333",
+    ])
+    error_message = "The edit and admin groups should manage the namespace's secrets."
+  }
+  assert {
+    condition     = strcontains(azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].condition, "StringStartsWith 'team-payments--'")
+    error_message = "The groups should be held to the namespace's secrets."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.key_vault_namespace_viewer) == ["team-payments/viewer/11111111-1111-1111-1111-111111111111"],
+      azurerm_role_assignment.key_vault_namespace_viewer["team-payments/viewer/11111111-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Reader",
+    ])
+    error_message = "The view group should get Key Vault Reader."
+  }
+}
+
+run "namespace_groups_get_nothing_on_a_shared_vault_from_the_cluster" {
+  command = plan
+
+  variables {
+    key_vault_name      = "kv-sec-test-shared"
+    key_vault_create    = false
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    managed_namespaces = {
+      team-payments = { groups = { view = "11111111-1111-1111-1111-111111111111", edit = "22222222-2222-2222-2222-222222222222" } }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0 && length(azurerm_role_assignment.key_vault_namespace_viewer) == 0
+    error_message = "A shared vault's grants are shared/'s: the cells would both make them."
+  }
+}

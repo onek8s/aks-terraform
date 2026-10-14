@@ -1,12 +1,18 @@
-name: Entra test groups (temporary)
+name: Entra test groups
 
-# TEMPORARY - removed once its output is in envs/*.tfvars and tests/namespace-access/testers.yaml.
+# Manual. Creates in the build tenant, signed in as the owner service principal (secret AZURE_OWNER,
+# Global Administrator in the lab tenant), what the namespace access tests need: for one namespace
+# one Entra ID security group per Kubernetes role (view, edit, admin) and one tester application per
+# group, a member of it, that GitHub Actions of this repository's `dev` environment can sign in as
+# (federated credential, no secret). Idempotent: what exists is reused, a federated credential on an
+# outdated subject is replaced. Prints the object IDs of the groups and the client IDs of the testers:
+# put the groups into managed_namespaces.<ns>.groups (envs/*.tfvars) and key_vault_namespaces.<ns>.groups
+# (shared/envs/dev.tfvars), the testers into tests/isolation/namespace-access-testers.yaml.
 #
-# Creates in the build tenant, signed in as the owner service principal (secret AZURE_OWNER), what the
-# namespace access tests need: for ext-fi-example one Entra ID security group per role (view, edit,
-# admin) and one tester application per group, a member of it, that GitHub Actions of this
-# repository's `dev` environment can sign in as (federated credential, no secret). Idempotent: what
-# exists is reused. Prints the object IDs of the groups and the client IDs of the testers.
+# The organization puts the immutable owner and repository IDs into its OIDC subjects
+# (azure-landing-zone, docs/deployment.md), so the credential trusts
+# repo:onek8s@340519759/aks-terraform@1340382905:environment:dev - the subject of the Isolation tests'
+# token, as of the Deploy identity's in azure-landing-zone stacks/platform-extensions.
 
 on:
   workflow_dispatch:
@@ -25,7 +31,7 @@ jobs:
     environment: dev
     env:
       NAMESPACE: ${{ inputs.namespace }}
-      SUBJECT: repo:${{ github.repository }}:environment:dev
+      SUBJECT: repo:onek8s@340519759/aks-terraform@1340382905:environment:dev
     steps:
       - name: Sign in to Azure (owner)
         env:
@@ -53,12 +59,19 @@ jobs:
             appid="$(az ad app list --display-name "$app" --query '[0].appId' -o tsv)"
             [ -n "$appid" ] || appid="$(az ad app create --display-name "$app" --sign-in-audience AzureADMyOrg --query appId -o tsv)"
             spid="$(az ad sp list --filter "appId eq '$appid'" --query '[0].id' -o tsv)"
-            [ -n "$spid" ] || spid="$(az ad sp create --id "$appid" --query id -o tsv)"
-            if [ -z "$(az ad app federated-credential list --id "$appid" --query "[?subject=='$SUBJECT'].name" -o tsv)" ]; then
+            # Graph replication: a new application may not be found by the service principal API at once.
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -n "$spid" ] && break
+              spid="$(az ad sp create --id "$appid" --query id -o tsv 2>/dev/null)" || sleep 10
+            done
+            [ -n "$spid" ] || { echo "::error::No service principal for $app"; exit 1; }
+            # One credential, github-dev, on SUBJECT: an older one on another subject is replaced.
+            current="$(az ad app federated-credential list --id "$appid" --query "[?name=='github-dev'].subject" -o tsv)"
+            if [ "$current" != "$SUBJECT" ]; then
+              [ -z "$current" ] || az ad app federated-credential delete --id "$appid" --federated-credential-id github-dev
               az ad app federated-credential create --id "$appid" -o none --parameters "$(jq -nc --arg s "$SUBJECT" \
                 '{name:"github-dev",issuer:"https://token.actions.githubusercontent.com",subject:$s,audiences:["api://AzureADTokenExchange"]}')"
             fi
-            # Graph replication: a new service principal may not be visible to the group API at once.
             for i in 1 2 3 4 5 6; do
               [ "$(az ad group member check --group "$gid" --member-id "$spid" --query value -o tsv)" = true ] && break
               az ad group member add --group "$gid" --member-id "$spid" -o none 2>/dev/null || sleep 10

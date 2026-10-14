@@ -108,7 +108,16 @@ key_vault_namespaces = {
   int-se-gateway   = {}
   ext-fi-gateway   = {}
   ext-se-gateway   = {}
-  ext-fi-example   = { zone = "ext-fi" }
+  # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 6, D49):
+  # the same object IDs as managed_namespaces.ext-fi-example.groups in the cells' tfvars.
+  ext-fi-example = {
+    zone = "ext-fi"
+    groups = {
+      view  = "6d9ae939-5e03-4ddb-b378-baa7fa5b5180"
+      edit  = "88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc"
+      admin = "71438fbc-0666-4d82-be17-54b61236d657"
+    }
+  }
 }
 
 # The token every cluster's Flux webhook receiver checks GitHub's deliveries against.

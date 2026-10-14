@@ -28,14 +28,22 @@ reads; job logs via `get_job_logs`).
 |---|---|
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-stateless-az1` / `dev-stateless-az2` / `dev-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota, every policy constraint's violations per object, and who wrote each Secret of the zone namespaces (managed fields). `node_iptables` option for eBPF debugging. Read it before promoting a policy to deny. |
-| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
-| `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. Runs after every Deploy apply of a stateless cell, Mondays 06:20 UTC, and by hand. |
+| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`: RoleBindings match the tfvars' `groups`, each role's rights by impersonating a group member and signed in as a tester app from `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
+| `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only** (2026-10-14, the user's choice to speed up testing: no schedule, no Deploy stage). |
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-dev-platform` without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
+| `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` input, groups `grp-onek8s-dev-<ns>-{view,edit,admin}` and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
+| `lab-admin.yml` (Lab admin) | Manual, **last resort**: runs ONE `az` (as `AZURE_OWNER`, on the dev subscription) or `gh` (with `GH_OWNER`) command; `args` split like a shell, no pipes (use `--query`/`--jq`). For special changes nothing else covers (Entra ID, Graph, org/repo settings). The run log is readable by anyone who can read the repo: never print a secret. |
+
+**Owner credentials (lab only, last option, allowed whenever needed):** `AZURE_OWNER` - org secret, `az ad sp
+create-for-rbac` JSON of an SPN that is Owner on the lab subscriptions and **Global Administrator** of the lab
+tenant (so Graph works: groups, apps, role assignments); `GH_OWNER` - org secret, a GitHub admin token of the
+onek8s organization (also the fallback of `flux-webhooks.yml`). Use them through `lab-admin.yml`,
+`entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
 Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
 tests) and in `shared/` (24+), `kustomize build` for changed fleet directories; for a policy change in
@@ -102,6 +110,18 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   shared/ `monthly_budget` (budget.tf): subscription budget 600/month, Owners told at 80 %/100 % actual and
   100 % forecast. CIS on az1 56 % (23 of 41); the Grafana collectors' findings (4.1.2, 4.1.6, 4.2.8,
   4.5.1) are accepted by D48.
+- **Namespace access groups** (2026-10-14, D49): `managed_namespaces.<ns>.groups = { view, edit, admin }` (Entra ID
+  group object IDs, each optional). Per namespace with groups a cluster-scope Flux configuration `<ns>-access`
+  (flux-system) with a Kustomization per role applying the fleet's `infrastructure/namespace-access/<role>`
+  (RoleBinding `platform-<role>` -> ClusterRole `<role>`, subject Group `<object ID>`) - one configuration per
+  namespace because **Azure refuses two Kustomizations of one Flux configuration on the same path** - plus Azure
+  role `Azure Kubernetes Service Namespace User` on the namespace for each group.
+  Kubernetes RBAC, so it works beside Azure RBAC. The older `access` list (Azure RBAC roles) still exists.
+  On the namespace's Key Vault share the same groups get the matching rights: `view` Key Vault Reader (names,
+  never values), `edit`/`admin` Key Vault Secrets Officer under the `<ns>--` ABAC write condition - granted by
+  shared/ (`key_vault_namespaces.<ns>.groups`, same IDs; the isolation test checks they agree) or by the root
+  module for a cluster's own vault. Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
+  admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
@@ -230,6 +250,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   resolve `*.hcp.<region>.azmk8s.io`, which their Cilium DNS rules must allow.
 - **The system nodes are full**: memory requests ~99 % / 92 % of ~5.8 GiB allocatable per D4als_v6, mostly
   AKS's own pods (istiod 2 GiB). New system-pool workloads need small requests or node-critical priority.
+- **GitHub OIDC subjects of this org carry immutable IDs** (`repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`),
+  not `repo:onek8s/aks-terraform:...`: a federated credential on the short form gets 401 at Entra ID.
+- **Azure refuses two Kustomizations of one Flux configuration on the same path** (`InvalidInputParameter`).
+- `kubectl auth can-i` on an Azure RBAC cluster answers `no - Azure does not have opinion...`: parse the first word.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml` (encrypted to the vault key
   `secret-transport`), never into Git or a workflow input.
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),

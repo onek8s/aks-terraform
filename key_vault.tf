@@ -102,8 +102,8 @@ resource "azurerm_role_assignment" "key_vault_namespace_reader" {
   condition            = local.key_vault_read_conditions[each.key]
 }
 
-# The people and pipelines who may write in a namespace - its `writer` and `admin` grants in
-# managed_namespaces - manage its secrets in the vault too, and only its secrets: they can create,
+# The people and pipelines who may write in a namespace - its `writer` and `admin` grants and its
+# `edit` and `admin` groups in managed_namespaces - manage its secrets in the vault too, and only its secrets: they can create,
 # change, delete and recover the ones under the namespace's prefix. They work with secrets only; a
 # certificate is imported by someone holding Key Vault Administrator. On the cluster's own vault only:
 # shared/ grants the shared one's writers.
@@ -116,6 +116,19 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   principal_type       = each.value.principal_type
   condition_version    = "2.0"
   condition            = local.key_vault_write_conditions[each.value.namespace]
+}
+
+# The view groups of managed_namespaces[*].groups: the names and attributes of the vault's secrets,
+# never a value - what Kubernetes' `view` is to Secrets. Listing is not gated by a condition (see
+# key_vault_read_conditions), so this is the whole vault's metadata, as every share already lists it.
+# On the cluster's own vault only: shared/ grants the shared one's.
+resource "azurerm_role_assignment" "key_vault_namespace_viewer" {
+  for_each = local.key_vault_viewer_role_assignments
+
+  principal_id         = each.value.principal_id
+  scope                = local.key_vault_id
+  role_definition_name = "Key Vault Reader"
+  principal_type       = "Group"
 }
 
 # The cluster's admin groups run the whole vault: the platform's secrets and certificates - the

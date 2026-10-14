@@ -75,6 +75,11 @@ variable "key_vault_namespaces" {
       principal_id   = string
       principal_type = optional(string, "Group")
     })), [])
+    groups = optional(object({
+      view  = optional(string)
+      edit  = optional(string)
+      admin = optional(string)
+    }), {})
   }))
   description = <<DESCRIPTION
 The namespaces with a share of the vault, in any cluster of the environment: each owns the secrets
@@ -89,6 +94,12 @@ vault - `flux-system`, say.
 
 `writers` manage the namespace's secrets and no others: `Key Vault Secrets Officer` under the same
 condition. Object IDs, not names.
+
+`groups` are the namespace's Entra ID groups of the clusters' `managed_namespaces.<ns>.groups` - the
+same object IDs - granted on the share what their Kubernetes role grants on Secrets (OneK8s design
+section 7): `edit` and `admin` manage the namespace's secrets like `writers` (`Key Vault Secrets
+Officer` under the namespace's condition), `view` gets `Key Vault Reader` - the names and attributes
+of the vault's secrets, never a value. The Isolation tests check that the two lists agree.
 DESCRIPTION
   nullable    = false
 
@@ -100,6 +111,15 @@ DESCRIPTION
   validation {
     condition     = alltrue([for namespace in keys(var.key_vault_namespaces) : !strcontains(namespace, "--")])
     error_message = "A namespace owns the secrets named `<namespace>--...`, so a namespace name with `--` in it would overlap with another namespace's."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for namespace in values(var.key_vault_namespaces) : [
+        for group in [namespace.groups.view, namespace.groups.edit, namespace.groups.admin] :
+        group == null || can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", coalesce(group, "-")))
+      ]
+    ]))
+    error_message = "key_vault_namespaces[*].groups.view, .edit and .admin must each be the object ID of an Entra ID group, or left unset."
   }
   validation {
     condition = alltrue(flatten([

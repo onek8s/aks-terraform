@@ -1,0 +1,63 @@
+name: Lab admin
+
+# Manual, last resort. Runs ONE `az` or `gh` command as the lab's owners, for the special changes the
+# deployment identities may not make (Entra ID groups and applications, Graph, quotas, repository and
+# organization settings) and nothing else in the pipelines covers:
+#
+#   - az: signed in as the secret AZURE_OWNER (`az ad sp create-for-rbac` output; Owner on the lab's
+#     subscriptions and Global Administrator in the lab tenant), on the dev subscription;
+#   - gh: with the secret GH_OWNER (GitHub admin token of the onek8s organization) as GH_TOKEN.
+#
+# `args` are the command's arguments after `az` / `gh`, split like a shell would (quotes work) and
+# passed straight to the tool - no shell, so no pipes or `$(...)`; use `--query` / `--jq`. The output
+# lands in the run log, which anyone who can read the repository can read: never run a command that
+# prints a secret (a credential reset, a secret's value).
+#
+# Example: tool az, args: ad group show --group grp-onek8s-dev-ext-fi-example-view --query id -o tsv
+
+on:
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: "The CLI"
+        required: true
+        type: choice
+        options: [az, gh]
+      args:
+        description: "Its arguments, e.g. ad group list --query '[].displayName'"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ inputs.tool }} ${{ inputs.args }}
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 30
+    steps:
+      - name: Sign in to Azure (owner)
+        if: inputs.tool == 'az'
+        env:
+          AZURE_OWNER: ${{ secrets.AZURE_OWNER }}
+          SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "$AZURE_OWNER" ] || { echo "::error::The AZURE_OWNER secret is not available to this repository"; exit 1; }
+          client_id="$(jq -r '.clientId // .appId' <<<"$AZURE_OWNER")"
+          secret="$(jq -r '.clientSecret // .password' <<<"$AZURE_OWNER")"
+          tenant="$(jq -r '.tenantId // .tenant' <<<"$AZURE_OWNER")"
+          echo "::add-mask::$secret"
+          az login --service-principal -u "$client_id" -p "$secret" --tenant "$tenant" --allow-no-subscriptions --only-show-errors -o none
+          [ -z "$SUBSCRIPTION_ID" ] || az account set --subscription "$SUBSCRIPTION_ID"
+
+      - name: Run
+        env:
+          TOOL: ${{ inputs.tool }}
+          ARGS: ${{ inputs.args }}
+          GH_TOKEN: ${{ inputs.tool == 'gh' && secrets.GH_OWNER || '' }}
+        run: |
+          set -euo pipefail
+          { echo '```'; echo "$TOOL $ARGS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          python3 -c 'import os, shlex, sys; args = shlex.split(os.environ["ARGS"]); os.execvp(os.environ["TOOL"], [os.environ["TOOL"], *args])'
