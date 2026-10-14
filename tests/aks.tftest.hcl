@@ -4265,6 +4265,10 @@ run "traefik_serves_every_gateway_from_a_flux_configuration_of_its_own" {
     )
     error_message = "The Flux repository should be told each Gateway's Traefik class."
   }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_implementation == "traefik"
+    error_message = "The Flux repository should be told the implementation, for its components."
+  }
 }
 
 run "an_internal_zone_gets_an_internal_traefik_load_balancer" {
@@ -4324,6 +4328,10 @@ run "app_routing_serves_every_gateway_without_traefik" {
     )
     error_message = "Every Gateway should name App Routing's class."
   }
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_implementation == "approuting-istio"
+    error_message = "The Flux repository should be told the implementation, for its components."
+  }
 }
 
 run "a_cluster_without_a_gateway_implementation_names_no_class" {
@@ -4337,7 +4345,7 @@ run "a_cluster_without_a_gateway_implementation_names_no_class" {
 
   assert {
     condition = length(azapi_resource.traefik_flux_configuration) == 0 && length([
-      for key in keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute) : key if startswith(key, "gateway_class_name_")
+      for key in keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute) : key if startswith(key, "gateway_")
     ]) == 0
     error_message = "Without a gateway_implementation there are no Gateway classes to tell and no Traefik."
   }

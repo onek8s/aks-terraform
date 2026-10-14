@@ -24,12 +24,18 @@ locals {
     } : {},
   )
 
-  # The class each Gateway names, told to the Flux repository as `gateway_class_name_<gateway>`.
-  flux_gateway_settings = {
-    for name, gateway in local.gateways : "gateway_class_name_${replace(name, "-", "_")}" => (
-      var.gateway_implementation == "traefik" ? "traefik-${name}" : "approuting-istio"
-    )
-  }
+  # The class each Gateway names, told to the Flux repository as `gateway_class_name_<gateway>`, and
+  # the implementation itself as `gateway_implementation`: the Flux repository adds what only one
+  # implementation takes (App Routing's parametersRef ConfigMap, which Traefik refuses) as a kustomize
+  # component of that name.
+  flux_gateway_settings = merge(
+    {
+      for name, gateway in local.gateways : "gateway_class_name_${replace(name, "-", "_")}" => (
+        var.gateway_implementation == "traefik" ? "traefik-${name}" : "approuting-istio"
+      )
+    },
+    var.gateway_implementation == null ? {} : { gateway_implementation = var.gateway_implementation },
+  )
 
   # Traefik for each Gateway, as sent to Azure: cluster scope in flux-system, like the platform's
   # configuration, with the Gateway's values filled into gateways/traefik. One configuration per

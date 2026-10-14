@@ -569,7 +569,9 @@ configuration provides is the API itself; the controller serving it is deployed 
 
 `gateway_implementation` picks what serves the Gateways - the same Gateways, listeners, certificates
 and Cilium policies either way; only the GatewayClass they name changes, which the Flux repository
-is told as `gateway_class_name_<gateway>`:
+is told as `gateway_class_name_<gateway>` - and the implementation as `gateway_implementation`, the
+kustomize component that adds what only it takes (App Routing's `parametersRef` ConfigMap, which
+Traefik refuses with `Accepted: False`):
 
 | `gateway_implementation` | What runs | Cost |
 | --- | --- | --- |
