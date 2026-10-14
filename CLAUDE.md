@@ -143,7 +143,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
 - `dev-ext-stateful`: defined (`envs/dev-ext-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
-  templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
+  templates + gator tests in `kubernetes/`): mutations **on** - 5 + 2 per zone, so 9 in the ext subscription (zone placement from the namespace,
   `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,
   `platform/accelerator: nvidia-gpu` -> GPU toleration). **Deny**
   (2026-10-13, `kubernetes_deny` in `environments/dev/policy.tfvars`, each promoted after zero violations on
