@@ -167,7 +167,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 tests/cis/report.py "$OUT" tests/cis/accepted.yaml
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: cis-${{ env.CLUSTER }}
