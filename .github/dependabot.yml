@@ -10,6 +10,12 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "terraform"
+    # azurerm 5 is a new major version with breaking changes; both root modules allow < 5.0.0 and
+    # move to it as a change of their own, not as a lock-file bump. Minor and patch releases still
+    # come through.
+    ignore:
+      - dependency-name: hashicorp/azurerm
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
