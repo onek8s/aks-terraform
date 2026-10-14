@@ -120,6 +120,12 @@ key_vault_namespaces = {
   }
 }
 
+# The platform viewers (design section 7, soft multi-tenancy): list the namespaces of the cells and the
+# secrets of the vaults - names only - through a custom role at rg-aks-dev, so the Azure portal's
+# Kubernetes views can offer a namespace to pick. Lab group grp-onek8s-dev-platform-viewers, with a
+# tester application the isolation tests sign in as.
+platform_viewer_group_object_ids = ["75353964-033e-4ea2-8ec4-f44e89fee6a6"]
+
 # The token every cluster's Flux webhook receiver checks GitHub's deliveries against.
 flux_github_webhook = true
 # ... and the `example` team's Receiver, for its own repository (aks-fluxcd-platform,

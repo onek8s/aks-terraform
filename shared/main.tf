@@ -74,8 +74,8 @@ locals {
   }
 
   # The namespace's groups, as on its Kubernetes Secrets: `edit` and `admin` manage its secrets, like
-  # its writers - and merged with them, so a group that is both is granted once; `view` reads the
-  # vault's metadata.
+  # its writers - and merged with them, so a group that is both is granted once; `view` gets nothing,
+  # as Kubernetes' `view` sees no Secret.
   key_vault_group_writers = merge({
     for grant in flatten([
       for namespace, share in var.key_vault_namespaces : [
@@ -87,12 +87,6 @@ locals {
       ]
     ]) : "${grant.namespace}/writer/${grant.principal_id}" => grant
   }, local.key_vault_writers)
-  key_vault_group_viewers = {
-    for namespace, share in var.key_vault_namespaces : "${namespace}/viewer/${lower(share.groups.view)}" => {
-      namespace    = namespace
-      principal_id = lower(share.groups.view)
-    } if share.groups.view != null
-  }
 }
 
 # The vault, on the Azure RBAC permission model - access policies know no conditions - and reached
@@ -158,8 +152,8 @@ resource "azurerm_user_assigned_identity" "key_vault" {
   }
 }
 
-# Reading the value of the namespace's own secrets. Listing the names of every secret is not gated -
-# see the README, "Key Vault".
+# Reading the namespace's own secrets, by name. Listing the vault is refused - see the README, "Key
+# Vault" - and left to the platform viewers.
 resource "azurerm_role_assignment" "key_vault_namespace_reader" {
   for_each = var.create_role_assignments ? var.key_vault_namespaces : {}
 
@@ -181,18 +175,6 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   principal_type       = each.value.principal_type
   condition_version    = "2.0"
   condition            = module.conventions.key_vault_write_conditions[each.value.namespace]
-}
-
-# A namespace's view group: the names and attributes of its vault's secrets, never a value - what
-# Kubernetes' `view` is to Secrets. Listing is not gated by a condition (see the README, "Key Vault"),
-# so this is the vault's metadata, as every share already lists it.
-resource "azurerm_role_assignment" "key_vault_namespace_viewer" {
-  for_each = var.create_role_assignments ? local.key_vault_group_viewers : {}
-
-  principal_id         = each.value.principal_id
-  scope                = local.namespace_key_vault_ids[each.value.namespace]
-  role_definition_name = "Key Vault Reader"
-  principal_type       = "Group"
 }
 
 # Every vault, whole: the platform's secrets and certificates - the gateways' listener certificates

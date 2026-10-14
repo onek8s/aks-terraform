@@ -2827,9 +2827,9 @@ run "every_namespace_reads_its_own_share_of_the_vault" {
       strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})"),
       strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "@Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
       strcontains(azurerm_role_assignment.key_vault_namespace_reader["ingress-gateway"].condition, "StringStartsWith 'ingress-gateway--'"),
-      !strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "readMetadata"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
     ])
-    error_message = "Each namespace identity should read the values of the secrets under its own prefix only, and still be able to list the vault."
+    error_message = "Each namespace identity should read the secrets under its own prefix only - values and metadata - and so list nothing."
   }
 }
 
@@ -4065,18 +4065,15 @@ run "namespace_groups_get_their_kubernetes_role_on_the_namespaces_secrets" {
       "team-payments/writer/22222222-2222-2222-2222-222222222222",
       "team-payments/writer/33333333-3333-3333-3333-333333333333",
     ])
-    error_message = "The edit and admin groups should manage the namespace's secrets."
+    error_message = "The edit and admin groups should manage the namespace's secrets - and the view group get nothing."
   }
   assert {
     condition     = strcontains(azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].condition, "StringStartsWith 'team-payments--'")
     error_message = "The groups should be held to the namespace's secrets."
   }
   assert {
-    condition = alltrue([
-      keys(azurerm_role_assignment.key_vault_namespace_viewer) == ["team-payments/viewer/11111111-1111-1111-1111-111111111111"],
-      azurerm_role_assignment.key_vault_namespace_viewer["team-payments/viewer/11111111-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Reader",
-    ])
-    error_message = "The view group should get Key Vault Reader."
+    condition     = strcontains(azurerm_role_assignment.key_vault_namespace_writer["team-payments/writer/33333333-3333-3333-3333-333333333333"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})")
+    error_message = "The groups should list nothing: metadata reads are held to the namespace's secrets."
   }
 }
 
@@ -4093,7 +4090,7 @@ run "namespace_groups_get_nothing_on_a_shared_vault_from_the_cluster" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0 && length(azurerm_role_assignment.key_vault_namespace_viewer) == 0
+    condition     = length(azurerm_role_assignment.key_vault_namespace_writer) == 0
     error_message = "A shared vault's grants are shared/'s: the cells would both make them."
   }
 }

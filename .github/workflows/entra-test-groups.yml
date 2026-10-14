@@ -1,8 +1,9 @@
 name: Entra test groups
 
 # Manual. Creates in the build tenant, signed in as the owner service principal (secret AZURE_OWNER,
-# Global Administrator in the lab tenant), what the namespace access tests need: for one namespace
-# one Entra ID security group per Kubernetes role (view, edit, admin) and one tester application per
+# Global Administrator in the lab tenant), what the access tests need: for one namespace one Entra ID
+# security group per role (`roles`, by default the Kubernetes roles view, edit and admin; namespace
+# `platform` and role `viewers` for the platform viewers of shared/) and one tester application per
 # group, a member of it, that GitHub Actions of this repository's `dev` environment can sign in as
 # (federated credential, no secret). Idempotent: what exists is reused, a federated credential on an
 # outdated subject is replaced. Prints the object IDs of the groups and the client IDs of the testers:
@@ -18,9 +19,13 @@ on:
   workflow_dispatch:
     inputs:
       namespace:
-        description: "The namespace the groups are for"
+        description: "The namespace the groups are for (\"platform\" for the platform's own groups)"
         required: true
         default: "ext-fi-example"
+      roles:
+        description: "The groups to make, space-separated: grp-onek8s-dev-<namespace>-<role> (\"viewers\" with namespace platform)"
+        required: true
+        default: "view edit admin"
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
     environment: dev
     env:
       NAMESPACE: ${{ inputs.namespace }}
+      ROLES: ${{ inputs.roles }}
       SUBJECT: repo:onek8s@340519759/aks-terraform@1340382905:environment:dev
     steps:
       - name: Sign in to Azure (owner)
@@ -48,13 +54,14 @@ jobs:
       - name: Groups and testers
         run: |
           set -euo pipefail
-          for role in view edit admin; do
+          for role in $ROLES; do
+            [[ $role =~ ^[a-z0-9-]+$ ]] || { echo "::error::Not a role name: $role"; exit 1; }
             group="grp-onek8s-dev-$NAMESPACE-$role"
             app="onek8s-dev-$NAMESPACE-$role-tester"
             gid="$(az ad group list --display-name "$group" --query '[0].id' -o tsv)"
             if [ -z "$gid" ]; then
               gid="$(az ad group create --display-name "$group" --mail-nickname "$group" \
-                --description "Kubernetes ClusterRole $role in namespace $NAMESPACE of the OneK8s dev cells" --query id -o tsv)"
+                --description "OneK8s dev: $role of $NAMESPACE" --query id -o tsv)"
             fi
             appid="$(az ad app list --display-name "$app" --query '[0].appId' -o tsv)"
             [ -n "$appid" ] || appid="$(az ad app create --display-name "$app" --sign-in-audience AzureADMyOrg --query appId -o tsv)"

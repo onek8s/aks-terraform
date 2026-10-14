@@ -98,8 +98,9 @@ condition. Object IDs, not names.
 `groups` are the namespace's Entra ID groups of the clusters' `managed_namespaces.<ns>.groups` - the
 same object IDs - granted on the share what their Kubernetes role grants on Secrets (OneK8s design
 section 7): `edit` and `admin` manage the namespace's secrets like `writers` (`Key Vault Secrets
-Officer` under the namespace's condition), `view` gets `Key Vault Reader` - the names and attributes
-of the vault's secrets, never a value. The Isolation tests check that the two lists agree.
+Officer` under the namespace's condition: its own secrets, by name), `view` gets nothing. Nobody
+with a share lists the vault - see platform_viewer_group_object_ids. The Isolation tests check that
+the two lists agree.
 DESCRIPTION
   nullable    = false
 
@@ -433,4 +434,28 @@ DESCRIPTION
     condition     = var.monthly_budget == null || try(var.monthly_budget.amount > 0 && can(regex("^[0-9]{4}-[0-9]{2}-01T00:00:00Z$", var.monthly_budget.start_date)), false)
     error_message = "monthly_budget.amount must be positive and start_date the first of a month, e.g. 2026-10-01T00:00:00Z."
   }
+}
+
+variable "platform_viewer_group_object_ids" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Entra ID groups that list the namespaces of the environment's clusters and the secrets of its Key
+Vaults - names and attributes, no workload and no secret value (OneK8s design section 7, "Soft
+multi-tenancy"). The namespaces' own groups see only their namespace and their own secrets, so this
+is what the Azure portal's Kubernetes views need to offer a namespace to pick. Granted a custom role
+defined and assigned at the resource group - see platform_viewers.tf.
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for group in var.platform_viewer_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", group))])
+    error_message = "platform_viewer_group_object_ids must be Entra ID group object IDs."
+  }
+}
+
+variable "platform_viewer_role_name" {
+  type        = string
+  default     = null
+  description = "Name of the platform viewers' custom role. Unique in the tenant; defaults to `OneK8s Platform Viewer (<resource group>)`."
 }

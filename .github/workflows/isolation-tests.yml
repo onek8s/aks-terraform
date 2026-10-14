@@ -250,6 +250,10 @@ jobs:
             read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-ext-fi" ext-fi-example--github-webhook-token 200
             read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-ext-fi" ext-fi-other--isolation-test 403
             read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
+            # Soft multi-tenancy: it reads its own by name and lists nothing - no other namespace's names.
+            code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "https://$VAULT_PREFIX-ext-fi.vault.azure.net/secrets?api-version=7.4" || true)"
+            if [ "$code" = 403 ]; then result PASS R7 "ext-fi-example lists no secret names in $VAULT_PREFIX-ext-fi" "HTTP $code"
+            else result FAIL R7 "ext-fi-example lists no secret names in $VAULT_PREFIX-ext-fi" "HTTP $code"; fi
           else
             result FAIL R7 "ext-fi-example's Key Vault identity signs in" "no token for its key-vault service account"
           fi

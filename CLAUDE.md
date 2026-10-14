@@ -36,7 +36,7 @@ reads; job logs via `get_job_logs`).
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-dev-platform` without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
-| `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` input, groups `grp-onek8s-dev-<ns>-{view,edit,admin}` and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
+| `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` and `roles` input, groups `grp-onek8s-dev-<ns>-<role>` (default view edit admin; `platform` + `viewers` for the platform viewers) and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
 | `lab-admin.yml` (Lab admin) | Manual, **last resort**: runs ONE `az` (as `AZURE_OWNER`, on the dev subscription) or `gh` (with `GH_OWNER`) command; `args` split like a shell, no pipes (use `--query`/`--jq`). For special changes nothing else covers (Entra ID, Graph, org/repo settings). The run log is readable by anyone who can read the repo: never print a secret. |
 
 **Owner credentials (lab only, last option, allowed whenever needed):** `AZURE_OWNER` - org secret, `az ad sp
@@ -117,10 +117,19 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   namespace because **Azure refuses two Kustomizations of one Flux configuration on the same path** - plus Azure
   role `Azure Kubernetes Service Namespace User` on the namespace for each group.
   Kubernetes RBAC, so it works beside Azure RBAC. The older `access` list (Azure RBAC roles) still exists.
-  On the namespace's Key Vault share the same groups get the matching rights: `view` Key Vault Reader (names,
-  never values), `edit`/`admin` Key Vault Secrets Officer under the `<ns>--` ABAC write condition - granted by
-  shared/ (`key_vault_namespaces.<ns>.groups`, same IDs; the isolation test checks they agree) or by the root
-  module for a cluster's own vault. Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
+  On the namespace's Key Vault share the same groups get the matching rights: `edit`/`admin` Key Vault Secrets
+  Officer under the `<ns>--` ABAC write condition, `view` nothing - granted by shared/
+  (`key_vault_namespaces.<ns>.groups`, same IDs; the isolation test checks they agree) or by the root module
+  for a cluster's own vault.
+- **Soft multi-tenancy** (2026-10-14, design section 6/7, D50): the ABAC conditions gate `readMetadata` too, so
+  **no namespace identity or group can list a vault** (Key Vault evaluates a list against the whole collection,
+  which has no name): everyone reads/writes only their own `<ns>--*` by name, and nobody creates a secret outside
+  the naming. **Platform viewers** (shared/ `platform_viewer_group_object_ids`, lab group
+  `grp-onek8s-dev-platform-viewers` `75353964-...`, tester `platform.viewers` in the testers file): one custom
+  role `OneK8s Platform Viewer (rg-aks-dev)` **defined and assignable at the resource group** (not the
+  subscription - hardened landing zones) with cluster read + user kubeconfig, Azure RBAC data action
+  `managedClusters/namespaces/read` (the portal's Workloads namespace picker) and vault read + secrets
+  `readMetadata` (names, never values). Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
   admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
 - `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,

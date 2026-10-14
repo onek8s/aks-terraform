@@ -18,12 +18,16 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
    (the group is among the caller's groups), the same matrix without impersonation, and one write
    as a server-side dry run. A group without a tester is reported as AUDIT.
 
-4. Key Vault (with the shared tfvars): shared/ names the same groups for the namespace as the
-   cell; on the namespace's vault each group holds exactly its role - `view` Key Vault Reader,
-   `edit` and `admin` Key Vault Secrets Officer under the ABAC condition on `<namespace>--` - and no
-   other Key Vault data-plane role anywhere (`az role assignment list`); and each tester, signed in
-   with a Key Vault token: `view` lists the secrets and reads no value, `edit` and `admin` read the
-   namespace's secret, write and delete one of its own and are refused another namespace's.
+4. Key Vault (with the shared tfvars), soft multi-tenancy: shared/ names the same groups for the
+   namespace as the cell; `edit` and `admin` hold exactly Key Vault Secrets Officer on the
+   namespace's vault under the ABAC condition on `<namespace>--` (values and metadata), `view` no
+   Key Vault role at all (`az role assignment list`); and each tester, signed in with a Key Vault
+   token, lists nothing, reads and writes no other namespace's secret and creates none outside the
+   naming - `edit` and `admin` write, read and read the metadata of one of their own, by name.
+5. Platform viewers (shared/ platform_viewer_group_object_ids): their custom role is defined and
+   assignable at the environment's resource group only and held by each group there; signed in as
+   the tester, they list the clusters' namespaces and nothing inside them, and list each vault's
+   secret names without reading a value or writing.
 
 Prints one line per check and a Markdown table to $RESULTS; exits 1 when a check failed.
 """
@@ -277,7 +281,8 @@ def az(*args):
 
 
 def check_vault_roles(namespace, roles, vault):
-    """Each group's Key Vault data-plane roles: exactly its own, on the namespace's vault."""
+    """Each group's Key Vault data-plane roles: `edit` and `admin` exactly Secrets Officer on the
+    namespace's vault under its condition, metadata included; `view` none at all."""
     for role, group in roles.items():
         check = f"{namespace}: the {role} group's Key Vault roles"
         try:
@@ -287,20 +292,25 @@ def check_vault_roles(namespace, roles, vault):
             continue
         data = [a for a in assignments if (a.get("roleDefinitionName") or "").startswith("Key Vault ")
                 and a.get("roleDefinitionName") != "Key Vault Contributor"]
-        expected = "Key Vault Reader" if role == "view" else "Key Vault Secrets Officer"
         problems = []
-        for a in data:
-            where = (a.get("scope") or "").rsplit("/", 1)[-1]
-            if a["roleDefinitionName"] != expected or where != vault:
-                problems.append(f"{a['roleDefinitionName']} on {where}")
-            elif role != "view" and f"'{namespace}--'" not in (a.get("condition") or ""):
-                problems.append(f"{a['roleDefinitionName']} on {where} without the condition on {namespace}--")
-        if not any(a["roleDefinitionName"] == expected and (a.get("scope") or "").endswith("/" + vault) for a in data):
-            problems.append(f"no {expected} on {vault}")
+        if role == "view":
+            problems = [f"{a['roleDefinitionName']} on {(a.get('scope') or '').rsplit('/', 1)[-1]}" for a in data]
+        else:
+            for a in data:
+                where = (a.get("scope") or "").rsplit("/", 1)[-1]
+                condition = a.get("condition") or ""
+                if a["roleDefinitionName"] != "Key Vault Secrets Officer" or where != vault:
+                    problems.append(f"{a['roleDefinitionName']} on {where}")
+                elif f"'{namespace}--'" not in condition or "secrets/readMetadata/action" not in condition:
+                    problems.append(f"{a['roleDefinitionName']} on {where} without the condition on {namespace}-- (metadata included)")
+            if not any(a["roleDefinitionName"] == "Key Vault Secrets Officer" and (a.get("scope") or "").endswith("/" + vault) for a in data):
+                problems.append(f"no Key Vault Secrets Officer on {vault}")
         if problems:
             result("FAIL", check, "; ".join(problems))
+        elif role == "view":
+            result("PASS", check, "none: Kubernetes' view sees no Secret either")
         else:
-            result("PASS", check, f"{expected} on {vault}" + ("" if role == "view" else f" under {namespace}--"))
+            result("PASS", check, f"Key Vault Secrets Officer on {vault}, values and metadata under {namespace}--")
 
 
 def vault_call(method, url, token, body=None):
@@ -315,48 +325,125 @@ def vault_call(method, url, token, body=None):
 
 
 def check_vault_tester(namespace, role, client_id, tenant, vault, other):
+    """Soft multi-tenancy in the vault, signed in as the tester: no listing for anyone; edit and admin
+    write, read and read the metadata of a secret of their own, by name; nobody touches another
+    namespace's secret or creates one outside the naming."""
     label = f"{namespace}: signed in as a member of the {role} group, Key Vault {vault}"
     try:
         token = tester_token(client_id, tenant, VAULT_SCOPE)
     except Exception as e:  # noqa: BLE001
         result("FAIL", f"{label}: signs in", str(e)[:200])
         return
-    base = f"https://{vault}.vault.azure.net/secrets"
+    endpoint = f"https://{vault}.vault.azure.net"
+    writes = role != "view"
     wrong = []
-    status, listing = vault_call("GET", f"{base}?{VAULT_API}", token)
-    own = sorted(i["id"].rsplit("/", 1)[-1] for i in listing.get("value", []) if i["id"].rsplit("/", 1)[-1].startswith(f"{namespace}--"))
-    if status != 200:
-        wrong.append(f"list: HTTP {status}")
-    if own:
-        status, _ = vault_call("GET", f"{base}/{own[0]}?{VAULT_API}", token)
-        if status != (403 if role == "view" else 200):
-            wrong.append(f"read {own[0]}: HTTP {status}")
-    elif status == 200:
-        wrong.append(f"no secret under {namespace}-- to read")
-    status, _ = vault_call("GET", f"{base}/{other}--isolation-test?{VAULT_API}", token)
-    if status != 403:
-        wrong.append(f"read {other}--isolation-test: HTTP {status}")
-    # A write of another namespace's name is refused whatever the role; one of its own only edit and admin may.
-    status, _ = vault_call("PUT", f"{base}/{other}--namespace-access-test?{VAULT_API}", token, {"value": "x"})
-    if status != 403:
-        wrong.append(f"write {other}--namespace-access-test: HTTP {status}")
-    name = f"{namespace}--namespace-access-test-{os.environ.get('GITHUB_RUN_ID', 'local')}-{role}"
-    status, _ = vault_call("PUT", f"{base}/{name}?{VAULT_API}", token, {"value": "x"})
-    if status != (403 if role == "view" else 200):
-        wrong.append(f"write {name}: HTTP {status}")
+
+    def expect(what, status, wanted):
+        if status != wanted:
+            wrong.append(f"{what}: HTTP {status}, expected {wanted}")
+
+    expect("list the secrets", vault_call("GET", f"{endpoint}/secrets?{VAULT_API}", token)[0], 403)
+    expect("list the deleted secrets", vault_call("GET", f"{endpoint}/deletedsecrets?{VAULT_API}", token)[0], 403)
+    expect(f"read {other}--isolation-test", vault_call("GET", f"{endpoint}/secrets/{other}--isolation-test?{VAULT_API}", token)[0], 403)
+    expect(f"read the metadata of {other}--isolation-test",
+           vault_call("GET", f"{endpoint}/secrets/{other}--isolation-test/versions?{VAULT_API}", token)[0], 403)
+    run = os.environ.get("GITHUB_RUN_ID", "local")
+    expect(f"write {other}--namespace-access-test",
+           vault_call("PUT", f"{endpoint}/secrets/{other}--namespace-access-test?{VAULT_API}", token, {"value": "x"})[0], 403)
+    expect("write namespace-access-test (no namespace's name)",
+           vault_call("PUT", f"{endpoint}/secrets/namespace-access-test-{run}?{VAULT_API}", token, {"value": "x"})[0], 403)
+    name = f"{namespace}--namespace-access-test-{run}-{role}"
+    status = vault_call("PUT", f"{endpoint}/secrets/{name}?{VAULT_API}", token, {"value": "x"})[0]
+    expect(f"write {name}", status, 200 if writes else 403)
+    expect(f"read {name}", vault_call("GET", f"{endpoint}/secrets/{name}?{VAULT_API}", token)[0], 200 if writes else 403)
+    expect(f"read the metadata of {name}", vault_call("GET", f"{endpoint}/secrets/{name}/versions?{VAULT_API}", token)[0], 200 if writes else 403)
     if status == 200:
-        vault_call("DELETE", f"{base}/{name}?{VAULT_API}", token)
+        vault_call("DELETE", f"{endpoint}/secrets/{name}?{VAULT_API}", token)
         # Soft delete keeps it for the retention period; purge it, as the role allows.
         for _ in range(10):
-            purge, _ = vault_call("DELETE", f"https://{vault}.vault.azure.net/deletedsecrets/{name}?{VAULT_API}", token)
-            if purge in (204, 200, 404):
+            purge = vault_call("DELETE", f"{endpoint}/deletedsecrets/{name}?{VAULT_API}", token)[0]
+            if purge in (200, 204, 404):
                 break
             subprocess.run(["sleep", "3"])
-    what = "lists, reads no value, writes nothing" if role == "view" else f"reads and writes {namespace}-- only"
+    what = "lists nothing, reads nothing, writes nothing" if not writes else f"lists nothing, reads and writes {namespace}-- only, by name"
     if wrong:
         result("FAIL", f"{label}: {what}", "; ".join(wrong))
     else:
-        result("PASS", f"{label}: {what}", f"{len(own)} own secret(s) listed")
+        result("PASS", f"{label}: {what}")
+
+
+def check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults):
+    """The platform viewers: the custom role at the resource group, and signed in as the tester -
+    namespaces and secret names listed, nothing inside a namespace, no secret value, no write."""
+    parsed = parse(shared_tfvars)
+    groups = [unquoted(g).lower() for g in parsed.get("platform_viewer_group_object_ids") or []]
+    if not groups:
+        result("AUDIT", "platform viewers", "shared/ names no platform_viewer_group_object_ids")
+        return
+    group = unquoted(parsed.get("resource_group_name"))
+    try:
+        subscription = az("account", "show")["id"]
+        scope = f"/subscriptions/{subscription}/resourceGroups/{group}"
+        name = unquoted(parsed.get("platform_viewer_role_name")) or f"OneK8s Platform Viewer ({group})"
+        definitions = az("role", "definition", "list", "--name", name, "--custom-role-only", "true", "--scope", scope)
+        scopes = [s.lower() for d in definitions for s in d.get("assignableScopes", [])]
+        if len(definitions) == 1 and scopes == [scope.lower()]:
+            result("PASS", "platform viewers: custom role assignable at the resource group only", name)
+        else:
+            result("FAIL", "platform viewers: custom role assignable at the resource group only", f"{len(definitions)} definition(s), scopes {scopes}")
+        for viewer in groups:
+            assigned = [a for a in az("role", "assignment", "list", "--assignee", viewer, "--all")
+                        if a.get("roleDefinitionName") == name and (a.get("scope") or "").lower() == scope.lower()]
+            result("PASS" if assigned else "FAIL", f"platform viewers: group {viewer} holds the role on {group}")
+    except RuntimeError as e:
+        result("FAIL", "platform viewers: custom role and its assignments", str(e))
+    client_id = (testers.get("platform") or {}).get("viewers")
+    if not client_id:
+        result("AUDIT", "platform viewers: signed in as a member", "no tester platform.viewers")
+        return
+    try:
+        kubeconfig = tester_kubeconfig(client_id, tenant, workdir)
+    except Exception as e:  # noqa: BLE001
+        result("FAIL", "platform viewers: the tester signs in", str(e)[:200])
+        return
+    out = kubectl("auth", "whoami", "-o", "json", kubeconfig=kubeconfig)
+    if out.returncode == 0 and any(g in [x.lower() for x in json.loads(out.stdout)["status"]["userInfo"].get("groups", [])] for g in groups):
+        result("PASS", "platform viewers: the API server sees the tester in the group")
+    else:
+        result("FAIL", "platform viewers: the API server sees the tester in the group", (out.stdout + out.stderr).strip()[:200])
+    names = kubectl("get", "namespaces", "-o", "name", kubeconfig=kubeconfig)
+    listed = [n.split("/", 1)[-1] for n in names.stdout.split()]
+    wrong = [] if names.returncode == 0 and "kube-system" in listed else [f"list namespaces: {names.stderr.strip()[:150]}"]
+    try:
+        for verb, resource, namespace in [("get", "pods", "ext-fi-example"), ("list", "secrets", "ext-fi-example"),
+                                          ("list", "configmaps", "kube-system"), ("create", "configmaps", "default")]:
+            if can_i(verb, resource, namespace, [], kubeconfig):
+                wrong.append(f"{verb} {resource} in {namespace}: allowed")
+        if can_i("delete", "namespaces", None, [], kubeconfig):
+            wrong.append("delete namespaces: allowed")
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        wrong.append(str(e))
+    result("FAIL" if wrong else "PASS", "platform viewers: list namespaces and nothing inside them",
+           "; ".join(wrong) if wrong else f"{len(listed)} namespaces")
+    try:
+        token = tester_token(client_id, tenant, VAULT_SCOPE)
+    except Exception as e:  # noqa: BLE001
+        result("FAIL", "platform viewers: Key Vault sign-in", str(e)[:200])
+        return
+    for vault in sorted(set(vaults.values())):
+        endpoint = f"https://{vault}.vault.azure.net"
+        status, listing = vault_call("GET", f"{endpoint}/secrets?{VAULT_API}", token)
+        secrets = [i["id"].rsplit("/", 1)[-1] for i in listing.get("value", [])]
+        wrong = [] if status == 200 and secrets else [f"list: HTTP {status}, {len(secrets)} secret(s)"]
+        if secrets:
+            got = vault_call("GET", f"{endpoint}/secrets/{secrets[0]}?{VAULT_API}", token)[0]
+            if got != 403:
+                wrong.append(f"read {secrets[0]}: HTTP {got}")
+        put = vault_call("PUT", f"{endpoint}/secrets/platform-viewer-test?{VAULT_API}", token, {"value": "x"})[0]
+        if put != 403:
+            wrong.append(f"write platform-viewer-test: HTTP {put}")
+        result("FAIL" if wrong else "PASS", f"platform viewers: list the secrets of {vault}, no value, no write",
+               "; ".join(wrong) if wrong else f"{len(secrets)} names listed")
 
 
 def main():
@@ -397,6 +484,8 @@ def main():
                 else:
                     result("AUDIT", f"{namespace}: signed in as a member of the {role} group",
                            f"no tester in {os.path.basename(testers_file)}; checked by impersonation only")
+        if shared_tfvars:
+            check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults)
     return 1 if failed else 0
 
 

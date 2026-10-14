@@ -657,8 +657,9 @@ cluster, which tells the Flux repository each namespace's vault as `key_vault_ur
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
-| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or, on the shared vault, as the environment's `id-<region>-<environment>-shared-kv-<namespace>` | `Key Vault Secrets User` | Reads the value of a secret only if it is the namespace's own |
-| The namespace's `writer` and `admin` grants in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only |
+| The namespace's `key-vault` service account, as `<cluster identity>-kv-<namespace>` - or, on the shared vault, as the environment's `id-<region>-<environment>-shared-kv-<namespace>` | `Key Vault Secrets User` | Reads the value and the metadata of a secret only if it is the namespace's own; lists nothing |
+| The namespace's `writer` and `admin` grants and its `edit` and `admin` groups in `managed_namespaces` | `Key Vault Secrets Officer` | Creates, reads, changes, deletes, backs up, restores, recovers and purges the namespace's own secrets only; lists nothing |
+| The platform viewers (shared/ `platform_viewer_group_object_ids`) | Custom `OneK8s Platform Viewer (<resource group>)`, defined and assigned at the resource group | Lists every secret's name and attributes, never a value; lists the clusters' namespaces |
 | `entra_admin_group_object_ids` | `Key Vault Administrator` | None: the whole vault, certificates included |
 
 In the cluster, each namespace with a share has a `key-vault` service account - created by the Flux
@@ -671,11 +672,15 @@ without anyone else's help.
 az keyvault secret set --vault-name <key_vault_name> --name example--api-key --value ...
 ```
 
-- **Names, not values, are shared.** Listing the vault is not covered by a condition - Key Vault
-  evaluates one on a list call as a whole rather than secret by secret, and a name condition there
-  refuses the list - so every identity with a role on the vault can see every secret's name. Keep
-  secrets out of the names. An `ExternalSecret` that finds secrets by pattern rather than by name
-  has to match the namespace's own prefix, or it is refused reading the rest.
+- **Soft multi-tenancy: no namespace sees another's secret names.** Reading metadata is under the
+  name condition too, and Key Vault evaluates a condition on a list call as a whole rather than
+  secret by secret - the collection has no name - so a list is refused to every namespace identity
+  and group: each reads and writes its own secrets by name (`az keyvault secret show/set --name
+  <namespace>--...`), which is all External Secrets Operator does. An `ExternalSecret` cannot `find`
+  by pattern. Tools that browse the vault, the Azure portal among them, need the platform viewers'
+  role, which lists every name - so keep secrets out of the names. The same pattern - one shared
+  instance, a data-plane role per namespace scoped by a name or an inner scope - applies to other
+  PaaS services; see OneK8s design section 6.
 - **A namespace name with `--` in it is refused**, since its prefix would overlap another's:
   `team--a--x` starts with `team--`.
 - **Certificates are imported by an admin group.** Conditions cover secret operations only, so a

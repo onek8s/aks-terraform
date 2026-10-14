@@ -14,3 +14,7 @@ testers:
     view: 80222536-1bf3-4ef8-8384-8a5eec4131bf
     edit: bd3f5bba-4bea-4790-b859-b0b03c13c33d
     admin: c98bc085-8729-42aa-b8db-99d84caa8ca5
+  # onek8s-dev-platform-viewers-tester, a member of grp-onek8s-dev-platform-viewers (shared/
+  # platform_viewer_group_object_ids).
+  platform:
+    viewers: 54e0fc61-3277-4cdb-93e9-a49686f16881

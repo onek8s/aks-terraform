@@ -40,14 +40,19 @@ locals {
   # name as a resource; one being created or restored, which does not exist yet, by the name in the
   # request.
   #
-  # Reading the value of a secret - `Key Vault Secrets User`. Listing the vault is not gated: Key
-  # Vault evaluates a condition on listing against the whole collection, and a name condition there
-  # refuses the list outright.
+  # Reading a secret - `Key Vault Secrets User`: its value and its metadata (attributes, versions).
+  # Listing the vault is refused: Key Vault evaluates a condition on a list call against the whole
+  # collection, which has no name, so a name condition on `readMetadata` refuses every list - and that
+  # is the point (soft multi-tenancy, OneK8s design section 6): no namespace learns the names of
+  # another namespace's secrets. Its own it reads by name, which is all External Secrets Operator
+  # does. Listing the names is the platform viewers' (shared/, platform_viewer_group_object_ids).
   key_vault_read_conditions = {
     for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
       (
        (
         !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
        )
        OR
        (
@@ -57,12 +62,16 @@ locals {
     CONDITION
   }
 
-  # Everything `Key Vault Secrets Officer` can do to a secret, apart from listing them.
+  # Everything `Key Vault Secrets Officer` can do to a secret, on the namespace's secrets only: an
+  # existing one by its name, a new or restored one by the name in the request - so no secret named
+  # anything but `<namespace>--...` can be created. Listing is refused, as for reading.
   key_vault_write_conditions = {
     for namespace, prefix in local.key_vault_secret_prefixes : namespace => <<-CONDITION
       (
        (
         !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
         AND
         !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/update/action'})
         AND

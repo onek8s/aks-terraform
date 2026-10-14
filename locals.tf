@@ -227,8 +227,7 @@ locals {
   # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
   # manages its share of the vault as well. Keyed like the grants they come from.
   # The groups of `groups` get the same as their Kubernetes role (design section 6): `edit` and `admin`
-  # manage the namespace's secrets, `view` sees their names and attributes - `Key Vault Reader`,
-  # never a value, as Kubernetes' `view` reads no Secret.
+  # manage the namespace's secrets, by name; `view` gets nothing, as Kubernetes' `view` sees no Secret.
   key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_owned ? merge({
     for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/writer/${binding.group_object_id}" => {
       namespace      = binding.namespace
@@ -239,12 +238,6 @@ locals {
     for key, grant in local.managed_namespace_access_grants : key => grant
     if contains(["admin", "writer"], grant.role)
   }) : {}
-  key_vault_viewer_role_assignments = var.create_role_assignments && local.key_vault_owned ? {
-    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/viewer/${binding.group_object_id}" => {
-      namespace    = binding.namespace
-      principal_id = binding.group_object_id
-    } if binding.role == "view"
-  } : {}
 
   # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
   api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
