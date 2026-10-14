@@ -264,7 +264,7 @@ locals {
   system_assigned_identity = local.is_automatic && !local.byo_network
 
   # The environment a cluster belongs to, from its name - <what it is>-<environment>-<which one> - for
-  # the names of the environment's shared resources: `aks-dev-stateless-az1` is in `dev`.
+  # the names of the environment's shared resources: `aks-dev-ext-stateless-az1` is in `dev`.
   environment = length(local.name_segments) < 2 ? var.name : local.name_segments[1]
 
   # The principal the cluster acts as towards Azure: the identity created here, or its own.
@@ -368,7 +368,7 @@ locals {
   location_code = module.conventions.location_code
   # `id-<region code>-<environment>-<function>`, worked out from the cluster name and the region
   # rather than stated per environment. A cluster name reads <what it is>-<environment>-<which one>,
-  # so `aks-dev-stateless-az1` in swedencentral is run by `id-sec-dev-aks-stateless-az1`: the environment
+  # so `aks-dev-ext-stateless-az1` in swedencentral is run by `id-sec-dev-aks-stateless-az1`: the environment
   # moves to the front of the function, and everything past it distinguishes the cluster from its
   # siblings in the same environment. A name with nothing to split has no environment to lift out,
   # and becomes `id-<region code>-<name>`.

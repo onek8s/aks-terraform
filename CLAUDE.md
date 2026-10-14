@@ -26,7 +26,7 @@ reads; job logs via `get_job_logs`).
 
 | Workflow | Use |
 |---|---|
-| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-stateless-az1` / `dev-stateless-az2` / `dev-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
+| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-ext-stateless-az1` / `dev-ext-stateless-az2` / `dev-ext-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota, every policy constraint's violations per object, and who wrote each Secret of the zone namespaces (managed fields). `node_iptables` option for eBPF debugging. Read it before promoting a policy to deny. |
 | `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`: RoleBindings match the tfvars' `groups`, each role's rights by impersonating a group member and signed in as a tester app from `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete. Runs after every Deploy apply of a stateless cell, weekdays 05:40 UTC, and by hand. Must pass after any network/zone/policy change. |
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only** (2026-10-14, the user's choice to speed up testing: no schedule, no Deploy stage). |
@@ -55,12 +55,18 @@ Workflow: branch, PR, squash-merge (the user wants changes deployed and merged w
 time), then dispatch the workflow on `main` and check the result. Order for network changes:
 merge + apply `dev-shared` before merging a fleet change that depends on it.
 
-## Current state of dev (2026-10-13)
+## Current state of dev (2026-10-14)
 
-- `aks-dev-stateless-az1`: running. Rebuilt 2026-10-12 so eBPF host routing is on from creation.
-- `aks-dev-stateless-az2`: **destroyed on purpose** (the config is proven; no need to keep it
+- **Internal and external are separate subscriptions and clusters** (security's decision 2026-10-14, design D52);
+  countries stay isolation zones (node pool + network + vault) inside them. dev is **external only**:
+  `sub-aks-dev` plays `sub-aks-dev-ext`, `shared/envs/dev.tfvars` has `exposure = "ext"` and only ext-fi/ext-se,
+  the clusters are `aks-dev-ext-*` (renamed from `aks-dev-stateless-az<N>` / `aks-dev-stateful`; stacks and fleet
+  directories `dev-ext-*`). No internal subscription in the lab; an internal one would be `shared/` + the same
+  cluster tfvars with `exposure = "int"` and the int zones. `exposure` validations refuse mixing (root + shared).
+- `aks-dev-ext-stateless-az1`: the only running cluster (rebuilt 2026-10-14 under its new name).
+- `aks-dev-ext-stateless-az2`: **destroyed on purpose** (the config is proven; no need to keep it
   running). Its tfvars, fleet directory and Traffic Manager endpoint stay; Traffic Manager just sees
-  the endpoint as down. To bring it back: Deploy `dev-stateless-az2` apply with `allow_empty_state`,
+  the endpoint as down. To bring it back: Deploy `dev-ext-stateless-az2` apply with `allow_empty_state`,
   then Flux webhooks, Cluster status and Isolation tests on it. Do not rebuild it unless asked.
 - **VPA add-on on** (`vertical_pod_autoscaler_enabled`, default true; applied to az1 2026-10-13).
   aks-hello has a `VerticalPodAutoscaler` in `InPlaceOrRecreate` (RequestsOnly, CPU 3m-20m, memory
@@ -135,7 +141,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `managedClusters/namespaces/read` (the portal's Workloads namespace picker) and vault read + secrets
   `readMetadata` (names, never values). Lab groups for ext-fi-example: view `6d9ae939-...`, edit `88ba3f87-...`,
   admin `71438fbc-...`, created by `entra-test-groups.yml`; testers in `tests/isolation/namespace-access-testers.yaml`.
-- `dev-stateful`: defined (`envs/dev-stateful.tfvars`), never deployed (only with an approved exception).
+- `dev-ext-stateful`: defined (`envs/dev-ext-stateful.tfvars`), never deployed (only with an approved exception).
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): 13 mutations **on** (zone placement from the namespace,
   `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,
@@ -178,7 +184,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `2026-03-02-preview` when the ALB setting is stated, which knows it.
 - **Public API server in dev** (authorized ranges, Entra ID only, local accounts off) - a lab
   exception the user asked for. Private API server stays the design for acc/prd.
-- **Isolation zones** int-fi, int-se, ext-fi, ext-se: per cell a /24 each (nodes /25, ILB /27),
+- **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24 each (nodes /25, ILB /27),
   own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own
   Gateway (class `approuting-istio`) and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.
 - **Zone nodes only for applications.** Each zone's gateway pods and ESO run on the system pool (with the

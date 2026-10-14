@@ -25,9 +25,9 @@ on:
       cluster:
         description: "The cluster to report on"
         required: true
-        default: "aks-dev-stateless-az1"
+        default: "aks-dev-ext-stateless-az1"
         type: choice
-        options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
+        options: [aks-dev-ext-stateless-az1, aks-dev-ext-stateless-az2, aks-dev-ext-stateful]
       node_iptables:
         description: "Also dump every node's iptables rules (creates a debug pod per node)"
         required: false
@@ -40,14 +40,14 @@ permissions:
 
 jobs:
   status:
-    name: status ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+    name: status ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
     runs-on: ubuntu-latest
     environment: dev
     env:
       # The clusters and their shared resources are all in one group; the public zone, created
       # outside Terraform, is in a group of its own.
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
       DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns
       DNS_ZONE: onek8s.lol
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}

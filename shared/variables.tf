@@ -293,7 +293,7 @@ variable "global_hostnames" {
   description = <<DESCRIPTION
 Hostnames in dns_zone_name that every listed cluster serves at once, keyed by the name below the zone
 (`hello` for hello.onek8s.lol): an Azure Traffic Manager profile each, weighting the `endpoints` -
-each cluster's own public hostname, such as `public-aks-dev-stateless-az1.onek8s.lol` - alike and
+each cluster's own public hostname, such as `public-aks-dev-ext-stateless-az1.onek8s.lol` - alike and
 leaving out one whose probe of `health_path` fails, and a CNAME of the hostname to it. The clusters'
 external-dns have to leave the hostname alone.
 DESCRIPTION
@@ -328,6 +328,35 @@ DESCRIPTION
   }
 }
 
+variable "exposure" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+The exposure these shared resources serve - OneK8s design decision D52: `int` or `ext`. Internal and
+external workloads have a subscription and clusters each, so one apply of this configuration serves
+the clusters of one exposure in its subscription: every isolation zone is of that exposure, only an
+external one publishes global_hostnames (Traffic Manager), only an internal one has
+internal_dns_zones. Null checks nothing.
+DESCRIPTION
+
+  validation {
+    condition     = var.exposure == null || contains(["int", "ext"], coalesce(var.exposure, "-"))
+    error_message = "exposure must be int or ext."
+  }
+  validation {
+    condition     = var.exposure == null || alltrue([for zone in values(var.isolation_zones) : zone.exposure == var.exposure])
+    error_message = "Every isolation zone must be of the exposure these resources serve: internal and external zones never share a subscription or a cluster (design decision D52)."
+  }
+  validation {
+    condition     = var.exposure != "ext" || length(var.internal_dns_zones) == 0
+    error_message = "The external exposure has no internal zones' private DNS (design decision D52)."
+  }
+  validation {
+    condition     = var.exposure != "int" || length(var.global_hostnames) == 0
+    error_message = "The internal exposure publishes nothing through Traffic Manager (design decision D52)."
+  }
+}
+
 variable "isolation_zones" {
   type = map(object({
     exposure = string
@@ -358,7 +387,7 @@ variable "cells" {
   }))
   default     = {}
   description = <<DESCRIPTION
-The stateless cells' networks, keyed by the cell (`dev-stateless-az1`, the cluster's name without
+The stateless cells' networks, keyed by the cell (`dev-ext-stateless-az1`, the cluster's name without
 `aks-`): `vnet-<cell>` with `address_space`, a /20, laid out as cells.tf describes - `snet-system`
 for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`.
 DESCRIPTION

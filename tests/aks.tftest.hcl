@@ -3583,6 +3583,86 @@ run "isolation_zones_tell_flux_their_node_subnets" {
   }
 }
 
+run "an_external_cluster_holds_external_zones_and_tells_flux_its_exposure" {
+  command = plan
+
+  variables {
+    exposure                       = "ext"
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
+      ext-se = { node_subnet_name = "snet-ext-se-nodes" }
+    }
+    managed_namespaces = {
+      ext-fi-orders = { labels = { "platform/zone" = "ext-fi" } }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.cluster_exposure == "ext"
+    error_message = "The Flux repository should be told the cluster's exposure."
+  }
+}
+
+run "an_external_cluster_refuses_an_internal_zone" {
+  command = plan
+
+  variables {
+    exposure                       = "ext"
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
+      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+    }
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "an_internal_cluster_refuses_an_external_namespace" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    managed_namespaces = {
+      ext-fi-orders = { labels = { "platform/zone" = "ext-fi" } }
+    }
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "an_external_cluster_writes_no_internal_dns" {
+  command = plan
+
+  variables {
+    exposure                = "ext"
+    dns_zone_name           = "contoso.com"
+    internal_dns_zone_names = ["int-fi.test.contoso.com"]
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "an_exposure_is_int_or_ext" {
+  command = plan
+
+  variables {
+    exposure = "dmz"
+  }
+
+  expect_failures = [var.exposure]
+}
+
 run "isolation_zones_without_node_auto_provisioning_are_warned_about" {
   command = plan
 

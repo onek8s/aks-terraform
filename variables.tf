@@ -1655,16 +1655,48 @@ DESCRIPTION
   }
 }
 
+variable "exposure" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+The cluster's exposure - OneK8s design decision D52: `int` for internal workloads, `ext` for external
+ones. Internal and external workloads never share a cluster (or a subscription), so every isolation
+zone of the cluster is one of its exposure (`<exposure>-<country>`), an application namespace's
+`platform/zone` label names one of them, and only an internal cluster keeps records in the internal
+zones' private DNS (internal_dns_zone_names). Told to the Flux repository as `cluster_exposure`.
+Null states no exposure and checks nothing (a cluster outside the zone layout).
+DESCRIPTION
+
+  validation {
+    condition     = var.exposure == null || contains(["int", "ext"], coalesce(var.exposure, "-"))
+    error_message = "exposure must be int or ext."
+  }
+  validation {
+    condition     = var.exposure == null || alltrue([for zone in keys(var.isolation_zones) : startswith(zone, "${coalesce(var.exposure, "-")}-")])
+    error_message = "Every isolation zone of the cluster must be of its exposure (`<exposure>-<country>`): internal and external zones never share a cluster (design decision D52)."
+  }
+  validation {
+    condition = var.exposure == null || alltrue([
+      for namespace in values(var.managed_namespaces) : startswith(lookup(namespace.labels, "platform/zone", "${coalesce(var.exposure, "-")}-"), "${coalesce(var.exposure, "-")}-")
+    ])
+    error_message = "A managed namespace's platform/zone must be a zone of the cluster's exposure (design decision D52)."
+  }
+  validation {
+    condition     = var.exposure != "ext" || length(var.internal_dns_zone_names) == 0
+    error_message = "An external cluster keeps no records in the internal zones' private DNS (design decision D52)."
+  }
+}
+
 variable "isolation_zones" {
   type = map(object({
     node_subnet_name = string
   }))
   default     = {}
   description = <<DESCRIPTION
-The isolation zones of a stateless cell - OneK8s design section 4 - keyed by zone (`int-fi`): the
+The isolation zones of a stateless cell - OneK8s design section 4 - keyed by zone (`ext-fi`): the
 subnet of virtual_network_name each zone's NAP nodes are put in. The Flux repository is told its ID
 as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's AKSNodeClass. Needs node auto
-provisioning, which is granted the whole virtual network.
+provisioning, which is granted the whole virtual network. All of one exposure (`exposure`).
 DESCRIPTION
   nullable    = false
 }

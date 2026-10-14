@@ -33,7 +33,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-stateless-az1.tfvars`, `envs/dev-stateless-az2.tfvars`, `envs/dev-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, on the **Free** tier: one system node, no uptime SLA. The two stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own, with the isolation zones' nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys and no persistent storage (`persistent_storage_enabled = false`); both serve `hello.ext-fi.dev.onek8s.lol` behind Traffic Manager. The stateful one is defined but not deployed for now. |
+| `envs/dev-ext-stateless-az1.tfvars`, `envs/dev-ext-stateless-az2.tfvars`, `envs/dev-ext-stateful.tfvars` | The `dev` environment's clusters, `aks-dev-ext-stateless-az1`, `aks-dev-ext-stateless-az2` and `aks-dev-ext-stateful`, on the **Free** tier: one system node, no uptime SLA. External (`exposure = "ext"`: zones `ext-fi` and `ext-se` only). The two stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own, with the isolation zones' nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys and no persistent storage (`persistent_storage_enabled = false`); both serve `hello.ext-fi.dev.onek8s.lol` behind Traffic Manager. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -116,8 +116,8 @@ Edit the environment's variables file to name your existing resources, then appl
 az login
 terraform init
 
-terraform workspace select -or-create dev-stateless-az1
-terraform apply -var-file=envs/dev-stateful.tfvars
+terraform workspace select -or-create dev-ext-stateless-az1
+terraform apply -var-file=envs/dev-ext-stateful.tfvars
 ```
 
 An environment with [shared resources](#shared-resources) applies them first, from `shared/`:
@@ -138,7 +138,7 @@ backed up. Uncomment `backend "azurerm"` in `terraform.tf`, copy `backend.hcl.ex
 `backend.hcl`, and give each environment its own key:
 
 ```sh
-terraform init -backend-config=backend.hcl -backend-config="key=dev-stateless-az1.tfstate"
+terraform init -backend-config=backend.hcl -backend-config="key=dev-ext-stateless-az1.tfstate"
 ```
 
 The backend holds a blob lease for the duration of an apply, so two people cannot write the same
@@ -146,8 +146,8 @@ state at once. Turn on versioning and soft delete for the container too - a trun
 only recoverable if an earlier version survives.
 
 The `dev` environment is deployed from GitHub: the [Deploy](.github/workflows/deploy.yml) workflow,
-started by hand, plans one of its stacks - `dev-shared` (`shared/`), `dev-stateless-az1`,
-`dev-stateless-az2` or `dev-stateful` - and, when run with `apply`, applies that plan; `destroy` deletes a cluster stack (never `dev-shared`), for a change a cluster cannot take in place, such as moving its nodes between amd64 and arm64. Each stack has its state as `<stack>.tfstate`. It runs in the
+started by hand, plans one of its stacks - `dev-shared` (`shared/`), `dev-ext-stateless-az1`,
+`dev-ext-stateless-az2` or `dev-ext-stateful` - and, when run with `apply`, applies that plan; `destroy` deletes a cluster stack (never `dev-shared`), for a change a cluster cannot take in place, such as moving its nodes between amd64 and arm64. Each stack has its state as `<stack>.tfstate`. It runs in the
 `dev` GitHub environment, signs in as the identity of the `AZURE_*` variables - a service principal
 with the `AZURE_CLIENT_SECRET` secret, or GitHub OIDC without it - and keeps the state in the
 storage account of the variables `TF_STATE_RESOURCE_GROUP` and `TF_STATE_STORAGE_ACCOUNT`, in
@@ -699,9 +699,13 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 An environment can run more than one cluster on the same **shared resources**, so that a workload can
 move from one cluster to another - which is how a cluster is replaced rather than upgraded in place:
 build the next one beside it, move the workloads over, destroy the old one. `dev` does this with
-`aks-dev-stateless-az1`, `aks-dev-stateless-az2` and `aks-dev-stateful`, and everything - the
+`aks-dev-ext-stateless-az1`, `aks-dev-ext-stateless-az2` and `aks-dev-ext-stateful`, and everything - the
 clusters and what they share - is in one resource group, `rg-aks-dev`, in `sub-aks-dev` of the
-[landing zone](https://github.com/onek8s/azure-landing-zone). The one exception is the public zone
+[landing zone](https://github.com/onek8s/azure-landing-zone). These are the **external** exposure's: the
+OneK8s design keeps internal and external workloads in separate subscriptions and clusters (decision
+D52), with the countries as isolation zones inside them. `sub-aks-dev` plays `sub-aks-dev-ext`; the lab
+has no internal subscription, which would run `shared/` and the same cluster configuration once more
+with `exposure = "int"` and the internal zones. Only `aks-dev-ext-stateless-az1` runs. The one exception is the public zone
 `onek8s.lol`, which is created once with the Azure CLI in `rg-onek8s-dns`, outside every state, so
 that its name servers - which the registrar points at - outlive any rebuild.
 
@@ -711,12 +715,12 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 
 | | Shared - `shared/envs/dev.tfvars` | Per cluster - `envs/dev-<cluster>.tfvars` |
 | --- | --- | --- |
-| Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-stateless-az<N>` (`cells`) with `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb`, each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `isolation_zones` |
+| Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-ext-stateless-az<N>` (`cells`) with `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb`, each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `isolation_zones` |
 | Key Vaults | The platform vault `kv-onek8s-dev-platform` (purge protection, for the customer-managed keys) and one per zone, `kv-onek8s-dev-<zone>` (`zone_key_vault_names`), with every grant on them - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false`, `key_vault_namespace_vaults`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
-| Internal names | `internal_dns_zones`: `int-fi.dev.onek8s.lol`, `int-se.dev.onek8s.lol`, private, linked to every cell's network | Looked up: `internal_dns_zone_names`; external-dns is granted on them |
+| Exposure | `exposure`: `ext` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-sec-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
 | DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
-| Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
+| Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-ext-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
 | Hostnames every cluster serves | `global_hostnames`: `hello.ext-fi.dev.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the app's hostname in each cell - an A record of that cell's ext-fi gateway - alike and leaves out one whose probe fails | Each cell serves the hostname on its ext-fi Gateway; the route that names it tells its external-dns to leave the record alone |
 | The cluster | | `aks-dev-<cluster>`, run by `id-sec-dev-aks-<cluster>`; its node resource group, which AKS deletes with it |
@@ -786,12 +790,13 @@ The `dev` stateless clusters are the design's cells. Beyond node auto provisioni
 
 | Variable | What it does | Design |
 | --- | --- | --- |
+| `exposure` | `int` or `ext`: internal and external workloads never share a cluster (decision D52), so every zone and every managed namespace's `platform/zone` is of the cluster's exposure, and only an internal cluster writes the internal zones' private DNS - validated at plan. The Flux repository is told it as `cluster_exposure`. The `dev` cells are external | sections 8, 9 |
 | `isolation_zones` | Each zone's node subnet in the cell's network; the Flux repository is told its ID as `nap_subnet_id_<zone>` for the zone's `AKSNodeClass`, so a zone's nodes are in the zone's subnet behind the zone's NSG | sections 2, 4, 5 |
 | `advanced_networking` | Advanced Container Networking Services: Hubble, FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The last is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 16 |
 | `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 18 |
 | `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 3, 4, 18 |
 | `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 12 |
-| `internal_dns_zone_names` | The internal zones' private DNS, which the cell's external-dns writes | section 13 |
+| `internal_dns_zone_names` | The internal zones' private DNS, which an internal cell's external-dns writes | section 13 |
 
 Always, on every cluster: the Secrets Store CSI driver add-on is off - secrets reach pods only as
 Kubernetes Secrets from External Secrets Operator (design section 6).
@@ -809,7 +814,7 @@ repository in the variables file, on either SKU:
 flux_git_repository = {
   url    = "https://github.com/example/cluster-config"
   branch = "main"                 # default
-  path   = "./clusters/dev-stateless-az1" # default "./"
+  path   = "./clusters/dev-ext-stateless-az1" # default "./"
 }
 ```
 
@@ -863,7 +868,7 @@ next apply. Keep it out of the variables file and pass it from a secret store in
 export TF_VAR_flux_git_credentials='{ https_key = "github_pat_..." }'
 # or
 export TF_VAR_flux_git_credentials="{ ssh_private_key = $(jq -Rs . < deploy_key) }"
-terraform apply -var-file=envs/dev-stateful.tfvars
+terraform apply -var-file=envs/dev-ext-stateful.tfvars
 ```
 
 The Flux extension already knows GitHub's SSH host keys, so no `known_hosts` is needed.
@@ -939,7 +944,7 @@ its own answers, so the two SKUs behave differently even though they share one s
 
 an AKS Automatic cluster's variables file runs this SKU **without an existing network**, so most of what
 follows does not apply to it - it is what an Automatic cluster needs when you do attach it to one,
-which `dev-stateful` does and which this environment may go back to. Skip to
+which `dev-ext-stateful` does and which this environment may go back to. Skip to
 [Clusters without a network of their own](#clusters-without-a-network-of-their-own) for the
 arrangement it is actually on.
 
@@ -1059,7 +1064,7 @@ assigned identity and the grant with it.
 
 **an AKS Automatic cluster's variables file is on this arrangement.** Attaching an Automatic cluster to the
 existing network is what has been failing here - the bring-your-own subnets and the API server
-injected into a delegated one - while `dev-stateful` builds in that same network without trouble,
+injected into a delegated one - while `dev-ext-stateful` builds in that same network without trouble,
 so the network is taken out of the picture rather than tuned around. The support for the other
 arrangement is entirely intact: name the network and its subnets again to go back to it, and the
 variables file lists the lines to put back.
@@ -1116,7 +1121,7 @@ flag is `false` is **refused** rather than ignored, so an environment cannot hal
 **an AKS Automatic cluster's variables file ships with the integration off** and states it with that flag,
 even though the cluster brings no network for it to use either way - so that naming a subnet is
 refused rather than quietly ignored if the network is ever named again. Injecting the API server
-into a delegated subnet is part of what has been failing there; `dev-stateful` builds in the
+into a delegated subnet is part of what has been failing there; `dev-ext-stateful` builds in the
 existing network without any of it.
 
 Microsoft documents the delegated subnet as **required** for an AKS Automatic cluster in an existing
@@ -1178,7 +1183,7 @@ choice for a throwaway cluster and a poor one for anything else.
   cluster is created, which a system assigned identity cannot be: it does not exist until the cluster
   does. Its name is **worked out, not configured**: `id-<region code>-<environment>-<function>`,
   built from the cluster name and the region. A cluster name reads `<what it is>-<environment>-<which
-  one>`, so `aks-dev-stateful` in `swedencentral` is run by `id-sec-dev-aks-a`. The region
+  one>`, so `aks-dev-ext-stateful` in `swedencentral` is run by `id-sec-dev-aks-a`. The region
   codes are the estate's own convention rather than anything Azure defines, so they live in
   `local.location_codes` in `locals.tf`; a region that is not listed there stops the plan rather than
   being given a guessed code. An identity cannot be renamed in place, so a name that changes replaces

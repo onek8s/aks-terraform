@@ -61,9 +61,9 @@ on:
       cluster:
         description: "The cell to test"
         required: true
-        default: "aks-dev-stateless-az1"
+        default: "aks-dev-ext-stateless-az1"
         type: choice
-        options: [aks-dev-stateless-az1, aks-dev-stateless-az2]
+        options: [aks-dev-ext-stateless-az1, aks-dev-ext-stateless-az2]
   workflow_call:
     inputs:
       cluster:
@@ -79,20 +79,24 @@ permissions:
 
 jobs:
   isolation:
-    name: isolation ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+    name: isolation ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 60
     # One run per cell at a time: two would share the test namespace.
     concurrency:
-      group: isolation-tests-${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      group: isolation-tests-${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
       cancel-in-progress: false
     env:
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-stateless-az1' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
       ZONE: ext-fi
       NAMESPACE: ext-fi-isolation-test
-      ZONES: "int-fi int-se ext-fi ext-se"
+      # The cell is external (design decision D52): its zones are the external ones, one per country;
+      # OTHER_ZONE is the other country's, which the probe in $ZONE must not reach.
+      EXPOSURE: ext
+      ZONES: "ext-fi ext-se"
+      OTHER_ZONE: ext-se
       VAULT_PREFIX: kv-onek8s-dev
       ZONE_DOMAIN: ext-fi.dev.onek8s.lol
       REGISTRY: acronek8sdev
@@ -262,7 +266,7 @@ jobs:
           if token="$(vault_token "$ZONE-gateway")" && [ -n "$token" ]; then
             echo "::add-mask::$token"
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$ZONE-gateway--wildcard" 200
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" int-fi-gateway--wildcard 403
+            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$OTHER_ZONE-gateway--wildcard" 403
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" ext-fi-example--github-webhook-token 403
           else
@@ -352,6 +356,25 @@ jobs:
             else result FAIL R16 "zone $zone complete" "missing:$missing"; fi
           done
 
+      # Internal and external apart (R2, design decision D52): the cell holds the zones of its own
+      # exposure only - namespaces, NodePools, zone Gateways - and its subscription has no vault or
+      # subnet of the other exposure.
+      - name: One exposure per cluster and subscription
+        if: ${{ !cancelled() }}
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          other=$([ "$EXPOSURE" = ext ] && echo int || echo ext)
+          zones="$( { kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.labels.platform/zone}{"\n"}{end}'
+                      kubectl get nodepools.karpenter.sh -o jsonpath='{range .items[*]}{.spec.template.metadata.labels.platform/zone}{"\n"}{end}'
+                      kubectl get gateways.gateway.networking.k8s.io -A -o jsonpath='{range .items[*]}{.metadata.labels.platform/zone}{"\n"}{end}'; } | sort -u | grep . )"
+          foreign="$(grep -v "^$EXPOSURE-" <<<"$zones" | tr '\n' ' ')"
+          if [ -z "$foreign" ]; then result PASS R2 "the cluster holds only $EXPOSURE zones" "$(echo $zones)"
+          else result FAIL R2 "the cluster holds only $EXPOSURE zones" "other zones: $foreign"; fi
+          vaults="$(az keyvault list --query "[?starts_with(name, '$VAULT_PREFIX-$other-')].name" -o tsv | tr '\n' ' ')"
+          subnets="$(az network vnet list --query "[].subnets[?starts_with(name, 'snet-$other-')].id[]" -o tsv | tr '\n' ' ')"
+          if [ -z "$vaults$subnets" ]; then result PASS R2 "no $other vault or subnet in the $EXPOSURE subscription"
+          else result FAIL R2 "no $other vault or subnet in the $EXPOSURE subscription" "$vaults $subnets"; fi
+
       # Environments in sync (R13): the cell runs what Git says - Flux at the head of the fleet and
       # the team repository, everything reconciled - and every cell of the environment is built from
       # the same tfvars and fleet directory but for its name and availability zone.
@@ -362,7 +385,7 @@ jobs:
         run: |
           . "$RUNNER_TEMP/lib.sh"
           git clone -q --depth 1 https://github.com/onek8s/aks-fluxcd-platform "$RUNNER_TEMP/fleet"
-          python3 tests/isolation/check-cells-in-sync.py dev . "$RUNNER_TEMP/fleet" || echo x >> "$RUNNER_TEMP/failures"
+          python3 tests/isolation/check-cells-in-sync.py "dev-$EXPOSURE" . "$RUNNER_TEMP/fleet" || echo x >> "$RUNNER_TEMP/failures"
           for source in $(kubectl get gitrepositories.source.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
             repo="$(kubectl -n "${source%%/*}" get gitrepository "${source#*/}" -o json)"
             url="$(jq -r .spec.url <<<"$repo")"; branch="$(jq -r '.spec.ref.branch // "main"' <<<"$repo")"
@@ -455,9 +478,9 @@ jobs:
             gw_pod="$(kubectl -n "$zone-gateway" get pod -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
             gw_lb="$(kubectl -n "$zone-gateway" get svc -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
             eso_pod="$(kubectl -n "$zone-secrets" get pod -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-            [ -z "$gw_pod" ] || blocked "R2, R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:443"
-            [ -z "$gw_lb" ] || blocked "R2, R3, R5" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
-            [ -z "$eso_pod" ] || blocked "R2, R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
+            [ -z "$gw_pod" ] || blocked "R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:443"
+            [ -z "$gw_lb" ] || blocked "R3, R5" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
+            [ -z "$eso_pod" ] || blocked "R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
           done
           blocked R7b "the platform Key Vault" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-platform.vault.azure.net/healthstatus"
           app_pod="$(kubectl -n ext-fi-example get pod -l app.kubernetes.io/name=aks-hello -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
@@ -560,8 +583,8 @@ jobs:
             | forbidden R9b "LoadBalancer Service outside a gateway namespace" k8splatformgatewayonly
           printf 'apiVersion: v1\nkind: Service\nmetadata: {name: np}\nspec: {type: NodePort, selector: {app: x}, ports: [{port: 80}]}\n' \
             | forbidden R9b "NodePort Service" k8splatformgatewayonly
-          printf 'apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: other-zone}\nspec: {parentRefs: [{namespace: int-fi-gateway, name: int-fi}], hostnames: [x.int-fi.dev.onek8s.lol], rules: [{backendRefs: [{name: x, port: 80}]}]}\n' \
-            | forbidden "R2, R9b" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
+          printf 'apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: other-zone}\nspec: {parentRefs: [{namespace: %s-gateway, name: %s}], hostnames: [x.%s.dev.onek8s.lol], rules: [{backendRefs: [{name: x, port: 80}]}]}\n' "$OTHER_ZONE" "$OTHER_ZONE" "$OTHER_ZONE" \
+            | forbidden "R3, R9b" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: cidr}\nspec: {endpointSelector: {}, egress: [{toCIDR: [1.1.1.1/32]}]}\n' \
             | forbidden R20 "CiliumNetworkPolicy toCIDR" k8splatformfqdnegress
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: world}\nspec: {endpointSelector: {}, egress: [{toEntities: [world]}]}\n' \
@@ -573,7 +596,7 @@ jobs:
           pod own-dns "dnsPolicy: Default" | forbidden R20 "pod with its own DNS (dnsPolicy Default)" k8splatformfqdnegress
           pod system-pool "nodeSelector: {kubernetes.azure.com/mode: system}, tolerations: [{key: CriticalAddonsOnly, operator: Exists}]" \
             | forbidden R4 "zone pod on the system pool" k8splatformzoneplacement
-          pod other-zone "nodeSelector: {platform/zone: int-fi}" | forbidden "R2, R4" "zone pod selecting another zone's nodes" k8splatformzoneplacement
+          pod other-zone "nodeSelector: {platform/zone: $OTHER_ZONE}" | forbidden "R3, R4" "zone pod selecting another zone's nodes" k8splatformzoneplacement
           pod own-arch "nodeSelector: {kubernetes.io/arch: arm64}" | forbidden R17 "pod selecting an architecture without platform/arch" k8splatformplacementlabels
           pod sneaky-spot "tolerations: [{key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}]" \
             | forbidden R17 "spot toleration without platform/capacity: spot" k8splatformplacementlabels
@@ -613,8 +636,8 @@ jobs:
             | forbidden R7b "Secret written by someone other than the zone's ESO" k8splatformsecretsviaeso
           # The namespace's ESO objects read only its own share (R7, R7b).
           store() { printf 'apiVersion: external-secrets.io/v1\nkind: SecretStore\nmetadata: {name: %s}\nspec: {controller: %s, provider: {azurekv: {authType: %s, vaultUrl: "https://%s.vault.azure.net/", serviceAccountRef: {name: key-vault}}}}\n' "$@"; }
-          store other-vault "$ZONE" WorkloadIdentity "$VAULT_PREFIX-int-fi" | forbidden R7 "SecretStore on another zone's vault" k8splatformesoobjects
-          store other-controller int-fi WorkloadIdentity "$VAULT_PREFIX-$ZONE" | forbidden "R2, R7" "SecretStore served by another zone's ESO" k8splatformesoobjects
+          store other-vault "$ZONE" WorkloadIdentity "$VAULT_PREFIX-$OTHER_ZONE" | forbidden R7 "SecretStore on another zone's vault" k8splatformesoobjects
+          store other-controller "$OTHER_ZONE" WorkloadIdentity "$VAULT_PREFIX-$ZONE" | forbidden "R3, R7" "SecretStore served by another zone's ESO" k8splatformesoobjects
           # Otherwise complete, so that only the platform's rule can refuse it (not ESO's own webhook).
           printf 'apiVersion: external-secrets.io/v1\nkind: SecretStore\nmetadata: {name: client-secret}\nspec: {controller: %s, provider: {azurekv: {authType: ServicePrincipal, tenantId: 00000000-0000-0000-0000-000000000000, vaultUrl: "https://%s.vault.azure.net/", authSecretRef: {clientId: {name: sp, key: id}, clientSecret: {name: sp, key: secret}}}}}\n' "$ZONE" "$VAULT_PREFIX-$ZONE" \
             | forbidden R7a "SecretStore with a client secret, not workload identity" k8splatformesoobjects

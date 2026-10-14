@@ -1,13 +1,13 @@
-# Cell `stateless-az1` of the OneK8s dev environment - a stateless cluster in availability zone 1
+# External cell `ext-stateless-az1` of the OneK8s dev environment - a stateless cluster in availability zone 1
 # (OneK8s design section 8), on the Free tier: one system node, no uptime SLA. Its sibling is
-# aks-dev-stateless-az2 (envs/dev-stateless-az2.tfvars); every external application runs in both,
+# aks-dev-ext-stateless-az2 (envs/dev-ext-stateless-az2.tfvars); every external application runs in both,
 # and Azure Traffic Manager hands out one or the other (shared/: global_hostnames).
 # shared/envs/dev.tfvars is applied first.
 #
-#   terraform workspace select -or-create dev-stateless-az1
-#   terraform apply -var-file=envs/dev-stateless-az1.tfvars
+#   terraform workspace select -or-create dev-ext-stateless-az1
+#   terraform apply -var-file=envs/dev-ext-stateless-az1.tfvars
 
-name     = "aks-dev-stateless-az1"
+name     = "aks-dev-ext-stateless-az1"
 location = "swedencentral"
 
 sku_name = "Base"
@@ -28,12 +28,15 @@ resource_group_name = "rg-aks-dev"
 # The cell's own network, created by shared/ (cells): the system pool in snet-system, each isolation
 # zone's NAP nodes in its own snet-<zone>-nodes and its internal load balancer in snet-<zone>-ilb,
 # every subnet behind its own NSG, VNet encryption on.
-virtual_network_name = "vnet-dev-stateless-az1"
+virtual_network_name = "vnet-dev-ext-stateless-az1"
 node_subnet_name     = "snet-system"
 
+# The cell's exposure (OneK8s design, decision D52): internal and external workloads are separate
+# clusters in separate subscriptions; this is an external cell, so it holds the external zones only -
+# one per country, each with its own nodes, subnets and Key Vault. sub-aks-dev plays sub-aks-dev-ext.
+exposure = "ext"
+
 isolation_zones = {
-  int-fi = { node_subnet_name = "snet-int-fi-nodes" }
-  int-se = { node_subnet_name = "snet-int-se-nodes" }
   ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
   ext-se = { node_subnet_name = "snet-ext-se-nodes" }
 }
@@ -44,7 +47,7 @@ advanced_networking = {}
 
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here: the gateways'
 # certificates, the Flux webhook token - and this cluster's customer-managed keys, created here in it
-# (design section 18): key-aks-dev-stateless-az1-kms for the secrets in etcd, key-...-disk for every
+# (design section 18): key-aks-dev-ext-stateless-az1-kms for the secrets in etcd, key-...-disk for every
 # node's OS disk.
 key_vault_name   = "kv-onek8s-dev-platform"
 key_vault_create = false
@@ -55,7 +58,7 @@ customer_managed_keys = {
 # The platform's namespaces with a share of the platform vault: each zone's gateway and the platform
 # gateway read their listener certificate, `<namespace>--wildcard`. flux-system is added for the
 # webhook token, and every managed namespace below on its own.
-key_vault_namespaces = ["platform-gateway", "int-fi-gateway", "int-se-gateway", "ext-fi-gateway", "ext-se-gateway"]
+key_vault_namespaces = ["platform-gateway", "ext-fi-gateway", "ext-se-gateway"]
 
 # An application namespace's share is in its zone's vault (design section 6).
 key_vault_namespace_vaults = {
@@ -63,13 +66,11 @@ key_vault_namespace_vaults = {
 }
 
 # SHARED. The public zone onek8s.lol - the external zones' names and the platform gateway's - in
-# rg-onek8s-dns, provisioned outside Terraform; and the internal zones' private zones, created by
-# shared/ in rg-aks-dev and linked to the cells' networks. This cluster's external-dns gets an
-# identity of its own, granted on all of them.
+# rg-onek8s-dns, provisioned outside Terraform. This cluster's external-dns gets an identity of its
+# own, granted on it. An external cell has no internal zone, so no private zone either.
 dns_zone_name                = "onek8s.lol"
 dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
-internal_dns_zone_names      = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
 # Stateless: no CSI driver - Azure Disk, Azure Files, Azure Blob - and no snapshot controller, so
 # the cluster has no StorageClass and nothing to provision a PersistentVolumeClaim from.
@@ -176,12 +177,12 @@ managed_namespaces = {
 flux_git_repository = {
   url    = "https://github.com/onek8s/aks-fluxcd-platform"
   branch = "main"
-  path   = "./clusters/dev-stateless-az1"
+  path   = "./clusters/dev-ext-stateless-az1"
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
 
 # A GitHub push reaches the cluster at once: the platform gateway publishes Flux's webhook receiver
-# (flux-webhook-dev-stateless-az1.onek8s.lol), checked against the token shared/ keeps in the platform
+# (flux-webhook-dev-ext-stateless-az1.onek8s.lol), checked against the token shared/ keeps in the platform
 # vault.
 flux_github_webhook = true
