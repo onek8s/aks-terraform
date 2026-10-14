@@ -60,7 +60,12 @@ jobs:
             appid="$(az ad app list --display-name "$app" --query '[0].appId' -o tsv)"
             [ -n "$appid" ] || appid="$(az ad app create --display-name "$app" --sign-in-audience AzureADMyOrg --query appId -o tsv)"
             spid="$(az ad sp list --filter "appId eq '$appid'" --query '[0].id' -o tsv)"
-            [ -n "$spid" ] || spid="$(az ad sp create --id "$appid" --query id -o tsv)"
+            # Graph replication: a new application may not be found by the service principal API at once.
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -n "$spid" ] && break
+              spid="$(az ad sp create --id "$appid" --query id -o tsv 2>/dev/null)" || sleep 10
+            done
+            [ -n "$spid" ] || { echo "::error::No service principal for $app"; exit 1; }
             if [ -z "$(az ad app federated-credential list --id "$appid" --query "[?subject=='$SUBJECT'].name" -o tsv)" ]; then
               az ad app federated-credential create --id "$appid" -o none --parameters "$(jq -nc --arg s "$SUBJECT" \
                 '{name:"github-dev",issuer:"https://token.actions.githubusercontent.com",subject:$s,audiences:["api://AzureADTokenExchange"]}')"
