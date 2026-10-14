@@ -100,5 +100,8 @@ locals {
     length(data.azurerm_private_dns_zone.internal) == 0 ? {} : {
       internal_dns_resource_group_name = var.resource_group_name
     },
+    var.exposure == null ? {} : {
+      cluster_exposure = var.exposure
+    },
   )
 }

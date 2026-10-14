@@ -1,22 +1,26 @@
-# The dev environment's shared resources: what its clusters - aks-dev-stateful
-# (envs/dev-stateful.tfvars), aks-dev-stateless-az1 and aks-dev-stateless-az2
-# (envs/dev-stateless-az<N>.tfvars) - all use, in a state of its own. Applied first - the clusters
-# look all of this up by name.
+# The dev environment's shared resources of the external exposure (OneK8s design decision D52:
+# internal and external workloads have a subscription and clusters each): what its clusters -
+# aks-dev-ext-stateful (envs/dev-ext-stateful.tfvars), aks-dev-ext-stateless-az1 and
+# aks-dev-ext-stateless-az2 (envs/dev-ext-stateless-az<N>.tfvars) - all use, in a state of its own.
+# Applied first - the clusters look all of this up by name.
 #
 #   cd shared
 #   terraform apply -var-file=envs/dev.tfvars
 #
 # The subscription is sub-aks-dev of the OneK8s build tenant, which onek8s/azure-landing-zone
-# places in the `corp` landing zone. Everything below starts from an empty subscription: the resource
-# group and the network are created here too.
+# places in the `corp` landing zone; it plays sub-aks-dev-ext. The lab has no internal
+# subscription, so no internal zones and no internal clusters: those would be this configuration
+# applied once more, with exposure = "int" and the internal zones, in sub-aks-dev-int. Everything
+# below starts from an empty subscription: the resource group and the network are created here too.
 
 environment = "dev"
+exposure    = "ext"
 location    = "swedencentral"
 
 resource_group_name   = "rg-aks-dev"
 resource_group_create = true
 
-# The stateful cluster's network (envs/dev-stateful.tfvars, defined but not deployed). Azure CNI
+# The stateful cluster's network (envs/dev-ext-stateful.tfvars, defined but not deployed). Azure CNI
 # overlay: only the nodes take addresses from the subnet.
 virtual_network_name          = "vnet-aks-dev"
 virtual_network_create        = true
@@ -25,13 +29,13 @@ subnets = {
   snet-aks-nodes = "172.20.0.0/23"
 }
 
-# The isolation zones (OneK8s design, "Isolation zone"): internal and external workloads of Finland
-# and Sweden. Each has its own address range in every cell, its own node subnet and NAP NodePools, its
-# own Key Vault, gateway and External Secrets Operator. `index` is the zone's /24 in each cell's
+# The isolation zones (OneK8s design, "Isolation zone") of the external exposure: the external
+# workloads of Finland and Sweden. The internal ones (int-fi index 1, int-se index 2) belong to the
+# internal subscription and its clusters; their indexes stay reserved. Each has its own address
+# range in every cell, its own node subnet and NAP NodePools, its own Key Vault, gateway and External
+# Secrets Operator. `index` is the zone's /24 in each cell's
 # address space and never changes.
 isolation_zones = {
-  int-fi = { exposure = "int", index = 1 }
-  int-se = { exposure = "int", index = 2 }
   ext-fi = { exposure = "ext", index = 3 }
   ext-se = { exposure = "ext", index = 4 }
 }
@@ -39,12 +43,10 @@ isolation_zones = {
 # The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system, and per
 # zone snet-<zone>-nodes and snet-<zone>-ilb, each with its own NSG; VNet encryption on.
 cells = {
-  dev-stateless-az1 = { address_space = "172.21.0.0/20" }
-  dev-stateless-az2 = { address_space = "172.21.16.0/20" }
+  dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+  dev-ext-stateless-az2 = { address_space = "172.21.16.0/20" }
 }
 
-# The internal zones' names resolve only inside the cells.
-internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
 # The environment's platform Key Vault (OneK8s design sections 13 and 18), which the clusters name
 # in key_vault_name with key_vault_create = false: the gateways' certificates, the clusters'
@@ -55,8 +57,6 @@ key_vault_purge_protection_enabled = true
 
 # One vault per isolation zone, for the secrets of the zone's applications (design section 6).
 zone_key_vault_names = {
-  int-fi = "kv-onek8s-dev-int-fi"
-  int-se = "kv-onek8s-dev-int-se"
   ext-fi = "kv-onek8s-dev-ext-fi"
   ext-se = "kv-onek8s-dev-ext-se"
 }
@@ -104,8 +104,6 @@ image_signing = {
 key_vault_namespaces = {
   flux-system      = {}
   platform-gateway = {}
-  int-fi-gateway   = {}
-  int-se-gateway   = {}
   ext-fi-gateway   = {}
   ext-se-gateway   = {}
   # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 6, D49):
@@ -150,8 +148,8 @@ dns_zone_resource_group_name = "rg-onek8s-dns"
 global_hostnames = {
   "hello.ext-fi.dev" = {
     endpoints = [
-      "hello-aks-dev-stateless-az1.ext-fi.dev.onek8s.lol",
-      "hello-aks-dev-stateless-az2.ext-fi.dev.onek8s.lol",
+      "hello-aks-dev-ext-stateless-az1.ext-fi.dev.onek8s.lol",
+      "hello-aks-dev-ext-stateless-az2.ext-fi.dev.onek8s.lol",
     ]
     health_path = "/healthz"
   }

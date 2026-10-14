@@ -11,9 +11,9 @@ name: Deploy
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
 #                        internal zones' private DNS, the container registry and its images and the
 #                        external zones' Traffic Manager profiles. Applied first.
-#   dev-stateless-az1    the repository root with envs/dev-stateless-az1.tfvars: aks-dev-stateless-az1.
-#   dev-stateless-az2    the repository root with envs/dev-stateless-az2.tfvars: aks-dev-stateless-az2.
-#   dev-stateful         the repository root with envs/dev-stateful.tfvars: aks-dev-stateful (defined,
+#   dev-ext-stateless-az1    the repository root with envs/dev-ext-stateless-az1.tfvars: aks-dev-ext-stateless-az1.
+#   dev-ext-stateless-az2    the repository root with envs/dev-ext-stateless-az2.tfvars: aks-dev-ext-stateless-az2.
+#   dev-ext-stateful         the repository root with envs/dev-ext-stateful.tfvars: aks-dev-ext-stateful (defined,
 #                        not deployed for now).
 #
 # After an apply of a stateless cell, the Isolation tests workflow runs against it as a further stage
@@ -47,11 +47,11 @@ on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "dev-shared (apply first), or a cluster: dev-stateless-az1, dev-stateless-az2, dev-stateful"
+        description: "dev-shared (apply first), or a cluster: dev-ext-stateless-az1, dev-ext-stateless-az2, dev-ext-stateful"
         required: true
         default: "dev-shared"
         type: choice
-        options: [dev-shared, dev-stateless-az1, dev-stateless-az2, dev-stateful]
+        options: [dev-shared, dev-ext-stateless-az1, dev-ext-stateless-az2, dev-ext-stateful]
       action:
         description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true

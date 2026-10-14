@@ -7,10 +7,12 @@ name: Renew Certificate
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Gateway
 #
 #   platform-gateway--wildcard   *.onek8s.lol                Flux webhooks
-#   int-fi-gateway--wildcard     *.int-fi.dev.onek8s.lol     the int-fi zone's gateway
-#   int-se-gateway--wildcard     *.int-se.dev.onek8s.lol
-#   ext-fi-gateway--wildcard     *.ext-fi.dev.onek8s.lol
+#   ext-fi-gateway--wildcard     *.ext-fi.dev.onek8s.lol     the ext-fi zone's gateway
 #   ext-se-gateway--wildcard     *.ext-se.dev.onek8s.lol
+#
+# dev's platform vault is the external exposure's (OneK8s design decision D52): the internal zones'
+# certificates (*.int-fi.dev.onek8s.lol, ...) belong in the internal exposure's platform vault, in its
+# own subscription, which the lab does not have.
 #
 # Each is imported into the environment's platform vault under the name of the gateway namespace's
 # share of it (`<namespace>--wildcard`; README, "Key Vault"), so the gateway of one zone can read its
@@ -22,8 +24,8 @@ name: Renew Certificate
 #   - the format: the certificate is imported as PKCS#12, never as PEM. A certificate's secret keeps
 #     the content type it was imported with, and a PEM one is not what the ExternalSecret unpacks.
 #
-# The internal zones' names are private - they resolve only inside the cells - but the certificates
-# are publicly trusted: Let's Encrypt validates them with a TXT record in the public zone
+# An internal zone's names would be private - resolved only inside its cells - but its certificate
+# publicly trusted: Let's Encrypt validates it with a TXT record in the public zone
 # (`_acme-challenge.int-fi.dev.onek8s.lol`), and the names themselves never get a public A record.
 #
 # A new version in the vault reaches the listener within the hour (the ExternalSecret's refresh
@@ -111,7 +113,7 @@ jobs:
       # One certificate at a time: they share one ACME account, whose key the first run stores.
       max-parallel: 1
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"platform-gateway--wildcard"},{"domains":"*.int-fi.dev.onek8s.lol","certificate_name":"int-fi-gateway--wildcard"},{"domains":"*.int-se.dev.onek8s.lol","certificate_name":"int-se-gateway--wildcard"},{"domains":"*.ext-fi.dev.onek8s.lol","certificate_name":"ext-fi-gateway--wildcard"},{"domains":"*.ext-se.dev.onek8s.lol","certificate_name":"ext-se-gateway--wildcard"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.onek8s.lol","certificate_name":"platform-gateway--wildcard"},{"domains":"*.ext-fi.dev.onek8s.lol","certificate_name":"ext-fi-gateway--wildcard"},{"domains":"*.ext-se.dev.onek8s.lol","certificate_name":"ext-se-gateway--wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.

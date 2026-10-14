@@ -431,21 +431,21 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
       ext-fi = { exposure = "ext", index = 3 }
     }
     cells = {
-      dev-stateless-az1 = { address_space = "172.21.0.0/20" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
   }
 
   assert {
-    condition     = azurerm_virtual_network.cell["dev-stateless-az1"].name == "vnet-dev-stateless-az1" && azurerm_virtual_network.cell["dev-stateless-az1"].encryption[0].enforcement == "AllowUnencrypted"
+    condition     = azurerm_virtual_network.cell["dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1" && azurerm_virtual_network.cell["dev-ext-stateless-az1"].encryption[0].enforcement == "AllowUnencrypted"
     error_message = "Every cell has a network of its own, with VNet encryption."
   }
   assert {
     condition = (
-      azurerm_subnet.cell["dev-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
-      azurerm_subnet.cell["dev-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
-      azurerm_subnet.cell["dev-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
-      azurerm_subnet.cell["dev-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25"
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25"
     )
     error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second."
   }
@@ -455,24 +455,88 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
   }
   assert {
     condition = (
-      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
-      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-system/https"].source_address_prefix == "Internet" &&
-      azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-system/https-from-network"].source_address_prefix == "VirtualNetwork"
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https"].source_address_prefix == "Internet" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https-from-network"].source_address_prefix == "VirtualNetwork"
     )
     error_message = "HTTPS comes from the internet to the external zones, from the network to the internal zones, and from both to the system pool, where every zone's gateway runs."
   }
   assert {
-    condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-stateless-az1/snet-ext-fi-ilb/https")
+    condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-ext-stateless-az1/snet-ext-fi-ilb/https")
     error_message = "An external zone's load balancer is public: its internal load balancer subnet lets nothing in."
   }
   assert {
-    condition     = azurerm_network_security_rule.cell_allow["dev-stateless-az1/snet-ext-fi-nodes/kubelet-from-system"].source_address_prefix == "172.21.0.0/24"
+    condition     = azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/kubelet-from-system"].source_address_prefix == "172.21.0.0/24"
     error_message = "Only the system pool reaches a zone's kubelets."
   }
   assert {
-    condition     = azurerm_private_dns_zone_virtual_network_link.internal["int-fi.test.contoso.com/dev-stateless-az1"].name == "vnet-dev-stateless-az1"
+    condition     = azurerm_private_dns_zone_virtual_network_link.internal["int-fi.test.contoso.com/dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1"
     error_message = "The internal zones' names resolve in every cell."
+  }
+}
+
+run "the_external_exposure_holds_only_external_zones" {
+  command = plan
+
+  variables {
+    exposure = "ext"
+    isolation_zones = {
+      ext-fi = { exposure = "ext", index = 3 }
+      int-fi = { exposure = "int", index = 1 }
+    }
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "the_external_exposure_has_no_internal_dns" {
+  command = plan
+
+  variables {
+    exposure           = "ext"
+    internal_dns_zones = ["int-fi.test.contoso.com"]
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "the_internal_exposure_publishes_nothing_through_traffic_manager" {
+  command = plan
+
+  variables {
+    exposure      = "int"
+    dns_zone_name = "contoso.com"
+    global_hostnames = {
+      "hello.int-fi.dev" = { endpoints = ["hello-a.int-fi.dev.contoso.com"] }
+    }
+  }
+
+  expect_failures = [var.exposure]
+}
+
+run "an_external_exposure_with_its_zones_plans" {
+  command = plan
+
+  variables {
+    exposure              = "ext"
+    resource_group_create = true
+    isolation_zones = {
+      ext-fi = { exposure = "ext", index = 3 }
+      ext-se = { exposure = "ext", index = 4 }
+    }
+    cells = {
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_network_security_group.cell) == 5
+    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets."
+  }
+  assert {
+    condition     = output.exposure == "ext"
+    error_message = "The stack says which exposure it serves."
   }
 }
 
@@ -481,7 +545,7 @@ run "rejects_a_cell_that_is_not_a_slash_20" {
 
   variables {
     cells = {
-      dev-stateless-az1 = { address_space = "172.21.0.0/22" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/22" }
     }
   }
 

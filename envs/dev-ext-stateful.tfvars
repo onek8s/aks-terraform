@@ -1,20 +1,23 @@
-# Cluster `stateful` of the OneK8s dev environment, on the Free tier: one system node pool, Azure CNI
+# The external stateful cluster `ext-stateful` of the OneK8s dev environment, on the Free tier: one system node pool, Azure CNI
 # overlay with Cilium, no uptime SLA. Keeps state: persistent volumes, with the platform's
 # `portable-disk` StorageClass whose disks outlive the cluster. Beside the stateless clusters
-# (envs/dev-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
+# (envs/dev-ext-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
 # between them. shared/envs/dev.tfvars is applied first. Defined, but not deployed for now.
 #
-#   terraform workspace select -or-create dev-stateful
-#   terraform apply -var-file=envs/dev-stateful.tfvars
+#   terraform workspace select -or-create dev-ext-stateful
+#   terraform apply -var-file=envs/dev-ext-stateful.tfvars
 
-name     = "aks-dev-stateful"
+name     = "aks-dev-ext-stateful"
 location = "swedencentral"
+
+# External (design decision D52): the external zones' stateful workloads only.
+exposure = "ext"
 
 sku_name = "Base"
 sku_tier = "Free"
 
 # The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
-# the environment and what they share. What is this cluster's own carries its name (`aks-dev-stateful`,
+# the environment and what they share. What is this cluster's own carries its name (`aks-dev-ext-stateful`,
 # `id-sec-dev-aks-...`); what is shared carries `shared` (`id-sec-dev-shared-kv-...`).
 resource_group_name = "rg-aks-dev"
 
@@ -29,7 +32,7 @@ node_subnet_name     = "snet-aks-nodes"
 # This cluster adds a federated credential of its own to each; every grant on the vaults is shared/'s.
 #
 # Defined, not deployed: the stateful cluster of the design lives in the backend network with no
-# gateway of its own (sections 8 and 13), which clusters/dev-stateful of the platform repository does
+# gateway of its own (sections 8 and 13), which clusters/dev-ext-stateful of the platform repository does
 # not follow yet.
 key_vault_name       = "kv-onek8s-dev-platform"
 key_vault_create     = false
@@ -122,12 +125,12 @@ managed_namespaces = {
 flux_git_repository = {
   url    = "https://github.com/onek8s/aks-fluxcd-platform"
   branch = "main"
-  path   = "./clusters/dev-stateful"
+  path   = "./clusters/dev-ext-stateful"
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
 
 # A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
-# receiver (flux-webhook-dev-stateful.onek8s.lol), checked against the token shared/ keeps in the
+# receiver (flux-webhook-dev-ext-stateful.onek8s.lol), checked against the token shared/ keeps in the
 # platform vault. flux-system gets this cluster's credential on its shared identity to read it.
 flux_github_webhook = true
