@@ -1,0 +1,154 @@
+# Traefik Proxy for the Gateway ${gateway_name} (design section 13), on the system pool, serving that
+# one Gateway and nothing else: its own GatewayClass `traefik-${gateway_name}`, picked out by label,
+# which the Gateway names. Only the Gateway API provider: no Ingress, no IngressRoute (Kubernetes CRD)
+# provider, no CRDs of the chart's own - the Gateway API CRDs are AKS's.
+#
+# Why Traefik and not App Routing's Gateway API implementation (`approuting-istio`): App Routing's
+# istiod requests 500m CPU and 2 GiB memory per replica, at least two replicas, and the requests are
+# not customizable - 1 CPU and 4 GiB before the first Gateway, which took a second system node in
+# every lab cell (https://github.com/Azure/AKS/issues/5939). Traefik runs one small Deployment per
+# Gateway and no control plane.
+#
+# One entry point, `websecure`, on 443 in the pod and on the load balancer - the Gateway's listener
+# port, which Traefik matches to its entry point - so the Gateway and the Cilium policies are the same
+# for either implementation. Binding 443 as a non-root user takes the safe sysctl
+# net.ipv4.ip_unprivileged_port_start, as App Routing's gateway pods do. No plain HTTP anywhere, not
+# even a redirect. The load balancer is
+#
+#   - an internal zone's: an Azure internal load balancer in the zone's own subnet
+#     snet-${gateway_name}-ilb, reached from the network only;
+#   - an external zone's, and the platform's: public. Azure Traffic Manager points the applications'
+#     hostnames at an external zone's in every cell (shared/: global_hostnames).
+#
+# Traefik copies the load balancer's address into the Gateway's status, and external-dns publishes
+# the routes' hostnames there (aks-fluxcd-platform, infrastructure/external-dns).
+#
+# The pods and the Service carry `gateway.networking.k8s.io/gateway-name: ${gateway_name}`, the label
+# App Routing puts on its own: the fleet's Cilium baselines let the zone's gateway into its
+# applications by it, and Cluster status and the isolation tests find the gateway by it.
+#
+# Traefik v3.7 (chart 41) watches the kinds of Gateway API v1.5, which AKS installs on Kubernetes
+# 1.36 - every cell's version.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: traefik-${gateway_name}
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://traefik.github.io/charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik-${gateway_name}
+  namespace: flux-system
+spec:
+  interval: 1h
+  releaseName: traefik-${gateway_name}
+  targetNamespace: ${gateway_namespace}
+  storageNamespace: ${gateway_namespace}
+  chart:
+    spec:
+      chart: traefik
+      version: "41.7.x"
+      sourceRef:
+        kind: HelmRepository
+        name: traefik-${gateway_name}
+      interval: 12h
+  install:
+    crds: Skip
+    # The namespace is the fleet's (aks-fluxcd-platform), which may come up after this: keep trying.
+    remediation:
+      retries: -1
+  upgrade:
+    crds: Skip
+    remediation:
+      retries: 3
+  values:
+    fullnameOverride: traefik
+    providers:
+      kubernetesCRD:
+        enabled: false
+      kubernetesIngress:
+        enabled: false
+      kubernetesGateway:
+        enabled: true
+        labelSelector: platform/gateway-class=traefik-${gateway_name}
+    api:
+      dashboard: false
+    gatewayClass:
+      enabled: true
+      name: traefik-${gateway_name}
+      labels:
+        platform/gateway-class: traefik-${gateway_name}
+    gateway:
+      enabled: false
+    ingressClass:
+      enabled: false
+    ports:
+      web:
+        expose:
+          default: false
+      websecure:
+        port: 443
+        exposedPort: 443
+        expose:
+          default: true
+        http:
+          tls:
+            enabled: true
+    podSecurityContext:
+      sysctls:
+        - name: net.ipv4.ip_unprivileged_port_start
+          value: "0"
+    service:
+      annotations:
+        # ${quote}...${quote}: "true" / "false" has to stay a string after substitution.
+        service.beta.kubernetes.io/azure-load-balancer-internal: ${quote}${gateway_internal}${quote}
+        service.beta.kubernetes.io/azure-load-balancer-internal-subnet: snet-${gateway_name}-ilb
+        # The probe the load balancer sends, over TCP to the port: no plain HTTP path to probe.
+        service.beta.kubernetes.io/port_443_health-probe_protocol: tcp
+      labels:
+        gateway.networking.k8s.io/gateway-name: ${gateway_name}
+        platform/exposure: ${gateway_exposure}
+      spec:
+        type: LoadBalancer
+        # Keeps the client's address on the requests Traefik sees, and sends traffic only to the
+        # nodes a Traefik pod runs on.
+        externalTrafficPolicy: Local
+    # The system pool, next to the platform's own controllers: a zone without applications then has
+    # no nodes at all - its NodePools scale to zero (aks-fluxcd-platform, infrastructure/node-pools).
+    nodeSelector:
+      kubernetes.azure.com/mode: system
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+    # Two replicas, spread over the system nodes where there are several, replaced one at a time
+    # with a new one up first: the platform's rollout guardrails (2 replicas, maxUnavailable 0, a
+    # PDB that allows a drain). Small requests: the gateway of a lab cell carries little.
+    deployment:
+      replicas: 2
+      podLabels:
+        gateway.networking.k8s.io/gateway-name: ${gateway_name}
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: traefik-${gateway_name}-${gateway_namespace}
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 0
+        maxSurge: 1
+    podDisruptionBudget:
+      enabled: true
+      maxUnavailable: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 512Mi

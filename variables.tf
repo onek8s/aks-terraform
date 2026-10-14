@@ -172,21 +172,68 @@ DESCRIPTION
   nullable    = false
 }
 
-variable "app_routing_gateway_api_enabled" {
-  type        = bool
-  default     = false
+variable "gateway_implementation" {
+  type        = string
+  default     = null
   description = <<DESCRIPTION
-Whether AKS runs [App Routing's Gateway API implementation][approutinggw]: a sidecar-less Istio
-control plane (`istiod` in `aks-istio-system`) that serves the GatewayClass `approuting-istio` and
-creates a Deployment, `LoadBalancer` Service, autoscaler and disruption budget for every Gateway of
-that class - no service mesh, no sidecars, no Istio CRDs. AKS upgrades it in place with the cluster.
-The stateless cells' zone and platform Gateways use it (OneK8s design section 13); the stateful
-cluster has no Gateway API implementation (R9a). It cannot run beside the Istio service mesh add-on,
-which this configuration never enables. Needs the managed Gateway API CRDs, which every cluster has.
+The Gateway API implementation that serves the cluster's Gateways - one per isolation zone and the
+platform's, which the Flux repository deploys (OneK8s design section 13). Null for a cluster without
+Gateways: the stateful cluster has no Gateway API implementation (R9a).
 
+- `traefik`: [Traefik Proxy][traefik], one Helm release per Gateway on the system pool, each with a
+  GatewayClass of its own (`traefik-<gateway>`), deployed from this repository's `gateways/traefik`
+  by a Flux configuration per Gateway, `traefik-<gateway>` (see `traefik_flux_repository`). No
+  control plane: a few dozen MiB per Gateway.
+- `approuting-istio`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less
+  Istio control plane (`istiod` in `aks-istio-system`) that serves the GatewayClass
+  `approuting-istio` and creates a Deployment, `LoadBalancer` Service, autoscaler and disruption
+  budget for every Gateway of that class - no service mesh, no sidecars, no Istio CRDs. AKS upgrades
+  it in place with the cluster. It cannot run beside the Istio service mesh add-on, which this
+  configuration never enables. Its istiod requests 500m CPU and 2 GiB memory per replica, at least
+  two replicas, and the requests are not customizable ([Azure/AKS#5939][aks5939]): 1 CPU and 4 GiB
+  before the first Gateway - a second system node in every lab cell.
+
+The Flux repository is told the class each Gateway names as `gateway_class_name_<gateway>` (the
+zone's hyphens as underscores; `gateway_class_name_platform` for the platform's). Switching
+re-creates the Gateways under the new class (they carry Flux `force`), so a cell's gateways are
+down for the minutes it takes - drain the cell in Traffic Manager first where that matters. Both
+need the managed Gateway API CRDs, which every cluster has.
+
+[traefik]: https://doc.traefik.io/traefik/providers/kubernetes-gateway/
 [approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
+[aks5939]: https://github.com/Azure/AKS/issues/5939
+DESCRIPTION
+
+  validation {
+    condition     = var.gateway_implementation == null || contains(["traefik", "approuting-istio"], coalesce(var.gateway_implementation, "-"))
+    error_message = "gateway_implementation must be traefik, approuting-istio or null."
+  }
+}
+
+variable "traefik_flux_repository" {
+  type = object({
+    url                   = optional(string, "https://github.com/onek8s/aks-terraform")
+    branch                = optional(string, "main")
+    path                  = optional(string, "./gateways/traefik")
+    sync_interval_seconds = optional(number, 300)
+  })
+  default     = {}
+  description = <<DESCRIPTION
+Where the Flux configurations of `gateway_implementation = "traefik"` read Traefik's manifests:
+this repository's `gateways/traefik` on `main` by default, so the Gateway implementation is under
+this repository's control rather than the Flux repository's. A public repository: no credential is
+sent.
 DESCRIPTION
   nullable    = false
+
+  validation {
+    condition     = can(regex("^https://", var.traefik_flux_repository.url)) && startswith(var.traefik_flux_repository.path, "./")
+    error_message = "traefik_flux_repository.url must start with https:// and its path with ./."
+  }
+  validation {
+    condition     = var.traefik_flux_repository.sync_interval_seconds >= 60
+    error_message = "traefik_flux_repository.sync_interval_seconds must be at least 60."
+  }
 }
 
 variable "image_integrity_enabled" {

@@ -1,0 +1,23 @@
+# Traefik Proxy as the Gateway API implementation of one Gateway - an isolation zone's or the
+# platform's - for a cluster with `gateway_implementation = "traefik"` (variables.tf). aks-terraform
+# applies this directory once per Gateway, each through a Flux configuration of its own,
+# `traefik-<gateway>` (main.tf: traefik_flux_configuration; Azure refuses two Kustomizations of one
+# configuration on the same path), with the Gateway's values:
+#
+#   ${gateway_name}       ext-fi, int-se, ..., or platform - the Gateway's name
+#   ${gateway_namespace}  <zone>-gateway, or platform-gateway - where the Gateway and Traefik run
+#   ${gateway_exposure}   int or ext
+#   ${gateway_internal}   "true" for an internal zone: an internal load balancer in snet-<zone>-ilb
+#   ${quote}              a double quote, for values that must stay strings after substitution
+#
+# The Gateway itself, its certificate, its namespace and the Cilium policies every implementation
+# shares stay in onek8s/aks-fluxcd-platform (infrastructure/zones, infrastructure/platform-gateway):
+# the Gateway names its class through the `gateway_class_name_<gateway>` setting aks-terraform hands
+# the cluster's Flux configuration - `traefik-<gateway>` here, `approuting-istio` with App Routing.
+# What only Traefik needs is here, so that switching implementations is a change of this repository
+# alone.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - release.yaml
+  - cilium.yaml

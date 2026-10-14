@@ -1,0 +1,18 @@
+# What Traefik needs beyond the gateway policy every implementation shares (aks-fluxcd-platform,
+# `gateway` in the zone's and the platform's gateway namespace: 443 in from the load balancer and the
+# node, out to the routes' backends and cluster DNS). Cilium policies add up, so this only widens it:
+# Traefik watches the Gateway API objects, Services, EndpointSlices and the listener's Secret itself,
+# from the API server - where App Routing's Envoy pods get theirs from istiod.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: gateway-traefik
+  namespace: ${gateway_namespace}
+spec:
+  description: "Traefik for the ${gateway_name} Gateway: out to the API server"
+  endpointSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: ${gateway_name}
+  egress:
+    - toEntities:
+        - kube-apiserver

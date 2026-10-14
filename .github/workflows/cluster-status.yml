@@ -190,9 +190,11 @@ jobs:
             kubectl logs -n "${pod%%/*}" "${pod#*/}" --all-containers --tail=30 --prefix
           done
           kubectl get constraints -o json | jq -r '.items[] | select(((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) and (.kind | test("(?i)printmutations") | not)) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", "  match: \(.spec.match | tostring)", "  parameters: \(.spec.parameters | tostring)", (.status.violations[]? | "  \(.namespace)/\(.name): \(.message)")'
-          # The gateways: App Routing's Istio control plane, one Gateway per isolation zone and the
-          # platform's - their Envoy Deployments, autoscalers, load balancers and routes.
-          kubectl get pods,hpa,configmap -n aks-istio-system -o wide
+          # The gateways: one Gateway per isolation zone and the platform's, served by Traefik (a Helm
+          # release and Flux configuration traefik-<gateway> each) or App Routing's Istio control
+          # plane - their Deployments, autoscalers, load balancers and routes.
+          kubectl get pods,hpa,configmap -n aks-istio-system -o wide 2>/dev/null || true
+          kubectl get helmreleases.helm.toolkit.fluxcd.io -n flux-system -o wide | grep -E "NAME|traefik" || true
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -A -o yaml
           kubectl get httproute -A -o yaml

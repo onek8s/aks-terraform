@@ -90,9 +90,11 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# App Routing's Gateway API implementation (GatewayClass approuting-istio) for the zones' and the
-# platform's Gateways, which aks-fluxcd-platform deploys.
-app_routing_gateway_api_enabled = true
+# The Gateway API implementation of the zones' and the platform's Gateways, which aks-fluxcd-platform
+# deploys: `traefik` (Traefik Proxy per Gateway, from gateways/traefik of this repository) or
+# `approuting-istio` (App Routing's istiod: 1 CPU and 4 GiB of requests before the first Gateway,
+# https://github.com/Azure/AKS/issues/5939).
+gateway_implementation = "approuting-istio"
 
 # A public API server - the one exception of the dev lab to design section 3, which has no network
 # path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
