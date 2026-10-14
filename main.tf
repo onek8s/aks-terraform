@@ -616,6 +616,15 @@ check "namespace_access_needs_azure_rbac" {
   }
 }
 
+# The role bindings of managed_namespaces[*].groups live inside the cluster and are applied by the
+# cluster's Flux configuration; a cluster without one gets the namespaces and no bindings in them.
+check "namespace_groups_need_flux" {
+  assert {
+    condition     = local.flux_enabled || length(local.managed_namespace_role_bindings) == 0
+    error_message = "${var.name} has no flux_git_repository, so the ${length(local.managed_namespace_role_bindings)} role binding(s) of managed_namespaces[*].groups are not applied: they are delivered by the cluster's Flux configuration. Set flux_git_repository, or bind those groups inside the cluster some other way."
+  }
+}
+
 # With role assignments managed elsewhere the namespaces are still created here, but nobody is
 # granted anything on them - and the first sign of it is a team that cannot reach its own namespace.
 check "namespace_access_is_granted_somewhere" {

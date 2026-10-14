@@ -2,8 +2,9 @@ name: CIS benchmark
 
 # The CIS Azure Kubernetes Service (AKS) Benchmark on one cluster of the dev environment (OneK8s design
 # sections 14 and 17): continuous evidence that the platform's hardening has not drifted, and the
-# Cloud configuration review's CIS input. Weekly, after every Deploy apply of a stateless cell, and by
-# hand.
+# Cloud configuration review's CIS input. By hand only: the weekly run and the run after every Deploy
+# apply were turned off to keep the deploy-and-test loop short (2026-10-14); run it after a change that
+# can move the score.
 #
 #   - Section 3, worker nodes: kube-bench (`--benchmark aks-1.8 --targets node`) as a Job pinned to
 #     every node, in kube-system, with read-only hostPath mounts of the kubelet's files and hostPID -
@@ -34,14 +35,6 @@ on:
         default: "aks-dev-stateless-az1"
         type: choice
         options: [aks-dev-stateless-az1, aks-dev-stateless-az2, aks-dev-stateful]
-  workflow_call:
-    inputs:
-      cluster:
-        required: true
-        type: string
-  schedule:
-    # Mondays 06:20 UTC, the running cell.
-    - cron: "20 6 * * 1"
 
 permissions:
   contents: read

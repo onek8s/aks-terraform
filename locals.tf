@@ -134,7 +134,7 @@ locals {
         syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
         url                   = try(var.flux_git_repository.url, null)
       }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
-      kustomizations = {
+      kustomizations = merge({
         platform = {
           path                  = try(var.flux_git_repository.path, null)
           prune                 = true
@@ -149,7 +149,23 @@ locals {
             substitute = local.flux_cluster_settings
           }
         }
-      }
+        }, {
+        # The managed namespaces' role bindings, one Kustomization each - see managed_namespace_role_bindings.
+        for key, binding in local.managed_namespace_role_bindings : key => {
+          path                   = var.namespace_access_path
+          prune                  = true
+          syncIntervalInSeconds  = try(var.flux_git_repository.sync_interval_seconds, null)
+          retryIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
+          wait                   = true
+          postBuild = {
+            substitute = {
+              namespace       = binding.namespace
+              role            = binding.role
+              group_object_id = binding.group_object_id
+            }
+          }
+        }
+      })
       namespace  = "flux-system"
       scope      = "cluster"
       sourceKind = "GitRepository"
@@ -511,7 +527,18 @@ locals {
   # Every grant asked for, keyed by what it grants rather than by its position in the list: an entry
   # removed from the middle of `access` must not renumber the assignments after it and have Azure
   # drop and recreate them.
-  managed_namespace_access_grants = {
+  #
+  # Every group of `groups` comes with `namespace_user`, so that its members can fetch a kubeconfig
+  # for the namespace; merged rather than listed twice, since `access` may grant the same.
+  managed_namespace_access_grants = merge({
+    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/namespace_user/${binding.group_object_id}" => {
+      key            = "${binding.namespace}/namespace_user/${binding.group_object_id}"
+      namespace      = binding.namespace
+      principal_id   = binding.group_object_id
+      principal_type = "Group"
+      role           = "namespace_user"
+    }
+    }, {
     for grant in flatten([
       for name, namespace in var.managed_namespaces : [
         for access in namespace.access : {
@@ -523,6 +550,21 @@ locals {
         }
       ]
     ]) : grant.key => grant
+  })
+
+  # The Kubernetes RoleBindings of `managed_namespaces[*].groups`: one per namespace and role that
+  # names a group, keyed `<namespace>-<role>` - the name of the Flux Kustomization that applies it.
+  # Which ones there are follows from the inputs alone.
+  managed_namespace_role_bindings = {
+    for binding in flatten([
+      for name, namespace in var.managed_namespaces : [
+        for role in ["view", "edit", "admin"] : {
+          namespace       = name
+          role            = role
+          group_object_id = lower(namespace.groups[role])
+        } if namespace.groups[role] != null
+      ]
+    ]) : "${binding.namespace}-${binding.role}" => binding
   }
 
   # ... and the ones made here. An estate with role assignments managed elsewhere gets these from
