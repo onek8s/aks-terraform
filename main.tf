@@ -158,9 +158,10 @@ resource "time_sleep" "role_assignment_propagation" {
 }
 
 module "aks" {
-  # The Azure Verified Module 0.8.3, vendored with one input added - eBPF host routing at creation,
-  # see modules/avm-managedcluster/VENDORED.md.
-  source = "./modules/avm-managedcluster"
+  # The Azure Verified Module. Image Integrity, the one setting it has no input for, is set beside it
+  # - see image_integrity.tf.
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
+  version = "0.8.5"
 
   location  = var.location
   name      = var.name
@@ -231,9 +232,8 @@ module "aks" {
   # because AKS Automatic enables App Routing unless the create request says otherwise, because a
   # cluster that had the ALB Controller add-on only loses it when told to - and because the module
   # cannot validate a partially filled ingress_profile: it reads through the nested objects and fails
-  # on the ones left null. Stating the add-on keeps the module on a preview cluster API (patched to
-  # 2026-05-02-preview, modules/avm-managedcluster/VENDORED.md), which knows both it and App Routing
-  # Istio.
+  # on the ones left null. Stating the add-on keeps the module on a preview cluster API
+  # (2026-03-02-preview), which knows both it and App Routing Istio.
   ingress_profile = {
     application_load_balancer = {
       enabled = false
@@ -328,11 +328,6 @@ module "aks" {
     image_cleaner = {
       enabled        = true
       interval_hours = 168
-    }
-    # Ratify checks the images' signatures for the Azure Policy add-on - see image_integrity.tf.
-    # Stated when off as well, so that turning it off turns it off.
-    image_integrity = {
-      enabled = var.image_integrity_enabled
     }
     # Federates Kubernetes service accounts with Entra ID. External Secrets Operator and external-dns
     # authenticate to Azure this way - see the identities below.
