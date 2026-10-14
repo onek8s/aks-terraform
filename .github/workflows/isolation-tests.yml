@@ -1,9 +1,9 @@
 name: Isolation tests
 
 # The automated negative tests of OneK8s design section 17 ("Requirement and isolation tests"), run
-# against one dev cell as a pipeline stage: after every apply of a stateless cell (Deploy calls this
-# workflow), every weekday morning (after fleet and policy changes, which do not go through Deploy),
-# and by hand. Each check names the requirement it covers; the run's summary is the table of them.
+# against one dev cell. **By hand only** (the user's choice, 2026-10-14: a run takes 10-30 minutes and
+# held up the work as an automatic stage): no Deploy stage, no schedule - run it when the user asks for
+# it. Each check names the requirement it covers; the run's summary is the table of them.
 #
 #   - Cluster settings (R1, R19, R21): local accounts and SSH off, eBPF host routing, FQDN policies,
 #     customer-managed keys, no Secrets Store CSI driver; and `az aks get-credentials --admin` is
@@ -64,14 +64,6 @@ on:
         default: "aks-dev-ext-stateless-az1"
         type: choice
         options: [aks-dev-ext-stateless-az1, aks-dev-ext-stateless-az2]
-  workflow_call:
-    inputs:
-      cluster:
-        required: true
-        type: string
-  schedule:
-    # Weekdays 05:40 UTC, the running cell.
-    - cron: "40 5 * * 1-5"
 
 permissions:
   contents: read
