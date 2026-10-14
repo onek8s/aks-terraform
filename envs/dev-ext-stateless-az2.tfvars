@@ -94,7 +94,7 @@ image_integrity_enabled = true
 # deploys: `traefik` (Traefik Proxy per Gateway, from gateways/traefik of this repository) or
 # `approuting-istio` (App Routing's istiod: 1 CPU and 4 GiB of requests before the first Gateway,
 # https://github.com/Azure/AKS/issues/5939).
-gateway_implementation = "approuting-istio"
+gateway_implementation = "traefik"
 
 # A public API server - the one exception of the dev lab to design section 3, which has no network
 # path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
@@ -110,11 +110,13 @@ entra_reader_group_object_ids = []
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy).
 azure_policy_enabled = true
 
-# The system pool: two amd64 nodes in availability zone 2, 4 vCPU and 8 GiB each (the platform's
-# controllers and the Azure Policy add-on do not fit in 2 vCPU, and App Routing's istiod requests
-# 500m and 2 GiB per replica, at least two replicas - more than one 8 GiB node holds beside the
-# rest), on Azure Linux 3.0 - which eBPF host routing needs on every node - with encryption at host,
-# SSH off and the CriticalAddonsOnly taint: only the platform's own controllers run here, every
+# The system pool: one amd64 node in availability zone 2, 4 vCPU and 8 GiB (the platform's
+# controllers and the Azure Policy add-on do not fit in 2 vCPU). One node holds everything only with
+# Traefik as the Gateway API implementation and the VPA add-on off (below): App Routing's istiod
+# would add 1 CPU and 4 GiB of requests (https://github.com/Azure/AKS/issues/5939), the VPA add-on
+# ~2.4 GiB, and 5.8 GiB of the node's 8 is allocatable; either one back means node_count = 2. On
+# Azure Linux 3.0 - which eBPF host routing needs on every node - with encryption at host, SSH off
+# and the CriticalAddonsOnly taint: only the platform's own controllers run here, every
 # isolation zone's pods on that zone's NAP nodes.
 # Standard_D4als_v6 is offered in both zones the cells use and supports VNet encryption. A system
 # node pool cannot run on Spot VMs, and a node pool cannot change its architecture or OS in place.
@@ -122,7 +124,7 @@ default_node_pool = {
   vm_size             = "Standard_D4als_v6"
   availability_zones  = ["2"]
   enable_auto_scaling = false
-  node_count          = 2
+  node_count          = 1
   os_sku              = "AzureLinux"
   encryption_at_host  = true
   ssh_access          = "Disabled"
@@ -133,6 +135,12 @@ default_node_pool = {
 # section 4. The platform repository's node-pools define two NodePools per zone, on-demand and spot,
 # each in its zone's subnet (isolation_zones) and in this cell's availability zone.
 node_auto_provisioning_enabled = true
+
+# Lab cost exception (dev only, 2026-10-14): no VPA add-on. Its recommender, updater and admission
+# controller request ~2.4 GiB, which one 8 GiB system node does not hold beside the rest; the cell
+# keeps one system node instead of two. aks-hello's VerticalPodAutoscaler is left out with it
+# (aks-fluxcd-example, stateless/). Pod right-sizing (design section 4) stays the design for acc/prd.
+vertical_pod_autoscaler_enabled = false
 
 # The `example` team's application, in the ext-fi zone (design section 7: one namespace per
 # application and zone, `<zone>-<app>`). Its own Flux configuration deploys stateless/ of

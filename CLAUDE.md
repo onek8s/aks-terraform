@@ -69,10 +69,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   running). Its tfvars, fleet directory and Traffic Manager endpoint stay; Traffic Manager just sees
   the endpoint as down. To bring it back: Deploy `dev-ext-stateless-az2` apply with `allow_empty_state`,
   then Flux webhooks and Cluster status on it (Isolation tests only if the user asks). Do not rebuild it unless asked.
-- **VPA add-on on** (`vertical_pod_autoscaler_enabled`, default true; applied to az1 2026-10-13).
-  aks-hello has a `VerticalPodAutoscaler` in `InPlaceOrRecreate` (RequestsOnly, CPU 3m-20m, memory
-  64Mi-128Mi, `minReplicas: 1`) and `resizePolicy: NotRequired`; Cluster status shows VPAs, targets
-  and resize conditions. First in-place resize not yet observed.
+- **VPA add-on off in the dev cells** (2026-10-14, lab cost exception, the user's choice): `vertical_pod_autoscaler_enabled
+  = false` in the stateless tfvars (default stays true, design section 4) - its ~2.4 GiB of requests (2 recommenders,
+  2 updaters, 2 admission controllers) kept a cell off one 8 GiB system node. aks-hello's `VerticalPodAutoscaler`
+  (`InPlaceOrRecreate`, RequestsOnly, CPU 3m-20m, memory 64Mi-128Mi) stays in aks-fluxcd-example `apps/` but
+  `stateless/` deletes it with a patch (no CRD without the add-on). Isolation tests: R11 VPA follows the tfvars,
+  the VPA dry runs are AUDIT without the CRD. To bring it back: tfvars true, drop the patch, `node_count = 2`.
 - **Image Integrity on** (preview, `image_integrity_enabled` in the stateless tfvars; feature
   `EnableImageIntegrityPreview` registered by Deploy). shared/ `image_signing`: self-signed cert
   `image-signing` in `kv-onek8s-dev-platform` (non-exportable key) and identity
@@ -84,9 +86,16 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   is not reported, the unsigned probe is. Two Notation constraints exist: ours and the landing zone's
   `Deploy-MCSB2-Monitoring` one (default exclusions); both report the platform's upstream images
   (ESO, Flux), which are not signed by the platform - expected for now.
-- **App Routing's Gateway API on az1** (2026-10-13): all five Gateways (`<zone>` and `platform`) are
-  `approuting-istio`, Programmed, 2 Envoy pods each on the system pool; Traefik removed. Isolation tests
-  green on it (healthz through the gateway and Traffic Manager, cross-zone blocked, Flux webhook).
+- **Traefik serves the dev cells' Gateways again** (2026-10-14, `gateway_implementation = "traefik"`): App Routing's
+  istiod requests 1 CPU / 4 GiB before the first Gateway and cannot be tuned (https://github.com/Azure/AKS/issues/5939),
+  which took a second system node. Traefik's manifests live here, `gateways/traefik` (HelmRepository + HelmRelease
+  chart 41.7.x, GatewayClass `traefik-<gateway>`, 443 in the pod via the safe sysctl, 2 x 25m/64Mi, pods and
+  Service labelled `gateway.networking.k8s.io/gateway-name: <gateway>` like App Routing's, Cilium policy
+  `gateway-traefik` for the API server), applied by one Flux configuration `traefik-<gateway>` per Gateway
+  (`traefik.tf`; zones + platform). The fleet's Gateways name `${gateway_class_name}` from the settings
+  `gateway_class_name_<gateway>`; the fleet's ConfigMap `gateway` only matters for App Routing. App Routing
+  (`approuting-istio`) stays a supported choice: switch the tfvars back (and `node_count = 2`); the Gateways carry
+  Flux `force`, so a class change re-creates them (a few minutes without gateways).
 - **CIS AKS Benchmark** (2026-10-13): first run on az1 55 % (23 of 42 automated recommendations); every
   node check passes. Improved: audit logs (`log-dev-platform` workspace in shared/, diagnostic setting
   `kube-audit-admin` + `guard` per cluster, 1 GB/day cap), Cilium policies and token-less default
@@ -178,8 +187,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - Region swedencentral. Quotas: regional vCPUs 52, Dpsv6 24, Dalv6 16, low-priority (spot) 3 - a
   raise to 8 was throttled by Azure ("retry after 3600 s", each retry restarts the wait); re-run
   `vcpu-quota.yml` once at most per hour.
-- A cell with no applications is two 4-vCPU system nodes (Standard_D4als_v6): App Routing's istiod
-  requests 2 x (500m, 2 GiB), which one 8 GiB node cannot hold beside the rest. Each zone with
+- A cell with no applications is **one** 4-vCPU system node (Standard_D4als_v6, 2026-10-14) - only with Traefik and
+  without the VPA add-on: then ~3.8 GiB of requests of the 5.8 GiB allocatable (with either, more than 5.8). Each zone with
   application pods adds NAP nodes.
 - aks-hello runs **2 replicas** (rollout guardrails), still on the system nodes.
 - **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
@@ -192,8 +201,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Traffic Manager, not Front Door.** External zones get a public LB per zone per cell; one Traffic
   Manager profile per global hostname (e.g. `hello.ext-fi.dev.onek8s.lol`). Design uses Subnet routing
   with nested Priority profiles; the dev lab uses Weighted.
-- **App Routing's Gateway API (`approuting-istio`), not Traefik** (2026-10-13, the user prefers the Azure
-  standard offering): AKS runs a sidecar-less istiod (`aks-istio-system`, `app_routing_gateway_api_enabled`)
+- **Gateway API implementation is a flag, `gateway_implementation`** (2026-10-14): `traefik` (dev, for the
+  resources: Azure/AKS#5939) or `approuting-istio`. Earlier (2026-10-13) the user preferred the Azure standard
+  offering, App Routing's Gateway API; with it AKS runs a sidecar-less istiod (`aks-istio-system`)
   and creates per Gateway an Envoy Deployment + LB Service + HPA (min 2, cannot go lower) + PDB, shaped by
   the ConfigMap in the Gateway's `spec.infrastructure.parametersRef` (allow list: nodeSelector,
   tolerations, resources, Service annotations/ETP...). No Istio service mesh add-on (mutually exclusive).
@@ -204,7 +214,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   exception the user asked for. Private API server stays the design for acc/prd.
 - **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24 each (nodes /25, ILB /27),
   own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own
-  Gateway (class `approuting-istio`) and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.
+  Gateway (class `traefik-<zone>` or `approuting-istio`) and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.
 - **Zone nodes only for applications.** Each zone's gateway pods and ESO run on the system pool (with the
   platform gateway and platform ESO), so a zone without application pods has zero nodes and its
   NodePools scale to zero. Consequence: the system subnet NSG allows 443 from Internet *and* (a
@@ -255,7 +265,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   assignment `not_scopes`. Custom mutations cannot be parameterized: render one definition per value.
 - **An NSG rule takes one service tag**; `Internet` + `VirtualNetwork` in one rule is a 400.
 - **App Routing's istiod requests 500m + 2 GiB per replica, min 2, not customizable**: one 8 GiB system
-  node filled to 99 % memory and left gateways, ESO, apps and Ratify Pending - hence two system nodes.
+  node filled to 99 % memory and left gateways, ESO, apps and Ratify Pending - hence two system nodes with it
+  (Azure/AKS#5939; the dev cells run Traefik instead).
   Its gateway pods have no seccomp profile (PSS restricted would refuse them: gateway namespaces are
   baseline). The Image Integrity policy's ID also tags `K8sAzureV1PrintMutationsAnnotations`
   constraints, which report every mutated pod - filter them out when counting signature violations.
@@ -299,8 +310,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `kubernetes.azure.com/set-kube-service-host-fqdn: "true"` on every Alloy collector and kube-state-metrics
   (detected from live node labels via `lookup`, so offline `helm template` misses it); with it, pods
   resolve `*.hcp.<region>.azmk8s.io`, which their Cilium DNS rules must allow.
-- **The system nodes are full**: memory requests ~99 % / 92 % of ~5.8 GiB allocatable per D4als_v6, mostly
-  AKS's own pods (istiod 2 GiB). New system-pool workloads need small requests or node-critical priority.
+- **The system node is nearly full**: on 2026-10-14 the two D4als_v6 held ~11 GiB of requests, istiod 4 GiB and
+  the VPA add-on 2.4 GiB of it; without both, one node (~5.8 GiB allocatable) holds the rest with ~2 GiB to spare.
+  New system-pool workloads need small requests or node-critical priority.
 - **GitHub OIDC subjects of this org carry immutable IDs** (`repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`),
   not `repo:onek8s/aks-terraform:...`: a federated credential on the short form gets 401 at Entra ID.
 - **Azure refuses two Kustomizations of one Flux configuration on the same path** (`InvalidInputParameter`).
