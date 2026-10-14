@@ -652,7 +652,7 @@ run "rejects_a_budget_start_that_is_not_the_first_of_a_month" {
 }
 
 # A namespace's groups (the clusters' managed_namespaces.<ns>.groups) get on its share what their
-# Kubernetes role gets on Secrets: edit and admin manage its secrets, view sees the vault's metadata.
+# Kubernetes role gets on Secrets: edit and admin manage its secrets, view gets nothing.
 run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
   command = plan
 
@@ -676,7 +676,7 @@ run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
       "example/writer/22222222-2222-2222-2222-222222222222",
       "example/writer/44444444-4444-4444-4444-444444444444",
     ])
-    error_message = "The edit and admin groups should manage the namespace's secrets, each once."
+    error_message = "The edit and admin groups should manage the namespace's secrets, each once - and the view group get nothing."
   }
   assert {
     condition = alltrue([
@@ -684,14 +684,6 @@ run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
       strcontains(azurerm_role_assignment.key_vault_namespace_writer["example/writer/44444444-4444-4444-4444-444444444444"].condition, "@Request[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith 'example--'"),
     ])
     error_message = "The admin group should be held to the namespace's secrets by its condition."
-  }
-  assert {
-    condition = alltrue([
-      keys(azurerm_role_assignment.key_vault_namespace_viewer) == ["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"],
-      azurerm_role_assignment.key_vault_namespace_viewer["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"].role_definition_name == "Key Vault Reader",
-      azurerm_role_assignment.key_vault_namespace_viewer["example/viewer/aaaaaaaa-1111-1111-1111-111111111111"].principal_type == "Group",
-    ])
-    error_message = "The view group should get Key Vault Reader - metadata, never a value."
   }
 }
 
@@ -705,4 +697,71 @@ run "rejects_a_namespace_group_that_is_not_an_object_id" {
   }
 
   expect_failures = [var.key_vault_namespaces]
+}
+
+# Soft multi-tenancy: a namespace's identity and writers read and manage its secrets by name and list
+# nothing - the name condition covers readMetadata, which a list call is evaluated on as a whole.
+run "no_namespace_lists_the_vault" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      strcontains(azurerm_role_assignment.key_vault_namespace_reader["example"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+      strcontains(azurerm_role_assignment.key_vault_namespace_writer["example/writer/33333333-3333-3333-3333-333333333333"].condition, "!(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})"),
+    ])
+    error_message = "Reading metadata - and so listing the vault - should be held to the namespace's secrets for readers and writers alike."
+  }
+}
+
+# The platform viewers list namespaces and secrets - names only - through a custom role defined and
+# assigned at the resource group, nothing at the subscription.
+run "platform_viewers_list_namespaces_and_secrets_from_a_resource_group_role" {
+  command = plan
+
+  variables {
+    platform_viewer_group_object_ids = ["99999999-9999-9999-9999-999999999999"]
+  }
+
+  assert {
+    condition = alltrue([
+      azurerm_role_definition.platform_viewer[0].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/${var.resource_group_name}",
+      azurerm_role_definition.platform_viewer[0].assignable_scopes == tolist(["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/${var.resource_group_name}"]),
+      azurerm_role_definition.platform_viewer[0].name == "OneK8s Platform Viewer (${var.resource_group_name})",
+    ])
+    error_message = "The role should be defined at the resource group and assignable only there."
+  }
+  assert {
+    condition = toset(one(azurerm_role_definition.platform_viewer[0].permissions).data_actions) == toset([
+      "Microsoft.ContainerService/managedClusters/namespaces/read",
+      "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    ])
+    error_message = "The role's data plane should be listing namespaces and secret metadata, nothing more - no secret value, nothing inside a namespace."
+  }
+  assert {
+    condition = alltrue([
+      keys(azurerm_role_assignment.platform_viewer) == ["99999999-9999-9999-9999-999999999999"],
+      azurerm_role_assignment.platform_viewer["99999999-9999-9999-9999-999999999999"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/${var.resource_group_name}",
+      azurerm_role_assignment.platform_viewer["99999999-9999-9999-9999-999999999999"].principal_type == "Group",
+    ])
+    error_message = "Each platform viewer group should get the role on the resource group."
+  }
+}
+
+run "no_platform_viewers_no_role" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_definition.platform_viewer) == 0 && length(azurerm_role_assignment.platform_viewer) == 0
+    error_message = "Without platform viewer groups there should be no custom role."
+  }
+}
+
+run "rejects_a_platform_viewer_group_that_is_not_an_object_id" {
+  command = plan
+
+  variables {
+    platform_viewer_group_object_ids = ["platform-viewers"]
+  }
+
+  expect_failures = [var.platform_viewer_group_object_ids]
 }
