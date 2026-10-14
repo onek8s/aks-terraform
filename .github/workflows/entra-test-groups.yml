@@ -1,0 +1,69 @@
+name: Entra test groups (temporary)
+
+# TEMPORARY - removed once its output is in envs/*.tfvars and tests/namespace-access/testers.yaml.
+#
+# Creates in the build tenant, signed in as the owner service principal (secret AZURE_OWNER), what the
+# namespace access tests need: for ext-fi-example one Entra ID security group per role (view, edit,
+# admin) and one tester application per group, a member of it, that GitHub Actions of this
+# repository's `dev` environment can sign in as (federated credential, no secret). Idempotent: what
+# exists is reused. Prints the object IDs of the groups and the client IDs of the testers.
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "The namespace the groups are for"
+        required: true
+        default: "ext-fi-example"
+
+permissions:
+  contents: read
+
+jobs:
+  groups:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      NAMESPACE: ${{ inputs.namespace }}
+      SUBJECT: repo:${{ github.repository }}:environment:dev
+    steps:
+      - name: Sign in to Azure (owner)
+        env:
+          AZURE_OWNER: ${{ secrets.AZURE_OWNER }}
+        run: |
+          set -euo pipefail
+          [ -n "$AZURE_OWNER" ] || { echo "::error::The AZURE_OWNER secret is not available to this repository"; exit 1; }
+          client_id="$(jq -r '.clientId // .appId' <<<"$AZURE_OWNER")"
+          secret="$(jq -r '.clientSecret // .password' <<<"$AZURE_OWNER")"
+          tenant="$(jq -r '.tenantId // .tenant' <<<"$AZURE_OWNER")"
+          echo "::add-mask::$secret"
+          az login --service-principal -u "$client_id" -p "$secret" --tenant "$tenant" --allow-no-subscriptions --only-show-errors -o none
+
+      - name: Groups and testers
+        run: |
+          set -euo pipefail
+          for role in view edit admin; do
+            group="grp-onek8s-dev-$NAMESPACE-$role"
+            app="onek8s-dev-$NAMESPACE-$role-tester"
+            gid="$(az ad group list --display-name "$group" --query '[0].id' -o tsv)"
+            if [ -z "$gid" ]; then
+              gid="$(az ad group create --display-name "$group" --mail-nickname "$group" \
+                --description "Kubernetes ClusterRole $role in namespace $NAMESPACE of the OneK8s dev cells" --query id -o tsv)"
+            fi
+            appid="$(az ad app list --display-name "$app" --query '[0].appId' -o tsv)"
+            [ -n "$appid" ] || appid="$(az ad app create --display-name "$app" --sign-in-audience AzureADMyOrg --query appId -o tsv)"
+            spid="$(az ad sp list --filter "appId eq '$appid'" --query '[0].id' -o tsv)"
+            [ -n "$spid" ] || spid="$(az ad sp create --id "$appid" --query id -o tsv)"
+            if [ -z "$(az ad app federated-credential list --id "$appid" --query "[?subject=='$SUBJECT'].name" -o tsv)" ]; then
+              az ad app federated-credential create --id "$appid" -o none --parameters "$(jq -nc --arg s "$SUBJECT" \
+                '{name:"github-dev",issuer:"https://token.actions.githubusercontent.com",subject:$s,audiences:["api://AzureADTokenExchange"]}')"
+            fi
+            # Graph replication: a new service principal may not be visible to the group API at once.
+            for i in 1 2 3 4 5 6; do
+              [ "$(az ad group member check --group "$gid" --member-id "$spid" --query value -o tsv)" = true ] && break
+              az ad group member add --group "$gid" --member-id "$spid" -o none 2>/dev/null || sleep 10
+            done
+            echo "$role group=$gid tester_client_id=$appid tester_object_id=$spid"
+            echo "| $role | $group | \`$gid\` | $app | \`$appid\` |" >> "$RUNNER_TEMP/rows"
+          done
+          { echo "| Role | Group | Object ID | Tester | Client ID |"; echo "|---|---|---|---|---|"; cat "$RUNNER_TEMP/rows"; } >> "$GITHUB_STEP_SUMMARY"
