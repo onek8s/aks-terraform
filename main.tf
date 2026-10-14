@@ -222,8 +222,9 @@ module "aks" {
     system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
   } : null
   # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
-  # channel) and, with app_routing_gateway_api_enabled, App Routing's Gateway API implementation - a
-  # sidecar-less Istio control plane serving the GatewayClass `approuting-istio`, no service mesh. The
+  # channel) and, with gateway_implementation = "approuting-istio", App Routing's Gateway API
+  # implementation - a sidecar-less Istio control plane serving the GatewayClass `approuting-istio`, no
+  # service mesh. With "traefik" it stays off and Traefik is deployed through Flux (traefik.tf). The
   # Gateways themselves, their listeners, load balancers and certificates are deployed through Flux.
   # See the README.
   #
@@ -245,7 +246,7 @@ module "aks" {
       enabled = false
       gateway_api_implementations = {
         app_routing_istio = {
-          mode = var.app_routing_gateway_api_enabled ? "Enabled" : "Disabled"
+          mode = var.gateway_implementation == "approuting-istio" ? "Enabled" : "Disabled"
         }
       }
       nginx = {

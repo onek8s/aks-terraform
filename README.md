@@ -509,8 +509,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by App Routing's
-Gateway API implementation - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik or App
+Routing's Gateway API implementation (`gateway_implementation`) - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -547,6 +547,8 @@ reported on. AKS Automatic always runs it.
 
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
 [approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
+[aks5939]: https://github.com/Azure/AKS/issues/5939
+[traefikgw]: https://doc.traefik.io/traefik/providers/kubernetes-gateway/
 [costanalysis]: https://learn.microsoft.com/azure/aks/cost-analysis
 [defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
@@ -562,10 +564,25 @@ configuration provides is the API itself; the controller serving it is deployed 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `app_routing_gateway_api_enabled` (the stateless cells), else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. Stated either way, because AKS Automatic turns it on by default from Kubernetes 1.36. |
+| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `gateway_implementation = "approuting-istio"`, else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. Stated either way, because AKS Automatic turns it on by default from Kubernetes 1.36. |
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - `2026-03-02-preview`, which also knows App Routing Istio. |
 
-For every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
+`gateway_implementation` picks what serves the Gateways - the same Gateways, listeners, certificates
+and Cilium policies either way; only the GatewayClass they name changes, which the Flux repository
+is told as `gateway_class_name_<gateway>`:
+
+| `gateway_implementation` | What runs | Cost |
+| --- | --- | --- |
+| `traefik` (the dev cells) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
+| `approuting-istio` | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
+| null | No implementation: the stateful cluster (R9a). | - |
+
+Traefik's manifests live here rather than in the Flux repository so that the choice and everything
+it brings are one change of this repository. Switching re-creates the Gateways under their new class
+(Flux `force`): the cell's gateways are down for a few minutes, so drain the cell in Traffic Manager
+first where that matters.
+
+With App Routing, for every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
 shaped by the ConfigMap the Gateway names in `spec.infrastructure.parametersRef` - within the
 add-on's allow list. The Flux repository runs one such Gateway per isolation zone - `<zone>` in
@@ -585,7 +602,7 @@ of its own:
 Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
 Cilium baseline lets in - from the zone's own gateway only.
 
-What the implementation does not offer: rate limits, request size limits and `EnvoyFilter` (the
+What App Routing's implementation does not offer: rate limits, request size limits and `EnvoyFilter` (the
 Gateway API has no standard fields for them), egress gateways, and customizing the access log. It
 cannot run beside the Istio service mesh add-on.
 
