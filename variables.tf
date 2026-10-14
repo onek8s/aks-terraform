@@ -564,9 +564,11 @@ variable "namespace_access_path" {
   type        = string
   default     = "./infrastructure/namespace-access"
   description = <<DESCRIPTION
-The directory of `flux_git_repository` that holds the one `RoleBinding` every
-`managed_namespaces[*].groups` entry is made from: `$${namespace}`, `$${role}` (`view`, `edit` or
-`admin`, also the ClusterRole bound) and `$${group_object_id}` are filled in per binding.
+The directory of `flux_git_repository` with one subdirectory per role - `view`, `edit`, `admin` -
+that holds the `RoleBinding` a `managed_namespaces[*].groups` entry of that role is made from:
+`$${namespace}`, `$${role}` (also the ClusterRole bound) and `$${group_object_id}` are filled in per
+binding. Azure refuses two Kustomizations of one Flux configuration on the same path, hence a
+directory per role.
 DESCRIPTION
   nullable    = false
 
@@ -1048,11 +1050,11 @@ binding is Kubernetes RBAC, so it works whether or not `azure_rbac_enabled` is o
 on, the two are evaluated side by side and either may allow a call.
 
 The role bindings are objects inside the cluster, so they are delivered the way everything inside the
-cluster is: by Flux. Each becomes one Kustomization of the cluster's `platform` Flux configuration,
-`<namespace>-<role>`, that applies `namespace_access_path` of `flux_git_repository` with the
-namespace, the role and the group as post-build variables. Removing a group removes the
-Kustomization, and Flux deletes the binding with it. It takes `flux_git_repository`; without one
-nothing is bound and Terraform says so on every plan.
+cluster is: by Flux. A namespace with groups gets a Flux configuration of its own, `<namespace>-access`
+(cluster scope, in flux-system, reading `flux_git_repository`), with one Kustomization per role that
+applies `<namespace_access_path>/<role>` with the namespace, the role and the group as post-build
+variables. Removing a group removes its Kustomization, and Flux deletes the binding with it. It takes
+`flux_git_repository`; without one nothing is bound and Terraform says so on every plan.
 
 `flux` makes the namespace a tenant that deploys itself from a Git repository of its own: a
 namespace-scoped Flux configuration, named after the namespace, that syncs `path` on `branch` into
@@ -1200,14 +1202,14 @@ DESCRIPTION
     ]))
     error_message = "managed_namespaces[*].groups.view, .edit and .admin must each be the object ID of an Entra ID group, for example \"00000000-0000-0000-0000-000000000000\", or left unset."
   }
-  # Each binding is a Flux Kustomization `platform-<namespace>-<role>`, and Flux labels what it applies
+  # Each binding is a Flux Kustomization `<namespace>-access-<role>`, and Flux labels what it applies
   # with that name: a label value, 63 characters at most.
   validation {
     condition = alltrue([
       for name, namespace in var.managed_namespaces :
       length(name) <= 48 || alltrue([for group in [namespace.groups.view, namespace.groups.edit, namespace.groups.admin] : group == null])
     ])
-    error_message = "A managed namespace with groups must have a name of at most 48 characters: its role bindings are applied by Flux Kustomizations named platform-<namespace>-<role>, which Flux uses as a label value."
+    error_message = "A managed namespace with groups must have a name of at most 48 characters: its role bindings are applied by Flux Kustomizations named <namespace>-access-<role>, which Flux uses as a label value."
   }
   validation {
     condition = alltrue([

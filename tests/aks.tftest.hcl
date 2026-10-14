@@ -3877,7 +3877,7 @@ run "rejects_owner_labels_set_by_hand" {
 }
 
 # managed_namespaces[*].groups: an Entra ID group per built-in role, bound inside the namespace by a
-# RoleBinding the cluster's Flux configuration applies, one Kustomization per binding.
+# RoleBinding that a Flux configuration of the namespace's own applies, one Kustomization per role.
 run "namespace_groups_get_a_role_binding_each_through_flux" {
   command = plan
 
@@ -3903,17 +3903,27 @@ run "namespace_groups_get_a_role_binding_each_through_flux" {
   }
 
   assert {
-    condition = toset(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations)) == toset([
-      "platform", "team-payments-view", "team-payments-edit", "team-payments-admin", "team-search-view",
-    ])
-    error_message = "Every role that names a group, and only those, should get a Kustomization of the platform configuration."
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration)) == toset(["team-payments", "team-search"])
+    error_message = "Every namespace that names a group, and only those, should get a Flux configuration for its bindings."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations["team-payments-edit"].path == "./infrastructure/namespace-access"
-    error_message = "A binding should be applied from namespace_access_path."
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].name == "team-payments-access"
+    error_message = "A namespace's binding configuration should be named <namespace>-access."
   }
   assert {
-    condition = azapi_resource.flux_configuration[0].body.properties.kustomizations["team-payments-edit"].postBuild.substitute == {
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations)) == toset(["view", "edit", "admin"])
+    error_message = "Every role that names a group should get a Kustomization."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations)) == toset(["view"])
+    error_message = "A role without a group should get no Kustomization."
+  }
+  assert {
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.path == "./infrastructure/namespace-access/edit"
+    error_message = "A binding should be applied from its role's directory under namespace_access_path: Azure refuses two Kustomizations on one path."
+  }
+  assert {
+    condition = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.postBuild.substitute == {
       namespace       = "team-payments"
       role            = "edit"
       group_object_id = "22222222-2222-2222-2222-222222222222"
@@ -3921,16 +3931,24 @@ run "namespace_groups_get_a_role_binding_each_through_flux" {
     error_message = "A binding's Kustomization should be told its namespace, its role and its group."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations["team-search-view"].postBuild.substitute.group_object_id == "aaaaaaaa-4444-4444-4444-444444444444"
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations.view.postBuild.substitute.group_object_id == "aaaaaaaa-4444-4444-4444-444444444444"
     error_message = "The group's object ID should be sent in lower case, as Entra ID puts it into the token."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations["team-payments-admin"].prune
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.prune
     error_message = "A binding's Kustomization should prune, so that removing the group removes the binding."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.path == "./clusters/aks-test"
-    error_message = "The platform Kustomization should be unchanged by the bindings."
+    condition = (
+      azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.scope == "cluster"
+      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.namespace == "flux-system"
+      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.gitRepository.url == "https://github.com/example/cluster-config"
+    )
+    error_message = "The binding configuration should read the cluster's repository at cluster scope from flux-system."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations)) == toset(["platform"])
+    error_message = "The platform configuration should be unchanged by the bindings."
   }
 }
 
@@ -3982,7 +4000,7 @@ run "namespace_access_path_can_be_moved" {
   }
 
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations["team-payments-admin"].path == "./rbac"
+    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.path == "./rbac/admin"
     error_message = "The bindings should be applied from namespace_access_path."
   }
 }

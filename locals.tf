@@ -134,7 +134,7 @@ locals {
         syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
         url                   = try(var.flux_git_repository.url, null)
       }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
-      kustomizations = merge({
+      kustomizations = {
         platform = {
           path                  = try(var.flux_git_repository.path, null)
           prune                 = true
@@ -149,29 +149,42 @@ locals {
             substitute = local.flux_cluster_settings
           }
         }
-        }, {
-        # The managed namespaces' role bindings, one Kustomization each - see managed_namespace_role_bindings.
-        for key, binding in local.managed_namespace_role_bindings : key => {
-          path                   = var.namespace_access_path
-          prune                  = true
-          syncIntervalInSeconds  = try(var.flux_git_repository.sync_interval_seconds, null)
-          retryIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
-          wait                   = true
-          postBuild = {
-            substitute = {
-              namespace       = binding.namespace
-              role            = binding.role
-              group_object_id = binding.group_object_id
-            }
-          }
-        }
-      })
+      }
       namespace  = "flux-system"
       scope      = "cluster"
       sourceKind = "GitRepository"
     }
   }
 
+
+  # The role bindings of managed_namespaces[*].groups, as one Flux configuration per namespace that
+  # names a group: cluster scope in flux-system, reading the cluster's own repository, with one
+  # Kustomization per role that applies `<namespace_access_path>/<role>` with the namespace and the
+  # group filled in. One configuration per namespace because Azure refuses two Kustomizations of one
+  # configuration on the same path - and every namespace's view binding is made from the same one.
+  # Removing a group removes its Kustomization, and Flux deletes the binding with it.
+  managed_namespace_access_flux_configurations = local.flux_enabled ? {
+    for name, namespace in var.managed_namespaces : name => {
+      properties = merge(local.flux_configuration_body.properties, {
+        kustomizations = {
+          for binding in values(local.managed_namespace_role_bindings) : binding.role => {
+            path                   = "${trimsuffix(var.namespace_access_path, "/")}/${binding.role}"
+            prune                  = true
+            syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
+            retryIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
+            wait                   = true
+            postBuild = {
+              substitute = {
+                namespace       = binding.namespace
+                role            = binding.role
+                group_object_id = binding.group_object_id
+              }
+            }
+          } if binding.namespace == name
+        }
+      })
+    } if length([for role in ["view", "edit", "admin"] : role if namespace.groups[role] != null]) > 0
+  } : {}
 
   # The Kubernetes service accounts the workload identities are federated with. They are created by
   # the Flux repository, which has to use exactly these names and namespaces: a federated credential
@@ -553,8 +566,7 @@ locals {
   })
 
   # The Kubernetes RoleBindings of `managed_namespaces[*].groups`: one per namespace and role that
-  # names a group, keyed `<namespace>-<role>` - the name of the Flux Kustomization that applies it.
-  # Which ones there are follows from the inputs alone.
+  # names a group, keyed `<namespace>-<role>`. Which ones there are follows from the inputs alone.
   managed_namespace_role_bindings = {
     for binding in flatten([
       for name, namespace in var.managed_namespaces : [

@@ -745,6 +745,30 @@ resource "azapi_resource" "flux_configuration" {
   depends_on = [azapi_resource.flux_extension]
 }
 
+# The role bindings of a managed namespace's groups - see managed_namespace_access_flux_configurations.
+# Named `<namespace>-access`; its Kustomizations are `<namespace>-access-<role>` in flux-system. It reads
+# the cluster's repository with the same credential as the `platform` configuration, sent the same way.
+resource "azapi_resource" "managed_namespace_access_flux_configuration" {
+  for_each = local.managed_namespace_access_flux_configurations
+
+  name      = "${each.key}-access"
+  parent_id = module.aks.resource_id
+  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
+  body      = each.value
+  sensitive_body = length(local.flux_protected_settings) == 0 ? null : {
+    properties = {
+      configurationProtectedSettings = local.flux_protected_settings
+    }
+  }
+  sensitive_body_version = {
+    for setting, value in local.flux_protected_settings :
+    "properties.configurationProtectedSettings.${setting}" => sha256("${value}${jsonencode(each.value)}")
+  }
+
+  # The namespace is there before a binding is put into it.
+  depends_on = [azapi_resource.flux_extension, azapi_resource.managed_namespace]
+}
+
 # A tenant: a managed namespace that deploys itself from a repository of its own - see
 # managed_namespace_flux_configurations. One configuration per namespace, so each team's sync status
 # is a resource of its own in the portal's GitOps view rather than buried in the platform's.
