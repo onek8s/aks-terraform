@@ -65,9 +65,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   system pool `max_pods = 110`. Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
   `azure-ip-masq-agent-config` to translate nothing; `infrastructure/zones/firewall-egress` lets int-se's apps out to `world`.
   labfw decides from azure-landing-zone `firewall-applications/<env>-<exposure>/<namespace>.yaml` (zone IP group as source),
-  SNATs everything leaving 10.0.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.4.1 in int-se-example
+  SNATs everything leaving 10.0.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.5.0 in int-se-example
   (aks-fluxcd-example `firewall-egress/`) fetches a Stockholm forecast from api.open-meteo.com every minute: denied by labfw
-  from 100.64.32.x (verified 2026-10-15; `/weather` says "Connection reset by peer"). labfw's denials go to Log Analytics
+  from 100.64.32.x (verified 2026-10-15; `/weather` says "Connection reset by peer"); 0.5.0 also asks api.ipify.org once at start
+  for the node's public IP (`/public-ip`), a second dependency for the same rule. labfw's denials go to Log Analytics
   (`log-labfw-germanywestcentral`, table `LabfwFirewallLog_CL`, Azure Monitor Agent on the VM; ~10 min latency).
 - **Egress agent** (aks-ai-agents `egress-agent`, workflow `egress-agent.yml`, by hand only - it opens PRs with GH_OWNER):
   denied flows from that table (dev identity's Reader on sub-hub), `pods_by_ip` over the VPN, one PR per namespace to the

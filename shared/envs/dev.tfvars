@@ -140,6 +140,12 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "86e8752ea3e903be07d49246e3ed021846df263b"
   }
+  # The node's public IP (/public-ip, api.ipify.org once at start): which address the platform's egress
+  # gave the pod, and a second outbound dependency for the firewall-egress cell
+  "aks-hello:0.5.0" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "553980c84d1eeeed34060eff76f9b8b2c539a2ed"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
