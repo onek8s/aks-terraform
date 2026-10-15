@@ -10,8 +10,9 @@
 # (the runner must be signed in to Azure), which works only while the vault still answers publicly.
 #
 # Names: the API servers' public FQDNs resolve to their private addresses, but a private endpoint's name does
-# only through the hub's private link zones, which labfw's DNS proxy (10.0.12.1) answers from. Only the names in
-# `private_names` (and their subdomains) are sent there - everything else the runner resolves as before.
+# only through the hub's private link zones, which labfw's DNS proxy (10.0.12.1) answers from. The names in
+# `private_names` are looked up there and, when the answer is private, pinned in /etc/hosts - everything else the
+# runner resolves as before.
 #
 # One peer per config: WireGuard follows a peer to its latest endpoint, so two runners on one peer at once take
 # it from each other. The workflows on github-runners share the concurrency group `labfw-vpn`; Deploy has its own.
@@ -35,10 +36,9 @@ inputs:
     default: 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32, 172.20.2.0/26, 10.0.8.128/26
   private_names:
     description: >-
-      DNS names (with their subdomains) resolved through labfw's DNS proxy, space-separated: the private
-      endpoints' services. Narrow on purpose - a whole suffix such as blob.core.windows.net would also send
-      other accounts' names to the hub's private zones, where an account with a private endpoint elsewhere does
-      not resolve.
+      DNS names looked up at labfw's DNS proxy, space-separated: the private endpoints' services. Exact names
+      on purpose - a whole suffix such as blob.core.windows.net would also send other accounts' names to the
+      hub's private zones, where an account with a private endpoint elsewhere does not resolve.
     default: >-
       kv-onek8s-gwc-platform.vault.azure.net kv-onek8s-gwc-int-fi.vault.azure.net kv-onek8s-gwc-int-se.vault.azure.net
       acronek8sdev.azurecr.io acronek8sdev.germanywestcentral.data.azurecr.io
@@ -75,15 +75,17 @@ runs:
           sleep 2
         done
         sudo wg show labfw | grep -E 'endpoint|allowed ips|latest handshake' || true
-        # The private endpoints' names through labfw's DNS proxy (systemd-resolved routing domains)
+        # The private endpoints' names as labfw's DNS proxy answers them (the hub's private link zones), pinned in
+        # /etc/hosts for this job: the runner's own resolver keeps answering everything else - systemd-resolved's
+        # routing domains did not take effect on the runner
         if [ -n "$PRIVATE_NAMES" ]; then
-          domains=()
-          for name in $PRIVATE_NAMES; do domains+=("~$name"); done
-          sudo resolvectl dns labfw 10.0.12.1
-          sudo resolvectl domain labfw "${domains[@]}"
-          sudo resolvectl flush-caches
-          sudo resolvectl status labfw | grep -E 'DNS Servers|DNS Domain' || true
           for name in $PRIVATE_NAMES; do
-            echo "$name -> $(getent hosts "$name" | awk '{print $1}' | head -1) (labfw: $(dig +short +time=3 +tries=1 @10.0.12.1 "$name" | tail -1))"
+            address="$(dig +short +time=3 +tries=2 @10.0.12.1 "$name" | grep -E '^[0-9.]+$' | tail -1 || true)"
+            if [[ "$address" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; then
+              echo "$address $name" | sudo tee -a /etc/hosts >/dev/null
+              echo "$name -> $address (private)"
+            else
+              echo "$name -> ${address:-no answer} (public or none: resolved as before)"
+            fi
           done
         fi
