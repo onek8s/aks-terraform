@@ -64,3 +64,32 @@ resource "azurerm_role_assignment" "agents_model_user" {
   role_definition_name = "Cognitive Services User"
   principal_id         = data.azurerm_client_config.current.object_id
 }
+
+# Other models on the same resource, OpenAI's format (azurerm knows it): the agents' model while Claude has no quota
+# here (dev: gpt-4.1-mini, created in the portal on 2026-10-15 and imported below). aks-ai-agents model.provider
+# azure-openai.
+resource "azurerm_cognitive_deployment" "agents_openai" {
+  for_each = var.ai_foundry == null ? {} : var.ai_foundry.openai_deployments
+
+  name                   = each.key
+  cognitive_account_id   = azurerm_cognitive_account.agents[0].id
+  version_upgrade_option = "OnceNewDefaultVersionAvailable"
+  rai_policy_name        = each.value.rai_policy_name
+
+  model {
+    format  = "OpenAI"
+    name    = each.key
+    version = each.value.version
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = each.value.capacity
+  }
+}
+
+import {
+  for_each = var.ai_foundry == null ? {} : { for name, d in var.ai_foundry.openai_deployments : name => d if d.import }
+  to       = azurerm_cognitive_deployment.agents_openai[each.key]
+  id       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}/providers/Microsoft.CognitiveServices/accounts/${var.ai_foundry.name}/deployments/${each.key}"
+}

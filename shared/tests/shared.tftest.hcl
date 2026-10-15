@@ -1175,3 +1175,26 @@ run "the_agents_model_endpoint_takes_entra_id_only" {
     error_message = "A Claude deployment behind Entra ID, usable by the identity that runs the agents."
   }
 }
+
+run "the_agents_openai_models_on_the_same_resource" {
+  command = plan
+
+  variables {
+    ai_foundry = {
+      name     = "ais-onek8s-dev-agents"
+      location = "swedencentral"
+      openai_deployments = {
+        "gpt-4.1-mini" = { version = "2025-04-14", capacity = 100 }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_cognitive_deployment.agents_openai["gpt-4.1-mini"].model[0].format == "OpenAI" &&
+      azurerm_cognitive_deployment.agents_openai["gpt-4.1-mini"].sku[0].capacity == 100 &&
+      length(azapi_resource.agents_model) == 0
+    )
+    error_message = "An OpenAI model is a deployment of its own on the agents' resource."
+  }
+}
