@@ -225,13 +225,13 @@ managed_namespaces = {
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
       # The zone and its domain, for the team's routes: the gateway they attach to and their hostnames.
-      # dns_publish: whether this cell publishes the team's home-cell names (<app>.<zone domain>,
-      # design section 8: an internal app runs in one home cell, whose external-dns alone publishes
-      # it) - the home cell of every internal app in the lab. A lab stand-in for the design's placement artifact.
+      # home_cell: the cluster that publishes the team's internal names (<app>.<zone domain>; design section 8:
+      # an internal app runs in one home cell, whose external-dns alone publishes it) - the same in every cell.
+      # A lab stand-in for the design's placement artifact; the routes carry it as platform/home-cell.
       substitute = {
         zone        = "int-fi"
         zone_domain = "int-fi.dev.onek8s.lol"
-        dns_publish = "true"
+        home_cell   = "aks-dev-int-stateless-az2"
       }
     }
   }
