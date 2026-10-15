@@ -73,6 +73,10 @@ default_node_pool = {
   encryption_at_host  = true
   ssh_access          = "Disabled"
   node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
+  # No overlay (network_profile below): every pod takes an address of snet-system, reserved up front per node, and
+  # Azure CNI node subnet defaults to 30 pods a node - fewer than the platform runs on its one system node. 110 is
+  # the overlay cells' default; snet-system is a /20.
+  max_pods = 110
 }
 
 # ---------------------------------------------------------------------------------------------------
