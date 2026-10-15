@@ -61,9 +61,9 @@ on:
       cluster:
         description: "The cell to test"
         required: true
-        default: "aks-dev-int-stateless-az1"
+        default: "aks-dev-int-stateless-az2"
         type: choice
-        options: [aks-dev-int-stateless-az1]
+        options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az1]
 
 permissions:
   contents: read
@@ -71,17 +71,17 @@ permissions:
 
 jobs:
   isolation:
-    name: isolation ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+    name: isolation ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 60
     # One run per cell at a time: two would share the test namespace.
     concurrency:
-      group: isolation-tests-${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+      group: isolation-tests-${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
       cancel-in-progress: false
     env:
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
       ZONE: int-fi
       NAMESPACE: int-fi-isolation-test
       # The cell is external (design decision D52): its zones are the external ones, one per country;

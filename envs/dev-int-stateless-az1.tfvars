@@ -1,8 +1,10 @@
 # Internal cell `int-stateless-az1` of the OneK8s dev environment - a stateless cluster in availability zone 1
-# (OneK8s design section 8), on a lab budget - see "Non-production cost savings" below. The lab's only
-# cell since 2026-10-15: internal exposure, Finland's zone only, in germanywestcentral, routed through
-# the landing zone's hub firewall (labfw). An az2 sibling would be envs/dev-int-stateless-az2.tfvars
-# on shared/'s 172.22.16.0/20. shared/envs/dev.tfvars is applied first.
+# (OneK8s design section 8), on a lab budget - see "Non-production cost savings" below. Internal
+# exposure, Finland's zone only, in germanywestcentral, routed through the landing zone's hub firewall
+# (labfw). DISABLED in the lab (shared/envs/dev.tfvars, cells.dev-int-stateless-az1.enabled = false):
+# germanywestcentral's logical zone 1 is "NotAvailableForSubscription" for every VM size in
+# sub-aks-dev; its sibling envs/dev-int-stateless-az2.tfvars runs instead. Enable it in shared/ before
+# deploying it. shared/envs/dev.tfvars is applied first.
 #
 #   terraform workspace select -or-create dev-int-stateless-az1
 #   terraform apply -var-file=envs/dev-int-stateless-az1.tfvars

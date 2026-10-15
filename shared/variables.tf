@@ -391,12 +391,17 @@ DESCRIPTION
 variable "cells" {
   type = map(object({
     address_space = string
+    enabled       = optional(bool, true)
   }))
   default     = {}
   description = <<DESCRIPTION
-The stateless cells' networks, keyed by the cell (`dev-ext-stateless-az1`, the cluster's name without
+The stateless cells' networks, keyed by the cell (`dev-int-stateless-az2`, the cluster's name without
 `aks-`): `vnet-<cell>` with `address_space`, a /20, laid out as cells.tf describes - `snet-system`
 for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`.
+
+`enabled = false` keeps a cell in the specification - its address space stays reserved - without
+building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
+cannot be deployed while it is disabled.
 DESCRIPTION
   nullable    = false
 

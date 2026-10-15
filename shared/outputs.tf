@@ -43,7 +43,7 @@ output "zone_key_vault_uris" {
 output "cell_subnet_ids" {
   description = "Per cell, its subnets' resource IDs by name."
   value = {
-    for cell in keys(var.cells) : cell => {
+    for cell in keys(local.cells) : cell => {
       for key, subnet in local.cell_subnets : subnet.name => azurerm_subnet.cell[key].id if subnet.cell == cell
     }
   }

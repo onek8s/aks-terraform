@@ -11,8 +11,10 @@ name: Deploy
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
 #                        internal zones' private DNS, the container registry and its images and the
 #                        external zones' Traffic Manager profiles. Applied first.
-#   dev-int-stateless-az1    the repository root with envs/dev-int-stateless-az1.tfvars: aks-dev-int-stateless-az1,
-#                        the lab's only cell (internal, int-fi, germanywestcentral, behind labfw).
+#   dev-int-stateless-az2    the repository root with envs/dev-int-stateless-az2.tfvars: aks-dev-int-stateless-az2,
+#                        the lab's running cell (internal, int-fi, germanywestcentral, behind labfw).
+#   dev-int-stateless-az1    the same in availability zone 1: disabled in shared/ (zone 1 is not available
+#                        to sub-aks-dev in germanywestcentral).
 #   dev-int-stateful         the repository root with envs/dev-int-stateful.tfvars: aks-dev-int-stateful (defined,
 #                        not deployed for now).
 #
@@ -46,11 +48,11 @@ on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az1, dev-int-stateful"
+        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az2 (running), dev-int-stateless-az1 (disabled), dev-int-stateful"
         required: true
         default: "dev-shared"
         type: choice
-        options: [dev-shared, dev-int-stateless-az1, dev-int-stateful]
+        options: [dev-shared, dev-int-stateless-az2, dev-int-stateless-az1, dev-int-stateful]
       action:
         description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true
