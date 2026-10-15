@@ -372,6 +372,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   and Fleet Management refused the login. Merge a whole YAML document instead (ESO template, values
   quoted with `toJson`); ESO's template data is `map[string]string`, so sprig `hasKey` fails - use `index`.
   `valuesFrom` reads Secrets of the HelmRelease's namespace only (flux-system).
+- **Grafana Fleet Management pipelines match the cluster name** (seen 2026-10-15): the k8s monitoring pipeline
+  `k8s_monitoring_k8s_monitoring_aks_dev_stateless_az1` matches `cluster="aks-dev-stateless-az1"`, and the chart sets the
+  collector's `cluster` attribute to the cluster's name - so after each rename (`aks-dev-ext-...`, `aks-dev-int-...`) the
+  collectors registered but got only Grafana's `ihub_kubernetes_survey*` pipelines: no cluster data. Fix the matcher in
+  Grafana Cloud (D48: collection is managed there). Cluster status lists the pipelines' matchers and the collectors.
 - **k8s-monitoring on AKS** refuses to render without the pod annotation
   `kubernetes.azure.com/set-kube-service-host-fqdn: "true"` on every Alloy collector and kube-state-metrics
   (detected from live node labels via `lookup`, so offline `helm template` misses it); with it, pods
