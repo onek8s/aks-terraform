@@ -82,7 +82,8 @@ runs:
           sudo resolvectl dns labfw 10.0.12.1
           sudo resolvectl domain labfw "${domains[@]}"
           sudo resolvectl flush-caches
+          sudo resolvectl status labfw | grep -E 'DNS Servers|DNS Domain' || true
           for name in $PRIVATE_NAMES; do
-            echo "$name -> $(getent hosts "$name" | awk '{print $1}' | head -1)"
+            echo "$name -> $(getent hosts "$name" | awk '{print $1}' | head -1) (labfw: $(dig +short +time=3 +tries=1 @10.0.12.1 "$name" | tail -1))"
           done
         fi
