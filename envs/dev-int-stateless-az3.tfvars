@@ -139,7 +139,10 @@ key_vault_create = false
 # service - classic KMS would need API Server VNet Integration, which the encrypted cell network refuses (D58)
 customer_managed_keys = {
   key_vault_name           = "kv-onek8s-gwc-platform"
-  key_vault_network_access = "Private"
+  # Public first: AKS refuses to change the vault's network access in the same update that turns KMS data
+  # encryption on for a cluster with classic KMS ("KeyVaultNetworkAccess cannot be changed when enabling
+  # InfrastructureEncryption in existing kms v2"); Private in the next apply
+  key_vault_network_access = "Public"
   kms_data_encryption      = true
 }
 
