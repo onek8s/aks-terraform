@@ -41,9 +41,13 @@ isolation_zones = {
   ext-se = { node_subnet_name = "snet-ext-se-nodes" }
 }
 
-# Azure CNI Overlay powered by Cilium with ACNS: Hubble, FQDN network policies and eBPF host routing
-# (design section 16).
-advanced_networking = {}
+# Azure CNI Overlay powered by Cilium with ACNS: FQDN network policies and eBPF host routing
+# (design section 16). Hubble (container network observability) is off - a lab exception (D56):
+# no hubble-relay, no flow logs or Hubble metrics; drops are read with Cluster status instead.
+# The design's default stays on: drop `observability = false` to bring it back (in place).
+advanced_networking = {
+  observability = false
+}
 
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here: the gateways'
 # certificates, the Flux webhook token - and this cluster's customer-managed keys, created here in it

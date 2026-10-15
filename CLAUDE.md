@@ -75,6 +75,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (`InPlaceOrRecreate`, RequestsOnly, CPU 3m-20m, memory 64Mi-128Mi) stays in aks-fluxcd-example `apps/` but
   `stateless/` deletes it with a patch (no CRD without the add-on). Isolation tests: R11 VPA follows the tfvars,
   the VPA dry runs are AUDIT without the CRD. To bring it back: tfvars true, drop the patch, `node_count = 2`.
+- **Hubble off in the dev cells** (2026-10-15, D56, the user's choice, lab cost exception): `advanced_networking =
+  { observability = false }` in the stateless tfvars - ACNS stays on for FQDN policies and eBPF host routing (the
+  isolation design needs both); no hubble-relay, flow logs or Hubble metrics. Bring back by dropping the line (in place).
 - **Image Integrity on** (preview, `image_integrity_enabled` in the stateless tfvars; feature
   `EnableImageIntegrityPreview` registered by Deploy). shared/ `image_signing`: self-signed cert
   `image-signing` in `kv-onek8s-dev-platform` (non-exportable key) and identity
@@ -195,7 +198,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   application pods adds NAP nodes.
 - **One zone spot node stays with one system node** (seen 2026-10-14): AKS's `cilium-operator` runs 2 replicas with
   required host anti-affinity and tolerates every taint, so the second replica made NAP create a small zone node
-  (`aks-extsespot-*`, Standard_D2ps_v6 spot, arm64) and stays there (hubble-relay joined it); NAP cannot consolidate it.
+  (`aks-extsespot-*`, Standard_D2ps_v6 spot, arm64) and stays there (hubble-relay joined it until D56 turned Hubble off); NAP cannot consolidate it.
   AKS-managed - accepted (a spot D2ps_v6 costs a fraction of the second D4als_v6 it replaced).
 - aks-hello runs **2 replicas** (rollout guardrails), still on the system node.
 - **Lab cost exception:** aks-hello (aks-fluxcd-example `stateless/kustomization.yaml` patch) runs on
