@@ -1132,3 +1132,24 @@ run "a_basic_registry_gets_no_private_endpoint" {
     error_message = "Only the vaults get endpoints while the registry is Basic (Azure offers it none)."
   }
 }
+
+run "the_agents_model_endpoint_takes_entra_id_only" {
+  command = plan
+
+  variables {
+    ai_foundry = {
+      name     = "ais-onek8s-dev-agents"
+      location = "swedencentral"
+    }
+  }
+
+  assert {
+    condition = (
+      !azurerm_cognitive_account.agents[0].local_auth_enabled &&
+      azurerm_cognitive_deployment.agents[0].model[0].format == "Anthropic" &&
+      azurerm_cognitive_deployment.agents[0].model[0].name == "claude-sonnet-5-5" &&
+      azurerm_role_assignment.agents_model_user[0].role_definition_name == "Cognitive Services User"
+    )
+    error_message = "A Claude deployment behind Entra ID, usable by the identity that runs the agents."
+  }
+}

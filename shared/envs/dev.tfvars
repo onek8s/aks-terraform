@@ -213,3 +213,11 @@ monthly_budget = {
   amount     = 600
   start_date = "2026-10-01T00:00:00Z"
 }
+
+# The AI agents' model (onek8s/aks-ai-agents, model.provider foundry; design section 15): Claude Sonnet 5.5 on
+# Microsoft Foundry in swedencentral - germanywestcentral does not offer Anthropic's models - Entra ID only. First
+# user: the egress agent (design D59), which proposes the firewall rules of the applications from labfw's denials.
+ai_foundry = {
+  name     = "ais-onek8s-dev-agents"
+  location = "swedencentral"
+}
