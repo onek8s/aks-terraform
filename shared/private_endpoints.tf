@@ -1,5 +1,6 @@
 # Private endpoints of the environment's services (OneK8s design sections 5 and 8; backlog item 3): the
-# platform vault, every zone vault and the container registry, in the environment network's shared
+# platform vault, every zone vault and - only on the Premium SKU, which Azure requires for it - the
+# container registry, in the environment network's shared
 # private endpoint subnet (the design's snet-shared-pe of the backend spoke), registered in the landing
 # zone's private link DNS zones in the hub. The cells and the management network - the labfw VPN's
 # clients among them - resolve the services through the hub firewall's DNS proxy, which answers from
@@ -19,7 +20,7 @@ locals {
   private_endpoint_targets = !local.private_endpoints ? {} : merge(
     { "kv-platform" = { id = azurerm_key_vault.this.id, name = azurerm_key_vault.this.name, subresource = "vault" } },
     { for zone, vault in azurerm_key_vault.zone : "kv-${zone}" => { id = vault.id, name = vault.name, subresource = "vault" } },
-    var.container_registry_name == null ? {} : {
+    var.container_registry_name == null || var.container_registry_sku != "Premium" ? {} : {
       acr = { id = azurerm_container_registry.this[0].id, name = azurerm_container_registry.this[0].name, subresource = "registry" }
     },
   )
@@ -86,11 +87,4 @@ resource "azurerm_virtual_network_peering" "hub_to_environment" {
   remote_virtual_network_id    = azurerm_virtual_network.this[0].id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = true
-}
-
-check "a_registry_endpoint_needs_premium" {
-  assert {
-    condition     = !local.private_endpoints || var.container_registry_name == null || var.container_registry_sku == "Premium"
-    error_message = "A container registry's private endpoint needs the Premium SKU: set container_registry_sku = \"Premium\"."
-  }
 }

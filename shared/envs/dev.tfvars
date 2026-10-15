@@ -30,7 +30,9 @@ subnets = {
 }
 
 # The environment's services on private endpoints in that network (snet-shared-pe, design section 8):
-# the platform vault, the int-fi vault and the registry, registered in the hub's private link zones.
+# the platform vault and the int-fi vault (Standard - a vault's endpoint needs no higher tier),
+# registered in the hub's private link zones. The registry stays Basic, the cheapest tier, which
+# Azure gives no private endpoint: it is reached on its public endpoint through labfw.
 # The cells and the labfw VPN's clients resolve them to these addresses through labfw's DNS proxy.
 # Public access stays on for the GitHub-hosted deployment pipelines.
 private_endpoints = {
@@ -100,8 +102,6 @@ log_analytics_workspace_name = "log-dev-platform"
 # The environment's container registry, which every cluster pulls from as its kubelet identity. Not
 # part of the landing zone. Registry names are global; pick another if this one is taken.
 container_registry_name = "acronek8sdev"
-# Premium for its private endpoint (and a dedicated data endpoint for the layers).
-container_registry_sku = "Premium"
 
 # The images the registry builds itself, from the apps' public repositories at a pinned commit.
 # Releasing an image is adding its tag here.
