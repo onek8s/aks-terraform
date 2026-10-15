@@ -19,9 +19,10 @@ inputs:
     default: labfw-vpn--github-runners
   extra_allowed_ips:
     description: >-
-      Cell system subnets added to the config's AllowedIPs (comma-separated): those of cells built after the
-      secret was stored - az3's 100.64.0.0/20 (design D59) - so the secret need not be stored again
-    default: 100.64.0.0/20
+      Routes added to the config's AllowedIPs (comma-separated): az3's system subnet and its zones' ranges (their
+      internal load balancers, design D59) and labfw's DNS proxy - built after the secret was stored, so it need
+      not be stored again
+    default: 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32
 runs:
   using: composite
   steps:
