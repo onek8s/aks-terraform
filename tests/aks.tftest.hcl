@@ -3464,6 +3464,30 @@ run "a_cell_gets_acns_with_fqdn_policies_and_ebpf_host_routing" {
   }
 }
 
+run "a_lab_cell_keeps_fqdn_policies_without_hubble" {
+  command = plan
+
+  variables {
+    advanced_networking = {
+      observability = false
+    }
+    default_node_pool = {
+      os_sku = "AzureLinux"
+    }
+  }
+
+  assert {
+    condition = (
+      local.network_profile.advanced_networking.enabled &&
+      !local.network_profile.advanced_networking.observability.enabled &&
+      local.network_profile.advanced_networking.security.enabled &&
+      local.network_profile.advanced_networking.security.advanced_network_policies == "FQDN" &&
+      local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
+    )
+    error_message = "Without Hubble, ACNS should still carry FQDN policies and eBPF host routing."
+  }
+}
+
 run "acns_stays_off_unless_asked_for" {
   command = plan
 
