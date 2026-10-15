@@ -259,13 +259,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   Accepted losses: no rate limits / request size limits / EnvoyFilter in the gateway. Needs a preview
   cluster API that knows `appRoutingIstio`: AVM 0.8.5 (upstream fix of our report) pins
   `2026-03-02-preview` when the ALB setting is stated, which knows it.
-- **Private API server in dev too** (2026-10-15, the user's ask; the public API server was a lab exception before):
-  API Server VNet Integration in the cell's delegated `snet-apiserver` (shared/: the first /28 of the cell's last /24 -
-  az1 172.22.15.0/28, az2 172.22.31.0/28; zone indexes now 1-14), `private_cluster_enabled`, `private_dns_zone_mode =
-  "none"` + public FQDN (resolves to the private IP; an AKS-managed zone would be linked only to the cell VNet, which
-  resolves through labfw in the hub - CIS 5.4.2 accepted for that). Reached through the hub: the landing zone's
-  `system_prefixes` carry the API server subnets (management-to-cells, VPN routes). **GitHub-hosted runners join the
-  labfw VPN** (`.github/actions/labfw-vpn`, peer `github-runners` 10.0.12.11, its config is the platform vault secret
+- **Private API server in dev too** (2026-10-15, D58, the user's ask; the public API server was a lab exception before):
+  a classic private cluster over **Private Link** (endpoint in `snet-system`), `private_dns_zone_mode = "none"` + public
+  FQDN (resolves to the private IP; an AKS-managed zone would be linked only to the cell VNet, which resolves through
+  labfw in the hub - CIS 5.4.2 accepted for that). **Not API Server VNet Integration**: Azure refuses it on an encrypted
+  VNet with v4+ VM sizes (`VNetEncryptionNotCompatibleWithAPIServerVNetIntegration`); shared/ `cells.<cell>.api_server_subnet`
+  (off) would add the delegated `snet-apiserver` for it. A public cluster cannot be made private in place without VNet
+  integration: the cell was rebuilt. **GitHub-hosted runners join the labfw VPN** (`.github/actions/labfw-vpn`, peer
+  `github-runners` 10.0.12.11, AllowedIPs the cells' system subnets, its config is the platform vault secret
   `labfw-vpn--github-runners`) before kubectl; one peer, so Cluster status, Isolation tests and CIS share the
   concurrency group `labfw-vpn`. If labfw's public IP or key changes, re-store that secret (Store secret).
 - **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24 each (nodes /25, ILB /27),

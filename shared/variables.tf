@@ -390,8 +390,9 @@ DESCRIPTION
 
 variable "cells" {
   type = map(object({
-    address_space = string
-    enabled       = optional(bool, true)
+    address_space     = string
+    enabled           = optional(bool, true)
+    api_server_subnet = optional(bool, false)
   }))
   default     = {}
   description = <<DESCRIPTION
@@ -402,6 +403,11 @@ for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>
 `enabled = false` keeps a cell in the specification - its address space stays reserved - without
 building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
 cannot be deployed while it is disabled.
+
+`api_server_subnet = true` adds `snet-apiserver`, delegated to AKS for API Server VNet Integration
+(design section 3). Azure refuses that integration on an encrypted network with v4 and newer VM sizes
+(`VNetEncryptionNotCompatibleWithAPIServerVNetIntegration`), and every cell network here is encrypted
+(section 13), so it stays off until that changes; a private cluster then uses Private Link instead.
 DESCRIPTION
   nullable    = false
 

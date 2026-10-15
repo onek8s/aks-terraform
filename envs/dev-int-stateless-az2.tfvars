@@ -164,14 +164,16 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# A private API server (design section 3): API Server VNet Integration in the cell's delegated
-# snet-apiserver (172.22.31.0/28, shared/), reached by the nodes directly and by the management network,
-# the labfw VPN and the GitHub runners (which join that VPN) through the hub. No private DNS zone: the
-# cell resolves through labfw's DNS proxy in the hub, so the public FQDN names the private address.
+# A private API server (design section 3, D58) over Private Link: its private endpoint is in snet-system,
+# reached by the nodes directly and by the management network, the labfw VPN and the GitHub runners
+# (which join that VPN) through the hub. Not API Server VNet Integration: Azure refuses it on an
+# encrypted network with v4+ VM sizes (VNetEncryptionNotCompatibleWithAPIServerVNetIntegration). No
+# private DNS zone: the cell resolves through labfw's DNS proxy in the hub, so the public FQDN names
+# the private address.
 private_cluster_enabled             = true
 private_cluster_public_fqdn_enabled = true
 private_dns_zone_mode               = "none"
-api_server_subnet_name              = "snet-apiserver"
+api_server_vnet_integration_enabled = false
 
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster. None yet in the build tenant.
