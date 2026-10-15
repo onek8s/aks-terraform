@@ -15,4 +15,8 @@ resource "azurerm_log_analytics_workspace" "platform" {
   daily_quota_gb = var.log_analytics_daily_quota_gb
   # Only Entra ID: queries with workspace or resource permissions, no shared keys for the agents.
   local_authentication_enabled = false
+  # Without public network access only through the landing zone's Azure Monitor Private Link scope (azure-landing-zone
+  # monitor_private_link.workspace_ids names this workspace); the clusters' diagnostic settings are unaffected
+  internet_ingestion_enabled = local.public_network_access
+  internet_query_enabled     = local.public_network_access
 }

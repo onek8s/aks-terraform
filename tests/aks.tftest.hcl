@@ -3681,6 +3681,34 @@ run "customer_managed_keys_encrypt_etcd_and_the_node_disks" {
   }
 }
 
+run "kms_data_encryption_reaches_a_private_vault_as_a_trusted_service" {
+  command = plan
+
+  variables {
+    customer_managed_keys = {
+      key_vault_name           = "kv-sec-test-platform"
+      key_vault_network_access = "Private"
+      kms_data_encryption      = true
+    }
+  }
+
+  assert {
+    condition     = local.azure_key_vault_kms == null && length(azapi_update_resource.kms_data_encryption) == 1
+    error_message = "With KMS data encryption the module states no classic KMS; it is set beside the module."
+  }
+  assert {
+    condition = (
+      azapi_update_resource.kms_data_encryption[0].body.properties.securityProfile.kubernetesResourceObjectEncryptionProfile.infrastructureEncryption == "Enabled" &&
+      azapi_update_resource.kms_data_encryption[0].body.properties.securityProfile.azureKeyVaultKms.keyVaultNetworkAccess == "Private"
+    )
+    error_message = "KMS data encryption is on, with the vault reached privately."
+  }
+  assert {
+    condition     = azurerm_role_assignment.cluster_customer_managed_keys["kms_vault"].role_definition_name == "Key Vault Contributor"
+    error_message = "The cluster identity gets the vault role AKS asks for."
+  }
+}
+
 run "without_customer_managed_keys_there_are_none" {
   command = plan
 

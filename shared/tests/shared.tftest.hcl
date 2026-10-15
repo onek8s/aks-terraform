@@ -1114,6 +1114,54 @@ run "private_endpoints_for_the_vaults_and_the_registry" {
   }
 }
 
+run "no_public_network_access" {
+  command = plan
+
+  variables {
+    resource_group_create         = true
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
+    zone_key_vault_names          = { int-fi = "kv-test-int-fi" }
+    container_registry_name       = "acrtest"
+    container_registry_sku        = "Premium"
+    log_analytics_workspace_name  = "log-test"
+    ai_foundry                    = { name = "ais-test", location = "swedencentral" }
+    private_endpoints = {
+      address_prefix             = "172.20.2.0/26"
+      dns_zone_resource_group_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns"
+      state_storage_account_id   = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-tfstate/providers/Microsoft.Storage/storageAccounts/sttest"
+      public_network_access      = false
+    }
+  }
+
+  assert {
+    condition     = sort(keys(azurerm_private_endpoint.this)) == sort(["kv-platform", "kv-int-fi", "acr", "foundry", "state"])
+    error_message = "Foundry and the state account get private endpoints too."
+  }
+  assert {
+    condition = (
+      length(one(azurerm_private_endpoint.this["foundry"].private_dns_zone_group).private_dns_zone_ids) == 3 &&
+      tolist(azurerm_private_endpoint.this["state"].private_service_connection[0].subresource_names) == tolist(["blob"]) &&
+      azurerm_private_endpoint.this["state"].name == "pe-sttest"
+    )
+    error_message = "Foundry registers in its three zones, the state account's blob endpoint in the blob zone."
+  }
+  assert {
+    condition = (
+      !azurerm_key_vault.this.public_network_access_enabled && !azurerm_key_vault.zone["int-fi"].public_network_access_enabled &&
+      azurerm_key_vault.this.network_acls[0].bypass == "AzureServices" &&
+      !azurerm_container_registry.this[0].public_network_access_enabled && azurerm_container_registry.this[0].network_rule_bypass_for_tasks_enabled &&
+      !azurerm_cognitive_account.agents[0].public_network_access_enabled &&
+      !azurerm_log_analytics_workspace.platform[0].internet_query_enabled && !azurerm_log_analytics_workspace.platform[0].internet_ingestion_enabled &&
+      azapi_update_resource.state_storage[0].body.properties.publicNetworkAccess == "Disabled" &&
+      !azapi_update_resource.state_storage[0].body.properties.allowSharedKeyAccess
+    )
+    error_message = "No service answers publicly; Azure's trusted services (disk encryption, KMS, ACR Tasks) keep their way in."
+  }
+}
+
 run "a_basic_registry_gets_no_private_endpoint" {
   command = plan
 

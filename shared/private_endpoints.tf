@@ -1,19 +1,32 @@
 # Private endpoints of the environment's services (OneK8s design sections 5 and 8; backlog item 3): the
-# platform vault, every zone vault and - only on the Premium SKU, which Azure requires for it - the
-# container registry, in the environment network's shared
-# private endpoint subnet (the design's snet-shared-pe of the backend spoke), registered in the landing
-# zone's private link DNS zones in the hub. The cells and the management network - the labfw VPN's
-# clients among them - resolve the services through the hub firewall's DNS proxy, which answers from
-# those zones: the private address. With `hub`, the environment network is peered with the hub, so the
-# firewall reaches the endpoints.
+# platform vault, every zone vault, the container registry (Premium only, which Azure requires for it), the
+# agents' Foundry resource and the Terraform state account, in the environment network's shared private endpoint
+# subnet (the design's snet-shared-pe of the backend spoke), registered in the landing zone's private link DNS
+# zones in the hub. The cells and the management network - the labfw VPN's clients among them, the GitHub-hosted
+# runners too - resolve the services through the hub firewall's DNS proxy, which answers from those zones: the
+# private address. With `hub`, the environment network is peered with the hub, so the firewall reaches the
+# endpoints.
 #
-# Public network access stays on while the deployment pipelines run on GitHub-hosted runners, which
-# only reach the public endpoints (Deploy, Renew certificate, Sign images, Store secret).
+# private_endpoints.public_network_access = false (the user's ask, 2026-10-15: no public endpoints) then turns the
+# services' public network access off - the vaults, the registry, Foundry, the state account and the environment's
+# Log Analytics workspace (whose private path is the landing zone's Azure Monitor Private Link scope). Azure's
+# trusted services keep their way in (bypass AzureServices): the disk encryption sets and KMS (the clusters' keys in
+# the platform vault) and the registry's own build tasks. Every workflow that reads a data plane joins the labfw VPN
+# first (.github/actions/labfw-vpn).
 locals {
   private_endpoints = var.private_endpoints != null
+  # Public network access of the environment's services: on without private endpoints
+  public_network_access = !local.private_endpoints || try(var.private_endpoints.public_network_access, true)
+  private_dns_zone_names = {
+    vault    = ["privatelink.vaultcore.azure.net"]
+    registry = ["privatelink.azurecr.io"]
+    account  = ["privatelink.cognitiveservices.azure.com", "privatelink.openai.azure.com", "privatelink.services.ai.azure.com"]
+    blob     = ["privatelink.blob.core.windows.net"]
+  }
   private_dns_zone_ids = local.private_endpoints ? {
-    vault    = "${var.private_endpoints.dns_zone_resource_group_id}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
-    registry = "${var.private_endpoints.dns_zone_resource_group_id}/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
+    for subresource, zones in local.private_dns_zone_names : subresource => [
+      for zone in zones : "${var.private_endpoints.dns_zone_resource_group_id}/providers/Microsoft.Network/privateDnsZones/${zone}"
+    ]
   } : {}
 
   # key => the service and its sub-resource
@@ -22,6 +35,12 @@ locals {
     { for zone, vault in azurerm_key_vault.zone : "kv-${zone}" => { id = vault.id, name = vault.name, subresource = "vault" } },
     var.container_registry_name == null || var.container_registry_sku != "Premium" ? {} : {
       acr = { id = azurerm_container_registry.this[0].id, name = azurerm_container_registry.this[0].name, subresource = "registry" }
+    },
+    var.ai_foundry == null ? {} : {
+      foundry = { id = azurerm_cognitive_account.agents[0].id, name = azurerm_cognitive_account.agents[0].name, subresource = "account" }
+    },
+    var.private_endpoints.state_storage_account_id == null ? {} : {
+      state = { id = var.private_endpoints.state_storage_account_id, name = element(split("/", var.private_endpoints.state_storage_account_id), 8), subresource = "blob" }
     },
   )
 }
@@ -61,7 +80,7 @@ resource "azurerm_private_endpoint" "this" {
 
   private_dns_zone_group {
     name                 = "hub"
-    private_dns_zone_ids = [local.private_dns_zone_ids[each.value.subresource]]
+    private_dns_zone_ids = local.private_dns_zone_ids[each.value.subresource]
   }
 }
 
@@ -87,4 +106,29 @@ resource "azurerm_virtual_network_peering" "hub_to_environment" {
   remote_virtual_network_id    = azurerm_virtual_network.this[0].id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = true
+}
+
+# The Terraform state account (Deploy's TF_STATE_STORAGE_ACCOUNT): the workflow creates it before any state exists,
+# so it is not a resource of this configuration - only its network access and authentication are set here. Entra
+# ID only (the backend's use_azuread_auth), and with public_network_access = false only through its private
+# endpoint: Deploy joins the labfw VPN before `terraform init`. Break glass, should the VPN or the endpoint be gone:
+# Lab admin `az storage account update --public-network-access Enabled` (Azure Resource Manager stays reachable).
+resource "azapi_update_resource" "state_storage" {
+  count = local.private_endpoints && try(var.private_endpoints.state_storage_account_id, null) != null ? 1 : 0
+
+  type        = "Microsoft.Storage/storageAccounts@2023-05-01"
+  resource_id = var.private_endpoints.state_storage_account_id
+  body = {
+    properties = {
+      allowSharedKeyAccess = false
+      publicNetworkAccess  = local.public_network_access ? "Enabled" : "Disabled"
+      networkAcls = {
+        defaultAction = local.public_network_access ? "Allow" : "Deny"
+        bypass        = "AzureServices"
+      }
+    }
+  }
+
+  # The endpoint first, so the runner that applies this still reaches the state afterwards
+  depends_on = [azurerm_private_endpoint.this]
 }
