@@ -222,7 +222,14 @@ monthly_budget = {
 # The AI agents' model (onek8s/aks-ai-agents, model.provider foundry; design section 15): Claude Sonnet 5.5 on
 # Microsoft Foundry in swedencentral - germanywestcentral does not offer Anthropic's models - Entra ID only. First
 # user: the egress agent (design D59), which proposes the firewall rules of the applications from labfw's denials.
+# The deployment signs Anthropic's Azure Marketplace offer in OneK8s's name, billed to sub-aks-dev; the organisation,
+# country and industry go to Anthropic with every request (the user's choice, 2026-10-15).
 ai_foundry = {
   name     = "ais-onek8s-dev-agents"
   location = "swedencentral"
+  model_provider = {
+    organization_name = "OneK8s"
+    country_code      = "FI"
+    industry          = "technology"
+  }
 }
