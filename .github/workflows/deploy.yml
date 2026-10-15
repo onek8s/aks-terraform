@@ -159,7 +159,7 @@ jobs:
       - name: Register resource providers
         run: |
           set -euo pipefail
-          providers="Microsoft.ContainerService Microsoft.KubernetesConfiguration Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.PolicyInsights Microsoft.OperationalInsights Microsoft.Insights Microsoft.Consumption"
+          providers="Microsoft.ContainerService Microsoft.KubernetesConfiguration Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ManagedIdentity Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.PolicyInsights Microsoft.OperationalInsights Microsoft.Insights Microsoft.Consumption Microsoft.CognitiveServices"
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
