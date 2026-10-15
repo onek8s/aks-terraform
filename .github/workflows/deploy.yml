@@ -187,8 +187,20 @@ jobs:
           done
           echo "::error::Not registered:$pending"; exit 1
 
+      # Everything Terraform reads and writes past Azure Resource Manager is private: the state account,
+      # the vaults (keys, certificates, secrets), the registry and the API servers have no public
+      # network access, so the runner joins the hub firewall's VPN before the first of them, on a peer
+      # of its own (github-deploy; the other VPN workflows share github-runners) for the whole run.
+      - name: Join the labfw VPN
+        uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_DEPLOY }}
+
       # The state lives in the environment's own subscription. Idempotent: a run that finds the account
-      # changes nothing. Shared key access stays on: the backend reads the state with the account key.
+      # changes nothing. Entra ID only (no shared key): the backend reads the state as the run's
+      # identity, which holds Storage Blob Data Contributor on the account. A new account answers on its
+      # public endpoint until dev-shared gives it its private endpoint and turns that off
+      # (shared/ state_storage).
       - name: Prepare the state storage
         run: |
           set -euo pipefail
@@ -196,15 +208,16 @@ jobs:
             location="$(sed -nE 's/^location[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$VAR_FILE" | head -n 1)"
             az group create -n "$TF_STATE_RESOURCE_GROUP" -l "$location" -o none
             az storage account create -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" -l "$location" \
-              --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+              --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false \
+              --allow-shared-key-access false -o none
             az storage account blob-service-properties update -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" \
               --enable-versioning true --enable-delete-retention true --delete-retention-days 7 -o none
+            az role assignment create --assignee "$ARM_CLIENT_ID" --role "Storage Blob Data Contributor" \
+              --scope "$(az storage account show -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" --query id -o tsv)" -o none
+            sleep 60 # the role assignment reaches the data plane
           fi
-          key="$(az storage account keys list -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" --query '[0].value' -o tsv)"
-          az storage container create --name tfstate --account-name "$TF_STATE_STORAGE_ACCOUNT" --account-key "$key" -o none
+          az storage container create --name tfstate --account-name "$TF_STATE_STORAGE_ACCOUNT" --auth-mode login -o none
 
-      # The backend looks the account key up with the run's identity (use_oidc in terraform.tf, or
-      # the client secret when there is one).
       - name: Refuse to destroy the shared resources
         if: inputs.action == 'destroy' && endsWith(inputs.stack, '-shared')
         run: |
@@ -255,7 +268,7 @@ jobs:
         run: terraform apply -no-color tfplan
 
       # A cluster build takes longer than the GitHub OIDC token the first sign-in used (about 5 minutes
-      # valid), so the CLI signs in again before reading the VPN config and the cluster's credentials.
+      # valid), so the CLI signs in again before reading the cluster's credentials.
       - name: Log in to Azure again (GitHub OIDC)
         if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && env.ARM_CLIENT_SECRET == ''
         uses: azure/login@v3
@@ -263,11 +276,6 @@ jobs:
           client-id: ${{ env.ARM_CLIENT_ID }}
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
-
-      # The private API server, through the hub firewall's VPN (.github/actions/labfw-vpn)
-      - name: Join the labfw VPN
-        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
-        uses: ./.github/actions/labfw-vpn
 
       # App Routing's istiod creates an Envoy Deployment, a LoadBalancer Service (a public IP), an
       # autoscaler, a disruption budget and a ServiceAccount, all `<gateway>-approuting-istio`, for

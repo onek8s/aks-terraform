@@ -2,9 +2,10 @@ terraform {
   # The environment's shared resources have a state of their own, apart from every cluster's: a
   # cluster can then be destroyed and built again without touching them.
   backend "azurerm" {
-    container_name = "tfstate"
-    key            = "shared.tfstate"
-    use_oidc       = true
+    container_name   = "tfstate"
+    key              = "shared.tfstate"
+    use_oidc         = true
+    use_azuread_auth = true # Entra ID only: the state account allows no shared key
   }
 
   required_version = ">= 1.11, < 2.0"

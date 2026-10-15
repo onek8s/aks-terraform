@@ -1,8 +1,9 @@
 terraform {
   backend "azurerm" {
-    container_name = "tfstate"
-    key            = "aks.tfstate"
-    use_oidc       = true
+    container_name   = "tfstate"
+    key              = "aks.tfstate"
+    use_oidc         = true
+    use_azuread_auth = true # Entra ID only: the state account allows no shared key
   }
 
   required_version = ">= 1.11, < 2.0"

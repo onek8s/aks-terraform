@@ -30,8 +30,9 @@ jobs:
     name: sign images
     runs-on: ubuntu-latest
     environment: dev
+    # The labfw VPN's runner peer (.github/actions/labfw-vpn): one such run at a time
     concurrency:
-      group: sign-images
+      group: labfw-vpn
       cancel-in-progress: false
     env:
       REGISTRY: acronek8sdev
@@ -45,6 +46,11 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The vault and the registry (no public network access), through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
 
       # Notation with its Azure Key Vault plugin, trusting the platform's certificate the way a
       # cluster's Ratify does.
