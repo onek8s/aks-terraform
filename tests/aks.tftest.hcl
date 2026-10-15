@@ -967,6 +967,7 @@ run "rejects_cilium_network_policy_on_the_azure_dataplane" {
   command = plan
 
   variables {
+    advanced_networking = null
     network_profile = {
       network_policy    = "cilium"
       network_dataplane = "azure"
@@ -1786,6 +1787,7 @@ run "warns_about_restricted_namespaces_with_no_network_policy_engine" {
   command = plan
 
   variables {
+    advanced_networking = null
     network_profile = {
       network_policy    = "none"
       network_dataplane = "azure"
@@ -1802,6 +1804,7 @@ run "a_namespace_open_in_both_directions_needs_no_engine_to_enforce_it" {
   command = plan
 
   variables {
+    advanced_networking = null
     network_profile = {
       network_policy    = "none"
       network_dataplane = "azure"
@@ -1825,6 +1828,7 @@ run "automatic_enforces_network_policies_whatever_the_profile_says" {
   command = plan
 
   variables {
+    advanced_networking     = null
     sku_name                = "Automatic"
     sku_tier                = "Standard"
     api_server_subnet_name  = "snet-aks-apiserver"
@@ -3276,6 +3280,7 @@ run "node_auto_provisioning_needs_cilium_overlay" {
   command = plan
 
   variables {
+    advanced_networking            = null
     node_auto_provisioning_enabled = true
     default_node_pool = {
       availability_zones = ["1"]
@@ -3488,20 +3493,57 @@ run "a_lab_cell_keeps_fqdn_policies_without_hubble" {
   }
 }
 
-run "acns_stays_off_unless_asked_for" {
+run "acns_is_off_when_turned_off" {
   command = plan
+
+  variables {
+    advanced_networking = null
+  }
 
   assert {
     condition     = !can(local.network_profile.advanced_networking)
-    error_message = "No ACNS and no eBPF host routing without advanced_networking."
+    error_message = "No ACNS and no eBPF host routing with advanced_networking = null."
   }
 }
 
-run "warns_about_ebpf_host_routing_on_the_default_node_os" {
+# The defaults are the production settings; the dev lab's tfvars turn the cost savings on by name.
+run "defaults_are_production_settings" {
+  command = plan
+
+  assert {
+    condition     = var.sku_tier == "Standard"
+    error_message = "The default tier should be Standard (uptime SLA, design D31)."
+  }
+  assert {
+    condition     = var.default_node_pool.node_count == 2 && var.default_node_pool.vm_size == "Standard_D4ds_v5" && var.default_node_pool.os_sku == "AzureLinux"
+    error_message = "The default system pool should be two Standard_D4ds_v5 nodes on Azure Linux."
+  }
+  assert {
+    condition     = var.gateway_implementation == "approuting-istio"
+    error_message = "The default Gateway API implementation should be App Routing (D55)."
+  }
+  assert {
+    condition     = var.vertical_pod_autoscaler_enabled
+    error_message = "The VPA add-on should be on by default."
+  }
+  assert {
+    condition = (
+      local.network_profile.advanced_networking.observability.enabled &&
+      local.network_profile.advanced_networking.security.advanced_network_policies == "FQDN" &&
+      local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
+    )
+    error_message = "ACNS should be on by default, with Hubble, FQDN policies and eBPF host routing."
+  }
+}
+
+run "warns_about_ebpf_host_routing_on_another_node_os" {
   command = plan
 
   variables {
     advanced_networking = {}
+    default_node_pool = {
+      os_sku = "Ubuntu"
+    }
   }
 
   expect_failures = [check.ebpf_host_routing_needs_azure_linux_or_ubuntu_on_every_node]
@@ -4362,6 +4404,7 @@ run "a_cluster_without_a_gateway_implementation_names_no_class" {
   command = plan
 
   variables {
+    gateway_implementation = null
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
