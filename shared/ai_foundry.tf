@@ -14,6 +14,9 @@ resource "azurerm_cognitive_account" "agents" {
   # Entra ID only: no keys to leak. Reached on its public endpoint by the GitHub-hosted agent runners.
   local_auth_enabled            = false
   public_network_access_enabled = true
+  # A Foundry resource with projects - Azure turns it on (and adds a default project) with the first model
+  # deployment attempt, and it cannot be turned off without deleting the resource
+  project_management_enabled = true
 }
 
 # Anthropic's models need the deploying organisation's attestation (modelProviderData: legal name, country, industry):
