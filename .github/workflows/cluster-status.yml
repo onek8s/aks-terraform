@@ -290,6 +290,11 @@ jobs:
               echo "== https://$host$path via $gwns/$gw ($ip): $out"
               [ "$path" = / ] || head -c 1500 "$RUNNER_TEMP/body"; echo
             done
+            # As a VPN client reaches it: the name from labfw's DNS proxy, the gateway's internal load balancer,
+            # through labfw (management -> the cells' 443)
+            lb=$(dig +short @10.0.12.1 "$host" | tail -n 1)
+            out=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$host:443:${lb:-0.0.0.0}" "https://$host/")
+            echo "== https://$host/ as a VPN client: DNS $host -> ${lb:-nothing}, HTTP $out (certificate checked)"
           done
 
       - name: Node iptables rules
