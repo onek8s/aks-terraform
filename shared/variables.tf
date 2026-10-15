@@ -608,12 +608,21 @@ variable "ai_foundry" {
     model         = optional(string, "claude-sonnet-5-5")
     model_version = optional(string, "1")
     capacity      = optional(number, 50)
+    # Who deploys Anthropic's model: sent to Anthropic, and the Marketplace offer is signed in this name. Null: the
+    # Foundry resource without a deployment.
+    model_provider = optional(object({
+      organization_name = string
+      country_code      = string # ISO 3166 alpha-2, e.g. FI
+      industry          = optional(string, "technology")
+    }))
   })
   default     = null
   description = <<DESCRIPTION
 The AI agents' model endpoint (onek8s/aks-ai-agents, `model.provider: foundry`): a Microsoft Foundry (AI Services)
 resource `name` in `location` - a region that offers Anthropic's models - with one GlobalStandard deployment of
-`model`, named like the model. Entra ID only (no keys); the identity that applies this stack, which also runs the
-agent workflows, gets `Cognitive Services User` on it. Null for none.
+`model`, named like the model, once `model_provider` names the organisation that deploys it (Anthropic's terms are
+accepted in its name, and its name, country and industry go to Anthropic with every request). Entra ID only (no
+keys); the identity that applies this stack, which also runs the agent workflows, gets `Cognitive Services User`.
+Null for none.
 DESCRIPTION
 }

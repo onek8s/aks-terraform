@@ -18,6 +18,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # The agents' Claude deployment (ai_foundry): its modelProviderData is not in azurerm
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.12"
+    }
   }
 }
 
@@ -36,4 +41,8 @@ provider "azurerm" {
   subscription_id                 = coalesce(local.hub_subscription_id, var.subscription_id, "00000000-0000-0000-0000-000000000000")
 
   features {}
+}
+
+provider "azapi" {
+  subscription_id = var.subscription_id
 }

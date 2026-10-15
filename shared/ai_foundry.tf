@@ -16,21 +16,36 @@ resource "azurerm_cognitive_account" "agents" {
   public_network_access_enabled = true
 }
 
-resource "azurerm_cognitive_deployment" "agents" {
-  count = var.ai_foundry == null ? 0 : 1
+# Anthropic's models need the deploying organisation's attestation (modelProviderData: legal name, country, industry):
+# the resource provider signs the Azure Marketplace offer for Claude on its behalf and sends the three fields to
+# Anthropic with every request - so the deployment is made only when ai_foundry.model_provider says who that is.
+# azapi: azurerm has no modelProviderData.
+resource "azapi_resource" "agents_model" {
+  count = var.ai_foundry == null ? 0 : var.ai_foundry.model_provider == null ? 0 : 1
 
-  name                 = var.ai_foundry.model
-  cognitive_account_id = azurerm_cognitive_account.agents[0].id
+  type      = "Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview"
+  name      = var.ai_foundry.model
+  parent_id = azurerm_cognitive_account.agents[0].id
+  # The provider's embedded schema predates modelProviderData
+  schema_validation_enabled = false
 
-  model {
-    format  = "Anthropic"
-    name    = var.ai_foundry.model
-    version = var.ai_foundry.model_version
-  }
-
-  sku {
-    name     = "GlobalStandard"
-    capacity = var.ai_foundry.capacity
+  body = {
+    sku = {
+      name     = "GlobalStandard"
+      capacity = var.ai_foundry.capacity
+    }
+    properties = {
+      model = {
+        format  = "Anthropic"
+        name    = var.ai_foundry.model
+        version = var.ai_foundry.model_version
+      }
+      modelProviderData = {
+        organizationName = var.ai_foundry.model_provider.organization_name
+        countryCode      = var.ai_foundry.model_provider.country_code
+        industry         = var.ai_foundry.model_provider.industry
+      }
+    }
   }
 }
 

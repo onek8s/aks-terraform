@@ -49,6 +49,7 @@ mock_provider "azurerm" {
   }
 }
 mock_provider "random" {}
+mock_provider "azapi" {}
 
 variables {
   environment         = "test"
@@ -1133,7 +1134,7 @@ run "a_basic_registry_gets_no_private_endpoint" {
   }
 }
 
-run "the_agents_model_endpoint_takes_entra_id_only" {
+run "no_claude_deployment_without_the_organisations_attestation" {
   command = plan
 
   variables {
@@ -1144,10 +1145,31 @@ run "the_agents_model_endpoint_takes_entra_id_only" {
   }
 
   assert {
+    condition     = length(azurerm_cognitive_account.agents) == 1 && length(azapi_resource.agents_model) == 0
+    error_message = "Anthropic's terms are accepted only in the name of an organisation the configuration names."
+  }
+}
+
+run "the_agents_model_endpoint_takes_entra_id_only" {
+  command = plan
+
+  variables {
+    ai_foundry = {
+      name     = "ais-onek8s-dev-agents"
+      location = "swedencentral"
+      model_provider = {
+        organization_name = "Contoso"
+        country_code      = "FI"
+      }
+    }
+  }
+
+  assert {
     condition = (
       !azurerm_cognitive_account.agents[0].local_auth_enabled &&
-      azurerm_cognitive_deployment.agents[0].model[0].format == "Anthropic" &&
-      azurerm_cognitive_deployment.agents[0].model[0].name == "claude-sonnet-5-5" &&
+      azapi_resource.agents_model[0].body.properties.model.format == "Anthropic" &&
+      azapi_resource.agents_model[0].body.properties.model.name == "claude-sonnet-5-5" &&
+      azapi_resource.agents_model[0].body.properties.modelProviderData.industry == "technology" &&
       azurerm_role_assignment.agents_model_user[0].role_definition_name == "Cognitive Services User"
     )
     error_message = "A Claude deployment behind Entra ID, usable by the identity that runs the agents."
