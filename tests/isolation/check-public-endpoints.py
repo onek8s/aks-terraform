@@ -21,6 +21,12 @@ PAAS = ("microsoft.keyvault/vaults", "microsoft.containerregistry/registries", "
         "microsoft.eventhub/namespaces", "microsoft.cognitiveservices/accounts", "microsoft.web/sites",
         "microsoft.dbforpostgresql/flexibleservers", "microsoft.cache/redis")
 PAAS_KQL = ", ".join(f"'{t}'" for t in PAAS)
+# Also public in the sense of D60 (no public endpoints): the API servers, Log Analytics (ingestion and query), data
+# collection endpoints, managed disks (export and import over a SAS URL), Private Link scopes
+OTHER = ("microsoft.containerservice/managedclusters", "microsoft.operationalinsights/workspaces",
+         "microsoft.insights/datacollectionendpoints", "microsoft.compute/disks",
+         "microsoft.kubernetesconfiguration/privatelinkscopes")
+OTHER_KQL = ", ".join(f"'{t}'" for t in OTHER)
 
 QUERIES = {
     "public-ip": """
@@ -29,13 +35,18 @@ QUERIES = {
         | project type, name, resourceGroup, detail = tostring(properties.ipAddress)""",
     "public-endpoint": f"""
         Resources
-        | where type in~ ({PAAS_KQL}) or type =~ 'microsoft.containerservice/managedclusters'
-        | extend access = tostring(properties.publicNetworkAccess), acl = tostring(properties.networkAcls.defaultAction),
+        | where type in~ ({PAAS_KQL}) or type in~ ({OTHER_KQL})
+        | extend access = tostring(coalesce(properties.publicNetworkAccess, properties.networkAcls.publicNetworkAccess)),
+                 acl = tostring(properties.networkAcls.defaultAction),
+                 ingestion = tostring(properties.publicNetworkAccessForIngestion), query = tostring(properties.publicNetworkAccessForQuery),
                  privateCluster = coalesce(tobool(properties.apiServerAccessProfile.enablePrivateCluster), false)
-        | extend public = iff(type =~ 'microsoft.containerservice/managedclusters', not(privateCluster),
-                              not(access =~ 'Disabled') and not(acl =~ 'Deny'))
+        | extend public = case(
+            type =~ 'microsoft.containerservice/managedclusters', not(privateCluster),
+            type =~ 'microsoft.operationalinsights/workspaces', not(ingestion =~ 'Disabled' and query =~ 'Disabled'),
+            not(access =~ 'Disabled') and not(acl =~ 'Deny'))
         | where public
-        | project type, name, resourceGroup, detail = strcat('publicNetworkAccess=', access, ' defaultAction=', acl)""",
+        | project type, name, resourceGroup,
+                  detail = strcat('publicNetworkAccess=', access, ' defaultAction=', acl, ' ingestion=', ingestion, ' query=', query)""",
     "local-auth": f"""
         Resources
         | where (type =~ 'microsoft.containerregistry/registries' and coalesce(tobool(properties.adminUserEnabled), false))

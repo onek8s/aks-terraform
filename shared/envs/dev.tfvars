@@ -41,7 +41,7 @@ private_endpoints = {
   address_prefix             = "172.20.2.0/26"
   dns_zone_resource_group_id = "/subscriptions/56b07081-ca7e-4343-b000-bc0998a8c347/resourceGroups/rg-hub-dns-germanywestcentral"
   state_storage_account_id   = "/subscriptions/3b9f032a-0165-4b8c-9e1e-d7a664c661a8/resourceGroups/rg-aks-dev-tfstate/providers/Microsoft.Storage/storageAccounts/stonek8sdevtfstate"
-  public_network_access      = true
+  public_network_access      = false
 }
 
 # The isolation zones (OneK8s design, "Isolation zone") of the internal exposure: the internal
