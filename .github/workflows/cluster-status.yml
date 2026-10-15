@@ -38,6 +38,11 @@ permissions:
   contents: read
   id-token: write # GitHub OIDC, when there is no client secret
 
+# The labfw VPN's one runner peer (.github/actions/labfw-vpn): one such run at a time
+concurrency:
+  group: labfw-vpn
+  cancel-in-progress: false
+
 jobs:
   status:
     name: status ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
@@ -131,6 +136,11 @@ jobs:
             echo "== $zone (private)"
             az network private-dns record-set list -g "$RESOURCE_GROUP" -z "$zone" --query '[].{name: name, type: type, a: aRecords}' --output json
           done
+
+      - uses: actions/checkout@v7
+
+      # The private API server, through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
 
       - name: Inside the cluster
         continue-on-error: true

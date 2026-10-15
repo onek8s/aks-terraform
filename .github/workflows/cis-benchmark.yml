@@ -46,6 +46,11 @@ env:
   KUBESCAPE_VERSION: 4.0.15
   KUBESCAPE_FRAMEWORK: cis-aks-t1.8.0
 
+# The labfw VPN's one runner peer (.github/actions/labfw-vpn): one such run at a time
+concurrency:
+  group: labfw-vpn
+  cancel-in-progress: false
+
 jobs:
   cis:
     name: cis ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
@@ -82,6 +87,9 @@ jobs:
           echo "$registry" > "$OUT/registry.json"
           kubelet="$(jq -r '.properties.identityProfile.kubeletidentity.objectId' "$OUT/aks.json")"
           az role assignment list --assignee "$kubelet" --scope "$(jq -r .id <<<"$registry")" --include-inherited -o json > "$OUT/kubelet-registry-roles.json"
+
+      # The private API server, through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
 
       - name: Cluster credentials
         run: |

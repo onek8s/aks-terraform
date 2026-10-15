@@ -166,10 +166,14 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# A public API server - the one exception of the dev lab to design section 3, which has no network
-# path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
-private_cluster_enabled         = false
-api_server_authorized_ip_ranges = ["0.0.0.0/0"]
+# A private API server (design section 3): API Server VNet Integration in the cell's delegated
+# snet-apiserver (172.22.15.0/28, shared/), reached by the nodes directly and by the management network,
+# the labfw VPN and the GitHub runners (which join that VPN) through the hub. No private DNS zone: the
+# cell resolves through labfw's DNS proxy in the hub, so the public FQDN names the private address.
+private_cluster_enabled             = true
+private_cluster_public_fqdn_enabled = true
+private_dns_zone_mode               = "none"
+api_server_subnet_name              = "snet-apiserver"
 
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster. None yet in the build tenant.

@@ -368,7 +368,7 @@ variable "isolation_zones" {
   description = <<DESCRIPTION
 The isolation zones - OneK8s design, "Isolation zone" - keyed by name (`int-fi`, `ext-se`):
 `exposure` `int` (reached from the corporate network) or `ext` (from the internet), and `index`, the
-zone's /24 in each cell's address space (1 to 15; 0 is the system pool's). A zone's index never
+zone's /24 in each cell's address space (1 to 14; 0 is the system pool's, 15 the API server's). A zone's index never
 changes once it is in use - a new country's zones take new ones.
 
 `enabled = false` disables a country's zone without giving up its index: no subnets, NSGs or private

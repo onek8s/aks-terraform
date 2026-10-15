@@ -69,6 +69,11 @@ permissions:
   contents: read
   id-token: write
 
+# The labfw VPN's one runner peer (.github/actions/labfw-vpn): one such run at a time
+concurrency:
+  group: labfw-vpn
+  cancel-in-progress: false
+
 jobs:
   isolation:
     name: isolation ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
@@ -176,6 +181,9 @@ jobs:
           else
             result PASS R1 "local admin credential (get-credentials --admin) refused" "$(head -c 200 <<<"$out" | tr '\n' ' ')"
           fi
+
+      # The private API server, through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
 
       - name: Credentials
         run: |
