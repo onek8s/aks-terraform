@@ -21,7 +21,7 @@ on:
       namespace:
         description: "The namespace the groups are for (\"platform\" for the platform's own groups)"
         required: true
-        default: "ext-fi-example"
+        default: "int-fi-example"
       roles:
         description: "The groups to make, space-separated: grp-onek8s-dev-<namespace>-<role> (\"viewers\" with namespace platform)"
         required: true

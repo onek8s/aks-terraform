@@ -172,6 +172,19 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "platform_gateway_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+Whether the cluster has the platform's Gateway, `platform` in `platform-gateway`: a public load
+balancer for Flux's webhook receivers (flux_github_webhook). False for a cell without a public entry
+point - an internal cell routed through the hub's firewall, where a public load balancer cannot
+answer (its replies would leave by the default route): Flux then polls, and the Flux repository's
+cluster directory leaves the platform gateway and the webhook out.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "gateway_implementation" {
   type        = string
   default     = "approuting-istio"
@@ -346,6 +359,7 @@ variable "default_node_pool" {
     max_count           = optional(number, 1)
     max_pods            = optional(number)
     os_disk_size_gb     = optional(number)
+    os_disk_type        = optional(string)
     availability_zones  = optional(list(string))
 
     max_surge                  = optional(string, "10%")
@@ -370,6 +384,10 @@ a second node while one is upgraded or lost. One smaller node (the dev lab's sin
 
 - `os_sku` - The node OS. Defaults to `AzureLinux` (Azure Linux 3.0, the design's node OS, which
   eBPF host routing needs on every node); null leaves the AKS default.
+- `os_disk_type` - `Ephemeral` (on the VM size's local disk: no managed disk to pay for, and no
+  Premium SSD, which AKS picks for a managed OS disk wherever the size supports it) or `Managed`.
+  Null lets AKS choose: ephemeral when the size's local storage fits the OS disk, managed otherwise.
+  It cannot change on a running pool.
 - `encryption_at_host` - Encrypts the node's temporary disk and caches with the disk encryption set's
   key too. The subscription needs the `Microsoft.Compute/EncryptionAtHost` feature registered.
 - `ssh_access` - `Disabled` turns off SSH to the nodes; null leaves the AKS default (`LocalUser`).
@@ -407,6 +425,10 @@ DESCRIPTION
   validation {
     condition     = !var.default_node_pool.enable_auto_scaling || (var.default_node_pool.node_count >= var.default_node_pool.min_count && var.default_node_pool.node_count <= var.default_node_pool.max_count)
     error_message = "default_node_pool.node_count must be between min_count and max_count while autoscaling is enabled."
+  }
+  validation {
+    condition     = var.default_node_pool.os_disk_type == null || contains(["Ephemeral", "Managed"], coalesce(var.default_node_pool.os_disk_type, "-"))
+    error_message = "default_node_pool.os_disk_type must be Ephemeral or Managed, or left unset."
   }
   validation {
     condition     = var.default_node_pool.os_disk_size_gb == null || try(var.default_node_pool.os_disk_size_gb >= 30, false)

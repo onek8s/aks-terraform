@@ -1,8 +1,9 @@
 name: vCPU quota
 
 # Raises the dev subscription's compute quotas in a region to what the dev cells need, through the
-# Azure Quota API. Started by hand. Two stateless cells take, each, a 4-vCPU system node (Dalv6) and
-# a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a surge node while they upgrade. A zone's
+# Azure Quota API. Started by hand. A stateless cell takes a 4-vCPU system node (Daldsv6: its local
+# NVMe disk holds the ephemeral OS disk) and a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a
+# surge node while it upgrades. A zone's
 # GPU node (aks-fluxcd-platform `<zone>gpu`) is a 40-vCPU Standard_NC40ads_H100_v5, in a family
 # whose quota Azure starts at 0; `gpu` stays 0 unless GPU nodes are wanted.
 #
@@ -20,7 +21,7 @@ on:
       location:
         description: "The region"
         required: true
-        default: "swedencentral"
+        default: "germanywestcentral"
       regional:
         description: "Total Regional vCPUs"
         required: true
@@ -29,10 +30,10 @@ on:
         description: "Standard Dpsv6 Family vCPUs"
         required: true
         default: "24"
-      dalv6:
-        description: "Standard Dalv6 Family vCPUs"
+      daldsv6:
+        description: "Standard Daldsv6 Family vCPUs (the cells' system nodes)"
         required: true
-        default: "16"
+        default: "8"
       low_priority:
         description: "Total Regional Low-priority vCPUs (spot)"
         required: true
@@ -72,7 +73,7 @@ jobs:
           TARGETS: |
             Total Regional vCPUs=${{ inputs.regional }}
             Standard Dpsv6 Family vCPUs=${{ inputs.dpsv6 }}
-            standard Dalv6 Family vCPUs=${{ inputs.dalv6 }}
+            Standard Daldsv6 Family vCPUs=${{ inputs.daldsv6 }}
             Total Regional Low-priority vCPUs=${{ inputs.low_priority }}
             StandardNCadsH100v5Family=${{ inputs.gpu }}
         run: |

@@ -63,7 +63,7 @@ MATRIX = [
 ELSEWHERE = [
     ("get", "pods", "kube-system"),
     ("get", "pods", "flux-system"),
-    ("list", "secrets", "ext-fi-gateway"),
+    ("list", "secrets", "int-fi-gateway"),
     ("create", "configmaps", "default"),
 ]
 CLUSTER_WIDE = [
@@ -435,7 +435,7 @@ def check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults):
     listed = [n.split("/", 1)[-1] for n in names.stdout.split()]
     wrong = [] if names.returncode == 0 and "kube-system" in listed else [f"list namespaces: {names.stderr.strip()[:150]}"]
     try:
-        for verb, resource, namespace in [("get", "pods", "ext-fi-example"), ("list", "secrets", "ext-fi-example"),
+        for verb, resource, namespace in [("get", "pods", "int-fi-example"), ("list", "secrets", "int-fi-example"),
                                           ("list", "configmaps", "kube-system"), ("create", "configmaps", "default")]:
             if can_i(verb, resource, namespace, [], kubeconfig):
                 wrong.append(f"{verb} {resource} in {namespace}: allowed")

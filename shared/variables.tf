@@ -288,6 +288,7 @@ variable "global_hostnames" {
     endpoints   = list(string)
     health_path = optional(string, "/")
     ttl         = optional(number, 10)
+    zone        = optional(string)
   }))
   default     = {}
   description = <<DESCRIPTION
@@ -296,6 +297,10 @@ Hostnames in dns_zone_name that every listed cluster serves at once, keyed by th
 each cluster's own public hostname, such as `public-aks-dev-ext-stateless-az1.onek8s.lol` - alike and
 leaving out one whose probe of `health_path` fails, and a CNAME of the hostname to it. The clusters'
 external-dns have to leave the hostname alone.
+
+`zone` names the external isolation zone that serves the hostname: no profile is made while that
+zone is not deployed - not in isolation_zones, disabled, or the resources serve the internal
+exposure - nor for any hostname when exposure is `int`.
 DESCRIPTION
   nullable    = false
 }
@@ -335,8 +340,8 @@ variable "exposure" {
 The exposure these shared resources serve - OneK8s design decision D52: `int` or `ext`. Internal and
 external workloads have a subscription and clusters each, so one apply of this configuration serves
 the clusters of one exposure in its subscription: every isolation zone is of that exposure, only an
-external one publishes global_hostnames (Traffic Manager), only an internal one has
-internal_dns_zones. Null checks nothing.
+external one publishes global_hostnames (Traffic Manager: an internal one creates none of them), only an
+internal one has internal_dns_zones. Null checks nothing.
 DESCRIPTION
 
   validation {
@@ -351,16 +356,13 @@ DESCRIPTION
     condition     = var.exposure != "ext" || length(var.internal_dns_zones) == 0
     error_message = "The external exposure has no internal zones' private DNS (design decision D52)."
   }
-  validation {
-    condition     = var.exposure != "int" || length(var.global_hostnames) == 0
-    error_message = "The internal exposure publishes nothing through Traffic Manager (design decision D52)."
-  }
 }
 
 variable "isolation_zones" {
   type = map(object({
     exposure = string
     index    = number
+    enabled  = optional(bool, true)
   }))
   default     = {}
   description = <<DESCRIPTION
@@ -368,6 +370,11 @@ The isolation zones - OneK8s design, "Isolation zone" - keyed by name (`int-fi`,
 `exposure` `int` (reached from the corporate network) or `ext` (from the internet), and `index`, the
 zone's /24 in each cell's address space (1 to 15; 0 is the system pool's). A zone's index never
 changes once it is in use - a new country's zones take new ones.
+
+`enabled = false` disables a country's zone without giving up its index: no subnets, NSGs or private
+DNS for it in any cell, and no Traffic Manager profile for its global hostnames. Its vault
+(zone_key_vault_names) and namespaces (key_vault_namespaces) are left out by not listing them, as
+are the zone in the clusters' tfvars, the fleet's zones.yaml and the landing zone's policies.
 DESCRIPTION
   nullable    = false
 
@@ -495,4 +502,32 @@ variable "platform_viewer_role_name" {
   type        = string
   default     = null
   description = "Name of the platform viewers' custom role. Unique in the tenant; defaults to `OneK8s Platform Viewer (<resource group>)`."
+}
+
+variable "hub" {
+  type = object({
+    virtual_network_id = string
+    next_hop_ip        = string
+    dns_servers        = optional(list(string), [])
+  })
+  default     = null
+  description = <<DESCRIPTION
+The landing zone's hub, for cells routed through its firewall (OneK8s design sections 5 and 8;
+azure-landing-zone network modes `firewall` and `labfw`): every cell's network is peered with the hub
+VNet `virtual_network_id` (in the connectivity subscription - the deploying identity needs the
+landing zone's `AKS spoke peering` role on it), every node subnet sends 0.0.0.0/0 to `next_hop_ip` (the
+Azure Firewall's or labfw's private address; the clusters then use AKS outbound type
+`userDefinedRouting`), the cells use `dns_servers` (the firewall's DNS proxy; empty keeps Azure DNS),
+and the internal zones' private DNS zones are linked to the hub as well, so the DNS proxy resolves
+them. Null: each cell is a network of its own with load balancer egress (network mode `sandbox`).
+DESCRIPTION
+
+  validation {
+    condition     = var.hub == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", try(var.hub.virtual_network_id, "")))
+    error_message = "hub.virtual_network_id must be a virtual network's resource ID."
+  }
+  validation {
+    condition     = var.hub == null || can(cidrhost("${try(var.hub.next_hop_ip, "")}/32", 0))
+    error_message = "hub.next_hop_ip must be an IPv4 address."
+  }
 }

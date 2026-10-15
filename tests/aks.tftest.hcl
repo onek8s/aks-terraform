@@ -4427,3 +4427,111 @@ run "an_unknown_gateway_implementation_is_refused" {
 
   expect_failures = [var.gateway_implementation]
 }
+
+# ----------------------------------------------------------------------------------------------
+# A cell routed through the landing zone's hub firewall (2026-10-15: the lab's internal cell behind labfw)
+# ----------------------------------------------------------------------------------------------
+
+run "a_routed_cell_grants_aks_its_route_table" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.node
+    values = {
+      id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/virtualNetworks/vnet-aks-test/subnets/snet-system"
+      address_prefixes = ["172.22.0.0/24"]
+      route_table_id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/routeTables/rt-dev-int-stateless-az1"
+    }
+  }
+
+  variables {
+    network_profile = {
+      outbound_type = "userDefinedRouting"
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.network_contributor["route_table"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.Network/routeTables/rt-dev-int-stateless-az1"
+    error_message = "AKS needs Network Contributor on the node subnet's route table to egress through the hub firewall."
+  }
+}
+
+run "a_cell_without_a_route_table_grants_none" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(azurerm_role_assignment.network_contributor), "route_table")
+    error_message = "No route table on the node subnet, no grant on one."
+  }
+}
+
+run "the_system_pool_can_ask_for_an_ephemeral_os_disk" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      vm_size      = "Standard_D4alds_v6"
+      os_disk_type = "Ephemeral"
+    }
+  }
+
+  assert {
+    condition     = local.default_agent_pool.os_disk_type == "Ephemeral"
+    error_message = "The OS disk type should reach the module's default agent pool."
+  }
+}
+
+run "an_unknown_os_disk_type_is_refused" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      os_disk_type = "Premium"
+    }
+  }
+
+  expect_failures = [var.default_node_pool]
+}
+
+run "an_internal_cell_without_a_platform_gateway" {
+  command = plan
+
+  variables {
+    exposure                       = "int"
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    gateway_implementation   = "traefik"
+    platform_gateway_enabled = false
+  }
+
+  assert {
+    condition     = keys(azapi_resource.traefik_flux_configuration) == ["int-fi"]
+    error_message = "Only the zone's Gateway, no platform gateway."
+  }
+  assert {
+    condition     = !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "gateway_class_name_platform")
+    error_message = "The Flux repository is told no platform gateway class."
+  }
+}
+
+run "the_flux_webhook_needs_the_platform_gateway" {
+  command = plan
+
+  variables {
+    key_vault_name           = "kv-sec-test-shared"
+    key_vault_create         = false
+    flux_git_repository      = { url = "https://github.com/example/cluster-config" }
+    flux_github_webhook      = true
+    platform_gateway_enabled = false
+  }
+
+  expect_failures = [check.flux_webhook_needs_the_platform_gateway]
+}
