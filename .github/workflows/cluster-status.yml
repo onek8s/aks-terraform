@@ -28,6 +28,10 @@ on:
         default: "aks-dev-int-stateless-az2"
         type: choice
         options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az3, aks-dev-int-stateless-az1, aks-dev-int-stateful]
+      route_path:
+        description: "Also request this path (e.g. /weather) on every route, through its gateway's pods"
+        required: false
+        default: ""
       node_iptables:
         description: "Also dump every node's iptables rules (creates a debug pod per node)"
         required: false
@@ -267,6 +271,26 @@ jobs:
           kubectl describe pods -n int-fi-example | tail -n 60
           kubectl get events -n int-fi-example --sort-by=.lastTimestamp | tail -n 30
           kubectl get events -n flux-system --sort-by=.lastTimestamp | tail -n 40
+
+      # Every route as a client sees it, without DNS or the load balancer: through each gateway pod's own address,
+      # which the runner reaches on the VPN where the gateways run on the system pool (snet-system)
+      - name: Routes answer
+        continue-on-error: true
+        env:
+          ROUTE_PATH: ${{ inputs.route_path }}
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          [[ -z "$ROUTE_PATH" || "$ROUTE_PATH" =~ ^/[A-Za-z0-9/._-]*$ ]] || { echo "::error::route_path must be a plain path"; exit 1; }
+          kubectl get httproutes -A -o json | jq -r '.items[] | .metadata.namespace as $ns | .spec.parentRefs[0] as $p | .spec.hostnames[]? as $h | "\($p.namespace // $ns) \($p.name) \($h)"' |
+          while read -r gwns gw host; do
+            ip=$(kubectl get pods -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.podIP}')
+            [ -n "$ip" ] || { echo "$host: no pod of gateway $gwns/$gw"; continue; }
+            for path in / ${ROUTE_PATH}; do
+              out=$(curl -sk -m 15 -o "$RUNNER_TEMP/body" -w '%{http_code}' --resolve "$host:443:$ip" "https://$host$path")
+              echo "== https://$host$path via $gwns/$gw ($ip): $out"
+              [ "$path" = / ] || head -c 1500 "$RUNNER_TEMP/body"; echo
+            done
+          done
 
       - name: Node iptables rules
         if: inputs.node_iptables
