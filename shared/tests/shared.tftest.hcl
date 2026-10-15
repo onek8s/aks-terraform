@@ -656,7 +656,53 @@ run "an_external_exposure_with_its_zones_plans" {
   }
 }
 
-run "rejects_a_cell_that_is_not_a_slash_20" {
+run "a_cell_without_an_overlay_is_a_slash_16_of_the_shared_address_space" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+      int-se = { exposure = "int", index = 2 }
+    }
+    cells = {
+      dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
+      dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
+    }
+    internal_dns_zones = ["int-fi.test.contoso.com"]
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-system"].address_prefixes == tolist(["100.64.0.0/20"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-fi-nodes"].address_prefixes == tolist(["100.64.16.0/21"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-nodes"].address_prefixes == tolist(["100.64.32.0/21"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az2/snet-int-se-nodes"].address_prefixes == tolist(["172.22.18.0/25"])
+    )
+    error_message = "A /16 cell has the /20 cell's layout, sixteen times as large: room for the pods in the node subnets."
+  }
+  assert {
+    condition = (
+      toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-nodes/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/21", "100.64.32.0/21"]) &&
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az2/snet-int-se-nodes/pods"].source_address_prefix == "100.201.0.0/16"
+    )
+    error_message = "Without an overlay, the pods are let in from the cell's node subnets; with one, from the overlay range."
+  }
+}
+
+run "rejects_a_cell_without_an_overlay_outside_the_shared_address_space" {
+  command = plan
+
+  variables {
+    cells = {
+      dev-int-stateless-az3 = { address_space = "172.23.0.0/16", pod_network = "subnet" }
+    }
+  }
+
+  expect_failures = [var.cells]
+}
+
+run "rejects_a_cell_that_is_not_a_slash_16_to_20" {
   command = plan
 
   variables {

@@ -34,7 +34,7 @@ on:
         required: true
         default: "aks-dev-int-stateless-az2"
         type: choice
-        options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az1, aks-dev-int-stateful]
+        options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az3, aks-dev-int-stateless-az1, aks-dev-int-stateful]
 
 permissions:
   contents: read

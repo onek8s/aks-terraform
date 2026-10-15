@@ -393,12 +393,14 @@ variable "cells" {
     address_space     = string
     enabled           = optional(bool, true)
     api_server_subnet = optional(bool, false)
+    pod_network       = optional(string, "overlay")
   }))
   default     = {}
   description = <<DESCRIPTION
 The stateless cells' networks, keyed by the cell (`dev-int-stateless-az2`, the cluster's name without
-`aks-`): `vnet-<cell>` with `address_space`, a /20, laid out as cells.tf describes - `snet-system`
-for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`.
+`aks-`): `vnet-<cell>` with `address_space`, a /16 to /20, laid out as cells.tf describes - `snet-system`
+for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`, each sized from
+the address space (a /20 gives a zone a /25 of nodes, a /16 a /21).
 
 `enabled = false` keeps a cell in the specification - its address space stays reserved - without
 building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
@@ -408,12 +410,32 @@ cannot be deployed while it is disabled.
 (design section 3). Azure refuses that integration on an encrypted network with v4 and newer VM sizes
 (`VNetEncryptionNotCompatibleWithAPIServerVNetIntegration`), and every cell network here is encrypted
 (section 13), so it stays off until that changes; a private cluster then uses Private Link instead.
+
+`pod_network` is where the cell's cluster gives its pods their addresses: `overlay` (Azure CNI Overlay,
+the default - the pods' range is `cell_pod_cidr`, translated to the node's address when it leaves the
+node) or `subnet` (Azure CNI node subnet, no overlay - every pod has an address of its node's subnet,
+which it keeps up to the hub's firewall: the firewall sees which zone, and which pod, a flow comes from,
+design D59). A `subnet` cell needs room for the pods, so its address space is a /16 of the shared
+address space 100.64.0.0/10 (RFC 6598), never routed outside the landing zone - the firewall translates
+every flow that leaves it. The cell's cluster says the same in its network_profile.
 DESCRIPTION
   nullable    = false
 
   validation {
-    condition     = alltrue([for cell in values(var.cells) : can(cidrsubnet(cell.address_space, 4, 15)) && tonumber(split("/", cell.address_space)[1]) == 20])
-    error_message = "A cell's address_space must be a /20."
+    condition     = alltrue([for cell in values(var.cells) : can(cidrsubnet(cell.address_space, 4, 15)) && tonumber(split("/", cell.address_space)[1]) >= 16 && tonumber(split("/", cell.address_space)[1]) <= 20])
+    error_message = "A cell's address_space must be a /16 to /20."
+  }
+  validation {
+    condition     = alltrue([for cell in values(var.cells) : contains(["overlay", "subnet"], cell.pod_network)])
+    error_message = "A cell's pod_network must be \"overlay\" or \"subnet\"."
+  }
+  validation {
+    condition = alltrue([
+      for cell in values(var.cells) : cell.pod_network == "overlay" || (
+        cidrsubnet("${cidrhost(cell.address_space, 0)}/10", 0, 0) == "100.64.0.0/10" && tonumber(split("/", cell.address_space)[1]) == 16
+      )
+    ])
+    error_message = "A cell with pod_network = \"subnet\" takes a /16 of 100.64.0.0/10 (RFC 6598), for example 100.64.0.0/16."
   }
 }
 

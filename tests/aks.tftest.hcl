@@ -3323,6 +3323,44 @@ run "node_auto_provisioning_needs_cilium_overlay" {
   expect_failures = [var.node_auto_provisioning_enabled]
 }
 
+# Design D59: no overlay - Azure CNI node subnet with Cilium, which NAP supports - so the pods keep
+# addresses of their nodes' subnets up to the hub firewall. No mode and no pod range is sent.
+run "node_auto_provisioning_on_the_node_subnet_sends_no_pod_range" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["3"]
+    }
+    network_profile = {
+      outbound_type       = "userDefinedRouting"
+      network_plugin_mode = "none"
+    }
+  }
+
+  assert {
+    condition     = local.network_profile.network_plugin_mode == null && local.network_profile.pod_cidr == null && local.network_profile.network_dataplane == "cilium"
+    error_message = "Without an overlay the cluster is sent neither a network plugin mode nor a pod range."
+  }
+  assert {
+    condition     = !contains(local.effective_cluster_cidrs, "100.201.0.0/16")
+    error_message = "Without an overlay the default pod range is not one of the cluster's ranges."
+  }
+}
+
+run "refuses_an_unknown_network_plugin_mode" {
+  command = plan
+
+  variables {
+    network_profile = {
+      network_plugin_mode = "dynamic"
+    }
+  }
+
+  expect_failures = [var.network_profile]
+}
+
 run "a_cluster_on_the_shared_vault_only_federates_the_shared_identities" {
   command = plan
 

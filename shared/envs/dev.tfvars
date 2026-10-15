@@ -46,13 +46,12 @@ private_endpoints = {
 # range in every cell, its own node subnet and NAP NodePools, its own Key Vault, gateway and External
 # Secrets Operator. `index` is the zone's /24 in each cell's address space and never changes.
 #
-# Sweden is disabled in the lab (2026-10-15): int-se keeps its index, but no cell gets its subnets, and
-# it has no vault, namespaces or private DNS below. Enabling it again is `enabled = true` here, its
-# vault, gateway namespace and DNS zone below, the zone in the cells' tfvars, the fleet's zones.yaml,
-# and azure-landing-zone's policy.tfvars and firewall_exposures.
+# Sweden is enabled again since 2026-10-15 for the firewall-egress cell az3 (design D59), the only cell
+# that runs it: every cell gets its subnets, but only az3's tfvars and the fleet's zones.yaml name it.
+# `enabled = false` would take its subnets, vault, namespaces and private DNS away again.
 isolation_zones = {
   int-fi = { exposure = "int", index = 1 }
-  int-se = { exposure = "int", index = 2, enabled = false }
+  int-se = { exposure = "int", index = 2 }
 }
 
 # The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system, and per
@@ -61,9 +60,16 @@ isolation_zones = {
 # germanywestcentral's logical zone 1 is "NotAvailableForSubscription" for every VM size in sub-aks-dev
 # (enabling it is a support request to Microsoft), so az2 runs. A disabled cell keeps its address space
 # and its tfvars (envs/dev-int-stateless-az1.tfvars) but has no network.
+#
+# az3 (2026-10-15, design D59) is the lab's firewall-egress cell: no overlay (`pod_network = "subnet"`),
+# so its pods take addresses of their zone's node subnet in 100.64.0.0/16 (RFC 6598 shared address
+# space, never routed outside the landing zone), keep them up to labfw, and labfw - not Cilium - decides
+# every flow that leaves the cluster, by zone and by the pod's address. Cilium keeps the policies inside
+# the cluster. Its layout: snet-system 100.64.0.0/20, int-fi 100.64.16.0/21, int-se 100.64.32.0/21.
 cells = {
   dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
   dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
+  dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
 }
 
 # The landing zone's hub (azure-landing-zone network mode labfw): every cell is peered with it, sends
@@ -78,7 +84,7 @@ hub = {
 
 # The internal zones' names (int-fi.dev.onek8s.lol), resolved in the cells and - through labfw's DNS
 # proxy - in the corporate network behind the hub.
-internal_dns_zones = ["int-fi.dev.onek8s.lol"]
+internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
 
 # The environment's platform Key Vault (OneK8s design sections 13 and 18), which the clusters name
@@ -93,6 +99,7 @@ key_vault_purge_protection_enabled = true
 # One vault per isolation zone, for the secrets of the zone's applications (design section 6).
 zone_key_vault_names = {
   int-fi = "kv-onek8s-gwc-int-fi"
+  int-se = "kv-onek8s-gwc-int-se"
 }
 
 # The environment's Log Analytics workspace (design section 19): every cluster's Kubernetes audit log
@@ -122,6 +129,12 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "260b0ca972b5d1949d7fde4b86c077dd98b50258"
   }
+  # A weather forecast from the internet (/weather): the firewall-egress cell's example of an
+  # application's own outbound dependency (design D59)
+  "aks-hello:0.4.0" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "63594f30e4a0b770aef7e797ce819300c4be3420"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
@@ -139,6 +152,7 @@ image_signing = {
 key_vault_namespaces = {
   flux-system    = {}
   int-fi-gateway = {}
+  int-se-gateway = {}
   # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 6, D49):
   # the same object IDs as managed_namespaces.int-fi-example.groups in the cells' tfvars - the lab
   # groups created for ext-fi-example (grp-onek8s-dev-ext-fi-example-<role>), reused.
@@ -149,6 +163,10 @@ key_vault_namespaces = {
       edit  = "88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc"
       admin = "71438fbc-0666-4d82-be17-54b61236d657"
     }
+  }
+  # The example team in Sweden's zone, on the firewall-egress cell az3 (design D59): no groups yet.
+  int-se-example = {
+    zone = "int-se"
   }
 }
 

@@ -16,9 +16,11 @@
 # (`sandbox`) the nodes reach the internet through the cluster's load balancer and the NSGs and
 # Cilium are the boundaries.
 #
-# Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the
-# system pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first
-# half) and its internal load balancer (a /27 in the second half). With `api_server_subnet`, the last /24
+# Each cell's layout follows from its address space and the zones' indexes: a sixteenth of it per slot
+# (a /24 of a /20, a /20 of a /16) - the system pool's first, then one per zone (index 1, 2, ...) - split
+# into the zone's nodes (the first half) and its internal load balancer (the fifth eighth, a /27 of a /24).
+# A cell with `pod_network = "subnet"` (design D59) has no overlay: its pods take addresses of their
+# nodes' subnets, so it is a /16 of 100.64.0.0/10 and a zone's node subnet a /21. With `api_server_subnet`, the last /24
 # (slot 15) starts with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design
 # section 3) - which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
 locals {
@@ -88,8 +90,10 @@ locals {
         # ACNS DNS proxy forwarding a pod's query.
         "${key}/dns" = { subnet = key, priority = 125, protocol = "*", ports = ["53"], sources = local.cell_node_prefixes[subnet.cell] }
         # Azure CNI Overlay keeps the pod addresses between nodes; which pod may reach which is
-        # Cilium's to decide.
-        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = [var.cell_pod_cidr] }
+        # Cilium's to decide. Without an overlay (`pod_network = "subnet"`) the pods have addresses of
+        # the cell's node subnets, so those are let in - the NSGs no longer tell a pod from a node there,
+        # and every flow between zones is Cilium's alone.
+        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = local.cells[subnet.cell].pod_network == "subnet" ? local.cell_node_prefixes[subnet.cell] : [var.cell_pod_cidr] }
         "${key}/lb-probes"   = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
         "${key}/same-subnet" = { subnet = key, priority = 150, protocol = "*", ports = ["*"], sources = [subnet.prefix] }
       } if contains(["system", "nodes"], subnet.kind)
