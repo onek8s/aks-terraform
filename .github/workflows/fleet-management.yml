@@ -8,7 +8,9 @@ name: Fleet Management
 #
 #   show            every pipeline: name, enabled, matchers; with `pipeline`, also its contents
 #   match-clusters  set the `cluster` matcher of `pipeline` to the regular expression `clusters`
-#                   (e.g. aks-dev-int-stateless-.*), keeping its other matchers and contents
+#                   (e.g. aks-dev-int-stateless-.*), keeping its other matchers and contents - needs the key
+#                   `fleet-management-write-token` (scope fleet-management:write) in that secret; the collectors'
+#                   own token only reads (401)
 
 on:
   workflow_dispatch:
@@ -63,7 +65,9 @@ jobs:
           creds="$(az keyvault secret show --vault-name "$VAULT" --name flux-system--grafana-cloud --query value -o tsv)"
           url="$(jq -r '."remote-config-url"' <<<"$creds")"
           user="$(jq -r '."remote-config-username"' <<<"$creds")"
-          password="$(jq -r '."remote-config-password"' <<<"$creds")"
+          # Reading works with the collectors' token; changing a pipeline needs an access policy token with
+          # fleet-management:write, stored in the same secret as fleet-management-write-token (Store secret)
+          password="$(jq -r 'if $a == "match-clusters" and ."fleet-management-write-token" then ."fleet-management-write-token" else ."remote-config-password" end' --arg a "$ACTION" <<<"$creds")"
           echo "::add-mask::$password"
           unset creds
           rpc() { curl -sS --fail-with-body -u "$user:$password" -H 'Content-Type: application/json' -d "$2" "${url%/}/$1"; }
