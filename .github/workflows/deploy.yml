@@ -252,6 +252,21 @@ jobs:
         if: (inputs.action == 'apply' || inputs.action == 'destroy') && steps.plan.outputs.changes == 'true'
         run: terraform apply -no-color tfplan
 
+      # A cluster build takes longer than the GitHub OIDC token the first sign-in used (about 5 minutes
+      # valid), so the CLI signs in again before reading the VPN config and the cluster's credentials.
+      - name: Log in to Azure again (GitHub OIDC)
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && env.ARM_CLIENT_SECRET == ''
+        uses: azure/login@v3
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      # The private API server, through the hub firewall's VPN (.github/actions/labfw-vpn)
+      - name: Join the labfw VPN
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        uses: ./.github/actions/labfw-vpn
+
       # App Routing's istiod creates an Envoy Deployment, a LoadBalancer Service (a public IP), an
       # autoscaler, a disruption budget and a ServiceAccount, all `<gateway>-approuting-istio`, for
       # every Gateway of class approuting-istio. Once a Gateway names another class (gateway_implementation
@@ -259,11 +274,6 @@ jobs:
       # control plane, and the Service keeps a public IP whose selector (`gateway-name`) also matches
       # Traefik's pods. Deleted here by name, only for Gateways that no longer name approuting-istio -
       # never Traefik's own objects. Idempotent; runs on every apply of a cluster, changes or not.
-      # The private API server, through the hub firewall's VPN (.github/actions/labfw-vpn)
-      - name: Join the labfw VPN
-        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
-        uses: ./.github/actions/labfw-vpn
-
       - name: Remove App Routing's leftovers from Gateways of another class
         if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
         run: |
