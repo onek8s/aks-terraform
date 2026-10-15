@@ -58,6 +58,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-14)
 
+- **Lab reset 2026-10-15** (azure-landing-zone Lab reset, `skip_policies` off, no redeploy): everything in the build
+  tenant is gone - clusters, `rg-aks-dev` (shared/), `rg-aks-dev-tfstate` with this repo's state, hub, management,
+  management groups and policies, Terraform state of the platform and AKS policy. Kept: subscriptions, ALZ bootstrap
+  (`rg-alz-build-*`), `rg-onek8s-dns`. The notes below describe the lab before the reset. To rebuild: Platform apply,
+  AKS policy apply, then Deploy dev-shared and the cells with `allow_empty_state`. `kv-onek8s-dev-platform` is soft-deleted
+  (purge protection) and is recovered when created again. Lab reset's `skip_policies` (default on) keeps management
+  groups and Azure Policy with their state, because removing them takes most of a reset's time.
 - **Internal and external are separate subscriptions and clusters** (security's decision 2026-10-14, design D52);
   countries stay isolation zones (node pool + network + vault) inside them. dev is **external only**:
   `sub-aks-dev` plays `sub-aks-dev-ext`, `shared/envs/dev.tfvars` has `exposure = "ext"` and only ext-fi/ext-se,
