@@ -58,6 +58,23 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **az3, the firewall-egress cell (2026-10-15, design D59 - NOT decided, both models under test, H15)**:
+  `aks-dev-int-stateless-az3`, zone 3, **Sweden's int-se only** (int-se enabled in shared/; az2 keeps int-fi). No overlay:
+  `network_profile.network_plugin_mode = "none"` (Azure CNI node subnet + Cilium; NAP has no pod-subnet mode), shared/
+  `cells.<cell>.pod_network = "subnet"` with a /16 of 100.64.0.0/10 (az3 = 100.64.0.0/16: snet-system /20, zone nodes /21),
+  system pool `max_pods = 110`. Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
+  `azure-ip-masq-agent-config` to translate nothing; `infrastructure/zones/firewall-egress` lets int-se's apps out to `world`.
+  labfw decides from azure-landing-zone `firewall-applications/<env>-<exposure>/<namespace>.yaml` (zone IP group as source),
+  SNATs everything leaving 10.0.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.4.1 in int-se-example
+  (aks-fluxcd-example `firewall-egress/`) fetches a Stockholm forecast from api.open-meteo.com every minute: denied by labfw
+  from 100.64.32.x (verified 2026-10-15; `/weather` says "Connection reset by peer"). labfw's denials go to Log Analytics
+  (`log-labfw-germanywestcentral`, table `LabfwFirewallLog_CL`, Azure Monitor Agent on the VM; ~10 min latency).
+- **Egress agent** (aks-ai-agents `egress-agent`, workflow `egress-agent.yml`, by hand only - it opens PRs with GH_OWNER):
+  denied flows from that table (dev identity's Reader on sub-hub), `pods_by_ip` over the VPN, one PR per namespace to the
+  landing zone. Model: Claude Sonnet 5.5 on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID), attested as OneK8s/FI
+  (the user's choice, billed to Azure) - **not deployed: sub-aks-dev has 0 Foundry quota for every Claude model**
+  (`ai_foundry.deploy = false` until a quota request in the portal is granted). Everything up to the model call is verified.
+- Cluster status has `route_path` (e.g. `/weather`): every route through its gateway pod over the VPN.
 - **The lab moved (2026-10-15, design D57)**: after the Lab reset (azure-landing-zone, `skip_policies` off) the build
   tenant runs in **germanywestcentral** (the ALZ bootstrap stays in swedencentral) as the **internal exposure**:
   `sub-aks-dev` plays `sub-aks-dev-int`, `exposure = "int"`, Finland only (`int-fi`; `int-se` defined with
@@ -322,6 +339,16 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   only `NodeImage` and `None`; D10's `SecurityPatch` is tried first, `NodeImage` in the same window if refused.
 
 ## Lessons learned (gotchas)
+
+- **Azure CNI node subnet gives 30 pods a node** unless `max_pods` says otherwise, and `maxPods` cannot change on a running
+  pool (`PropertyChangeNotAllowed`): az3 was rebuilt for 110. **AKS's azure-ip-masq-agent** translates pod flows leaving the
+  VNet to the node's address; its optional user ConfigMap `azure-ip-masq-agent-config` (kube-system) merges with the reconciled one.
+- **A new zone needs its gateway certificate**: `<zone>-gateway--wildcard` (Renew certificate), or its Gateway is invalid
+  (`InvalidCertificateRef`) and Traefik answers 404.
+- **Claude on Foundry needs `modelProviderData`** (org, country, industry; azapi, not azurerm) and per-subscription quota -
+  0 by default here. `Microsoft.CognitiveServices` must be registered (Deploy does it).
+- The auto-mode classifier refused granting Run Command on labfw to an apply identity and a workflow running Run Command as
+  the owner; read labfw's denials from Log Analytics instead.
 
 - **Cilium DNS rules must cover the pod's search suffixes**, including the node's Azure suffix
   `<id>.<x>.internal.cloudapp.net`; a refused expansion makes musl (Alpine) stop resolving, so
