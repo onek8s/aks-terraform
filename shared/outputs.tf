@@ -71,5 +71,5 @@ output "exposure" {
 
 output "ai_foundry" {
   description = "The agents' Foundry resource name and model deployment, for aks-ai-agents' model.foundryResource and model.name."
-  value       = var.ai_foundry == null ? null : { resource = azurerm_cognitive_account.agents[0].name, model = try(azapi_resource.agents_model[0].name, null) }
+  value       = var.ai_foundry == null ? null : { resource = azurerm_cognitive_account.agents[0].name, model = try(azapi_resource.agents_model[0].name, null), openai_models = keys(azurerm_cognitive_deployment.agents_openai) }
 }

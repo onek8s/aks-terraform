@@ -230,6 +230,10 @@ ai_foundry = {
   name     = "ais-onek8s-dev-agents"
   location = "swedencentral"
   deploy   = false
+  # The agents' model meanwhile (the user's choice, 2026-10-15): created in the portal, imported here
+  openai_deployments = {
+    "gpt-4.1-mini" = { version = "2025-04-14", capacity = 100, import = true }
+  }
   model_provider = {
     organization_name = "OneK8s"
     country_code      = "FI"

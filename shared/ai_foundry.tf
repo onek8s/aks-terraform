@@ -14,6 +14,14 @@ resource "azurerm_cognitive_account" "agents" {
   # Entra ID only: no keys to leak. Reached on its public endpoint by the GitHub-hosted agent runners.
   local_auth_enabled            = false
   public_network_access_enabled = true
+  # A Foundry resource with projects - Azure turns it on (and adds a default project) with the first model
+  # deployment attempt, and it cannot be turned off without deleting the resource
+  project_management_enabled = true
+
+  # Projects need the resource's own identity
+  identity {
+    type = "SystemAssigned"
+  }
 }
 
 # Anthropic's models need the deploying organisation's attestation (modelProviderData: legal name, country, industry):
@@ -55,4 +63,33 @@ resource "azurerm_role_assignment" "agents_model_user" {
   scope                = azurerm_cognitive_account.agents[0].id
   role_definition_name = "Cognitive Services User"
   principal_id         = data.azurerm_client_config.current.object_id
+}
+
+# Other models on the same resource, OpenAI's format (azurerm knows it): the agents' model while Claude has no quota
+# here (dev: gpt-4.1-mini, created in the portal on 2026-10-15 and imported below). aks-ai-agents model.provider
+# azure-openai.
+resource "azurerm_cognitive_deployment" "agents_openai" {
+  for_each = var.ai_foundry == null ? {} : var.ai_foundry.openai_deployments
+
+  name                   = each.key
+  cognitive_account_id   = azurerm_cognitive_account.agents[0].id
+  version_upgrade_option = "OnceNewDefaultVersionAvailable"
+  rai_policy_name        = each.value.rai_policy_name
+
+  model {
+    format  = "OpenAI"
+    name    = each.key
+    version = each.value.version
+  }
+
+  sku {
+    name     = "GlobalStandard"
+    capacity = each.value.capacity
+  }
+}
+
+import {
+  for_each = var.ai_foundry == null ? {} : { for name, d in var.ai_foundry.openai_deployments : name => d if d.import }
+  to       = azurerm_cognitive_deployment.agents_openai[each.key]
+  id       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}/providers/Microsoft.CognitiveServices/accounts/${var.ai_foundry.name}/deployments/${each.key}"
 }

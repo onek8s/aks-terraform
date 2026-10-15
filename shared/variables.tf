@@ -608,6 +608,14 @@ variable "ai_foundry" {
     model         = optional(string, "claude-sonnet-5-5")
     model_version = optional(string, "1")
     capacity      = optional(number, 50)
+    # OpenAI models on the same resource, by model name: version, capacity (thousands of tokens a minute), content
+    # filter, and import = true for one created outside Terraform
+    openai_deployments = optional(map(object({
+      version         = string
+      capacity        = optional(number, 10)
+      rai_policy_name = optional(string, "Microsoft.DefaultV2")
+      import          = optional(bool, false)
+    })), {})
     # The deployment needs Foundry quota for the model (Tokens Per Minute, per subscription and region); false
     # keeps the attestation below but makes no deployment until the quota is granted
     deploy = optional(bool, true)
