@@ -27,3 +27,13 @@ provider "azurerm" {
 
   features {}
 }
+
+# The landing zone's connectivity subscription, for the hub's side of the cells' peerings (`hub`).
+# Without a hub it is the environment's subscription and does nothing.
+provider "azurerm" {
+  alias                           = "hub"
+  resource_provider_registrations = "none"
+  subscription_id                 = coalesce(local.hub_subscription_id, var.subscription_id, "00000000-0000-0000-0000-000000000000")
+
+  features {}
+}

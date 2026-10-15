@@ -352,7 +352,12 @@ locals {
 # certificate - on the path every cluster serves it on. A short TTL lets a client move to another
 # cluster soon after one goes away.
 locals {
-  global_hostnames = var.dns_zone_name == null || var.dns_zone_private ? {} : var.global_hostnames
+  # Only for a deployed external zone: none in the internal exposure, none for a hostname whose zone
+  # is not among the enabled isolation zones.
+  global_hostnames = var.dns_zone_name == null || var.dns_zone_private || var.exposure == "int" ? {} : {
+    for name, hostname in var.global_hostnames : name => hostname
+    if hostname.zone == null || try(local.isolation_zones[hostname.zone].exposure == "ext", false)
+  }
   # Traffic Manager names are global: the zone and the environment make them unique.
   traffic_manager_prefix = "${replace(coalesce(var.dns_zone_name, "-"), ".", "-")}-${var.environment}"
   global_hostname_endpoints = merge([

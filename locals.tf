@@ -331,6 +331,7 @@ locals {
     min_count           = var.default_node_pool.enable_auto_scaling ? var.default_node_pool.min_count : null
     name                = var.default_node_pool.name
     os_disk_size_gb     = var.default_node_pool.os_disk_size_gb
+    os_disk_type        = var.default_node_pool.os_disk_type
     type                = "VirtualMachineScaleSets"
     # How the pool is rolled during an upgrade. These belong to the pool: the cluster level
     # upgrade_settings of the module only carries the force-upgrade override, and silently drops
@@ -638,14 +639,17 @@ locals {
 
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
-  network_role_assignment_scopes = !var.create_role_assignments || !local.byo_network ? {} : (
+  network_role_assignment_scopes = !var.create_role_assignments || !local.byo_network ? {} : merge(
     local.network_role_assignment_scope == "virtual_network"
     ? { virtual_network = data.azurerm_virtual_network.this[0].id }
     # One entry per distinct subnet: the same subnet can carry more than one of these roles, and
     # Azure refuses a second assignment of the same role to the same principal at the same scope.
     : { for key, id in local.network_role_assignment_subnet_scopes : key => id
       if key == sort([for other_key, other_id in local.network_role_assignment_subnet_scopes : other_key if other_id == id])[0]
-    }
+    },
+    # The node subnet's route table - a cell routed through the hub's firewall (`userDefinedRouting`):
+    # AKS reads and joins it, and the table is a resource of its own, outside the network's scope.
+    startswith(lower(try(data.azurerm_subnet.node[0].route_table_id, "")), "/subscriptions/") ? { route_table = data.azurerm_subnet.node[0].route_table_id } : {},
   )
   network_role_assignment_subnet_scopes = merge(
     { node_subnet = one(data.azurerm_subnet.node[*].id) },

@@ -4,15 +4,16 @@ name: Flux webhooks
 # clusters at once instead of at the next poll:
 #
 #   onek8s/aks-fluxcd-platform  -> Receiver flux-system/github  (GitRepository platform)
-#   onek8s/aks-fluxcd-example   -> Receiver ext-fi-example/github (the team's GitRepository
-#                                  ext-fi-example)
+#   onek8s/aks-fluxcd-example   -> Receiver int-fi-example/github (the team's GitRepository
+#                                  int-fi-example)
 #
 # one webhook per repository and cluster, to https://<flux_webhook_hostname><receiver path>. The
 # hostname is the platform's convention, flux-webhook-<cluster without aks->.<dns_zone_name>, served
 # by the cluster's platform gateway; the path
 # is the one notification-controller serves a Receiver on, /hook/sha256(token + name + namespace).
 # The token is shared/'s, read from the platform vault (`flux-system--github-webhook-token`), and is each
-# webhook's secret. Webhooks to a Flux receiver of a cluster that no longer runs are deleted.
+# webhook's secret. Webhooks to a Flux receiver of a cluster that no longer runs are deleted - all of
+# them while shared/ has flux_github_webhook off (the lab's internal cell has no public entry point).
 #
 # Runs after every successful Deploy, by hand, and when this file changes on main.
 #
@@ -48,7 +49,7 @@ jobs:
       VARS: shared/envs/dev.tfvars
       RECEIVERS: |
         onek8s/aks-fluxcd-platform github flux-system
-        onek8s/aks-fluxcd-example github ext-fi-example
+        onek8s/aks-fluxcd-example github int-fi-example
     steps:
       - uses: actions/checkout@v7
 
@@ -65,9 +66,16 @@ jobs:
           set -euo pipefail
           tfvar() { sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$VARS" | head -n 1; }
           vault="$(tfvar key_vault_name)"; zone="$(tfvar dns_zone_name)"
-          token="$(az keyvault secret show --vault-name "$vault" --name flux-system--github-webhook-token --query value -o tsv)"
-          echo "::add-mask::$token"
-          clusters="$(az aks list -g "$RESOURCE_GROUP" --query "[?powerState.code=='Running'].name" -o tsv)"
+          webhook="$(sed -nE 's/^flux_github_webhook[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$VARS" | head -n 1)"
+          if [ "$webhook" = true ]; then
+            token="$(az keyvault secret show --vault-name "$vault" --name flux-system--github-webhook-token --query value -o tsv)"
+            echo "::add-mask::$token"
+            clusters="$(az aks list -g "$RESOURCE_GROUP" --query "[?powerState.code=='Running'].name" -o tsv)"
+          else
+            # No webhook: Flux polls. Every Flux webhook left over is removed below.
+            echo "flux_github_webhook is off in $VARS: removing the Flux webhooks"
+            token=""; clusters=""
+          fi
           echo "Running clusters: $(echo $clusters)"
           while read -r repo name namespace; do
             [ -n "$repo" ] || continue

@@ -25,9 +25,9 @@ on:
       cluster:
         description: "The cluster to report on"
         required: true
-        default: "aks-dev-ext-stateless-az1"
+        default: "aks-dev-int-stateless-az1"
         type: choice
-        options: [aks-dev-ext-stateless-az1, aks-dev-ext-stateless-az2, aks-dev-ext-stateful]
+        options: [aks-dev-int-stateless-az1, aks-dev-int-stateful]
       node_iptables:
         description: "Also dump every node's iptables rules (creates a debug pod per node)"
         required: false
@@ -40,14 +40,14 @@ permissions:
 
 jobs:
   status:
-    name: status ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
+    name: status ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
     runs-on: ubuntu-latest
     environment: dev
     env:
       # The clusters and their shared resources are all in one group; the public zone, created
       # outside Terraform, is in a group of its own.
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
       DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns
       DNS_ZONE: onek8s.lol
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -229,10 +229,10 @@ jobs:
           kubectl get receivers.notification.toolkit.fluxcd.io -A
           kubectl get receivers.notification.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.webhookPath} {.status.conditions}{"\n"}{end}'
           # The `example` team, in the ext-fi zone: its Flux configuration, what runs and why not.
-          kubectl get fluxconfigs.clusterconfig.azure.com -n ext-fi-example ext-fi-example -o jsonpath="{.status}"; echo
-          kubectl get all,endpointslices,networkpolicy -n ext-fi-example -o wide
-          kubectl describe pods -n ext-fi-example | tail -n 60
-          kubectl get events -n ext-fi-example --sort-by=.lastTimestamp | tail -n 30
+          kubectl get fluxconfigs.clusterconfig.azure.com -n int-fi-example int-fi-example -o jsonpath="{.status}"; echo
+          kubectl get all,endpointslices,networkpolicy -n int-fi-example -o wide
+          kubectl describe pods -n int-fi-example | tail -n 60
+          kubectl get events -n int-fi-example --sort-by=.lastTimestamp | tail -n 30
           kubectl get events -n flux-system --sort-by=.lastTimestamp | tail -n 40
 
       - name: Node iptables rules

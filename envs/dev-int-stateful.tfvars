@@ -1,17 +1,17 @@
-# The external stateful cluster `ext-stateful` of the OneK8s dev environment, on a lab budget (see "Non-production
+# The internal stateful cluster `int-stateful` of the OneK8s dev environment, on a lab budget (see "Non-production
 # cost savings" below), Azure CNI overlay with Cilium. Keeps state: persistent volumes, with the platform's
 # `portable-disk` StorageClass whose disks outlive the cluster. Beside the stateless clusters
-# (envs/dev-ext-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
+# (envs/dev-int-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
 # between them. shared/envs/dev.tfvars is applied first. Defined, but not deployed for now.
 #
-#   terraform workspace select -or-create dev-ext-stateful
-#   terraform apply -var-file=envs/dev-ext-stateful.tfvars
+#   terraform workspace select -or-create dev-int-stateful
+#   terraform apply -var-file=envs/dev-int-stateful.tfvars
 
-name     = "aks-dev-ext-stateful"
-location = "swedencentral"
+name     = "aks-dev-int-stateful"
+location = "germanywestcentral"
 
-# External (design decision D52): the external zones' stateful workloads only.
-exposure = "ext"
+# Internal (design decision D52): the internal zones' stateful workloads only.
+exposure = "int"
 
 sku_name = "Base"
 
@@ -33,7 +33,7 @@ advanced_networking = {
 }
 
 # The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
-# the environment and what they share. What is this cluster's own carries its name (`aks-dev-ext-stateful`,
+# the environment and what they share. What is this cluster's own carries its name (`aks-dev-int-stateful`,
 # `id-sec-dev-aks-...`); what is shared carries `shared` (`id-sec-dev-shared-kv-...`).
 resource_group_name = "rg-aks-dev"
 
@@ -43,18 +43,18 @@ virtual_network_name = "vnet-aks-dev"
 node_subnet_name     = "snet-aks-nodes"
 
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here, and the
-# ext-fi zone's vault for the example team's secrets - each namespace reading only the ones named
+# int-fi zone's vault for the example team's secrets - each namespace reading only the ones named
 # `<namespace>--<name>`, as the environment's shared identity `id-sec-dev-shared-kv-<namespace>`.
 # This cluster adds a federated credential of its own to each; every grant on the vaults is shared/'s.
 #
 # Defined, not deployed: the stateful cluster of the design lives in the backend network with no
-# gateway of its own (sections 8 and 13), which clusters/dev-ext-stateful of the platform repository does
+# gateway of its own (sections 8 and 13), which clusters/dev-int-stateful of the platform repository does
 # not follow yet.
-key_vault_name       = "kv-onek8s-dev-platform"
+key_vault_name       = "kv-onek8s-gwc-platform"
 key_vault_create     = false
-key_vault_namespaces = ["platform-gateway"]
+key_vault_namespaces = []
 key_vault_namespace_vaults = {
-  ext-fi-example = "kv-onek8s-dev-ext-fi"
+  int-fi-example = "kv-onek8s-gwc-int-fi"
 }
 
 # SHARED. The one zone the Gateway's hostnames are published in, onek8s.lol - public, provisioned
@@ -100,10 +100,11 @@ entra_reader_group_object_ids = []
 # cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory.
 azure_policy_enabled = true
 
-# Non-production cost saving: ONE Standard_D4als_v6 system node. Production: node_count = 2 on the
-# default Standard_D4ds_v5 (design section 4).
+# Non-production cost saving: ONE Standard_D4alds_v6 system node on an ephemeral OS disk (its local
+# NVMe disk: no Premium SSD). Production: node_count = 2 on the default Standard_D4ds_v5 (design
+# section 4).
 #
-# Standard_D4als_v6: one amd64 node, 4 vCPU and 8 GiB, with availability zones 1 and 2. Two vCPU
+# Standard_D4alds_v6: one amd64 node, 4 vCPU and 8 GiB, with availability zones 1 and 2. Two vCPU
 # are not enough: the platform's pods ask for about 1600m of the 1900m a 2-vCPU node has, and the
 # Azure Policy add-on for 360m more. The cheaper Arm64 sizes are not available for both zonal
 # clusters in swedencentral: Standard_D4pls_v6 had no capacity in zone 1
@@ -112,7 +113,8 @@ azure_policy_enabled = true
 # between amd64 and arm64 means building it again (the Deploy workflow's destroy, then apply). A
 # system node pool cannot run on Spot VMs.
 default_node_pool = {
-  vm_size             = "Standard_D4als_v6"
+  vm_size             = "Standard_D4alds_v6"
+  os_disk_type        = "Ephemeral"
   enable_auto_scaling = false
   node_count          = 1
 }
@@ -122,7 +124,7 @@ default_node_pool = {
 # Gateway. It keeps the default closed ingress: a Cilium policy from aks-fluxcd-platform lets the
 # zone gateway's pods in, and nothing else.
 managed_namespaces = {
-  ext-fi-example = {
+  int-fi-example = {
     # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
     # annotation platform/contact (design section 7; Azure Policy namespace-ownership).
     owner = {
@@ -131,7 +133,7 @@ managed_namespaces = {
       contact     = "https://github.com/onek8s/aks-fluxcd-example/issues"
     }
     labels = {
-      "platform/zone" = "ext-fi"
+      "platform/zone" = "int-fi"
     }
     flux = {
       url  = "https://github.com/onek8s/aks-fluxcd-example"
@@ -139,7 +141,7 @@ managed_namespaces = {
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
       substitute = {
-        zone_domain = "ext-fi.dev.onek8s.lol"
+        zone_domain = "int-fi.dev.onek8s.lol"
       }
     }
   }
@@ -148,12 +150,12 @@ managed_namespaces = {
 flux_git_repository = {
   url    = "https://github.com/onek8s/aks-fluxcd-platform"
   branch = "main"
-  path   = "./clusters/dev-ext-stateful"
+  path   = "./clusters/dev-int-stateful"
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
 
 # A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
-# receiver (flux-webhook-dev-ext-stateful.onek8s.lol), checked against the token shared/ keeps in the
+# receiver (flux-webhook-dev-int-stateful.onek8s.lol), checked against the token shared/ keeps in the
 # platform vault. flux-system gets this cluster's credential on its shared identity to read it.
 flux_github_webhook = true

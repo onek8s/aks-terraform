@@ -10,12 +10,13 @@ locals {
   # Country codes ALPHA-2 & ALPHA-3: https://www.iban.com/country-codes 
   location_code = lookup(local.location_codes, var.location, "")
   location_codes = {
-    finlandcentral = "fic"
-    francecentral  = "frc"
-    swedencentral  = "sec"
-    westeurope     = "euw"
-    uksouth        = "uks"
-    ukwest         = "ukw"
+    finlandcentral     = "fic"
+    francecentral      = "frc"
+    germanywestcentral = "gwc"
+    swedencentral      = "sec"
+    westeurope         = "euw"
+    uksouth            = "uks"
+    ukwest             = "ukw"
   }
 
   # The identities a namespace reads the environment's shared Key Vault as - shared by every cluster

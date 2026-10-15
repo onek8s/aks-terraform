@@ -35,7 +35,7 @@ jobs:
       cancel-in-progress: false
     env:
       REGISTRY: acronek8sdev
-      VAULT: kv-onek8s-dev-platform
+      VAULT: kv-onek8s-gwc-platform
       CERTIFICATE: image-signing
     steps:
       - uses: actions/checkout@v7

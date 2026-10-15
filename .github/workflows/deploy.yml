@@ -11,9 +11,9 @@ name: Deploy
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
 #                        internal zones' private DNS, the container registry and its images and the
 #                        external zones' Traffic Manager profiles. Applied first.
-#   dev-ext-stateless-az1    the repository root with envs/dev-ext-stateless-az1.tfvars: aks-dev-ext-stateless-az1.
-#   dev-ext-stateless-az2    the repository root with envs/dev-ext-stateless-az2.tfvars: aks-dev-ext-stateless-az2.
-#   dev-ext-stateful         the repository root with envs/dev-ext-stateful.tfvars: aks-dev-ext-stateful (defined,
+#   dev-int-stateless-az1    the repository root with envs/dev-int-stateless-az1.tfvars: aks-dev-int-stateless-az1,
+#                        the lab's only cell (internal, int-fi, germanywestcentral, behind labfw).
+#   dev-int-stateful         the repository root with envs/dev-int-stateful.tfvars: aks-dev-int-stateful (defined,
 #                        not deployed for now).
 #
 # After an apply of dev-shared, Sign images signs the registry's new images (job sign-images). The
@@ -46,11 +46,11 @@ on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "dev-shared (apply first), or a cluster: dev-ext-stateless-az1, dev-ext-stateless-az2, dev-ext-stateful"
+        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az1, dev-int-stateful"
         required: true
         default: "dev-shared"
         type: choice
-        options: [dev-shared, dev-ext-stateless-az1, dev-ext-stateless-az2, dev-ext-stateful]
+        options: [dev-shared, dev-int-stateless-az1, dev-int-stateful]
       action:
         description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true

@@ -10,14 +10,19 @@
 # nodes, the pods of the cluster's overlay, the load balancers' health probes, and HTTPS from the
 # internet (external zones and the platform gateway, through their public load balancers) or from
 # the virtual network (internal zones). Pod-to-pod traffic between zones is the third layer's to
-# stop: Cilium, in the platform repository. There is no hub Azure Firewall in the lab (the build
-# tenant's network mode `sandbox`), so the nodes reach the internet through the cluster's load
-# balancer and the NSGs and Cilium are the boundaries.
+# stop: Cilium, in the platform repository. With `hub` (the build tenant's network mode `labfw`, or
+# `firewall`) every cell is peered with the landing zone's hub and its node subnets send everything
+# else to the hub's firewall, which decides what a cell reaches outside its own network; without it
+# (`sandbox`) the nodes reach the internet through the cluster's load balancer and the NSGs and
+# Cilium are the boundaries.
 #
 # Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the
 # system pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first
 # half) and its internal load balancer (a /27 in the second half).
 locals {
+  # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
+  isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
+
   cell_subnets = merge([
     for cell, settings in var.cells : merge(
       {
@@ -30,7 +35,7 @@ locals {
         }
       },
       merge([
-        for zone, z in var.isolation_zones : {
+        for zone, z in local.isolation_zones : {
           "${cell}/snet-${zone}-nodes" = {
             cell   = cell
             name   = "snet-${zone}-nodes"
@@ -87,9 +92,9 @@ locals {
           priority = 200
           protocol = "Tcp"
           ports    = ["443"]
-          sources  = [subnet.kind == "system" || try(var.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
+          sources  = [subnet.kind == "system" || try(local.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
         }
-      } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(var.isolation_zones[subnet.zone].exposure, "") == "int")
+      } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
     # A rule takes one service tag, so the system pool's HTTPS from the network is a rule of its own.
     {
@@ -111,6 +116,8 @@ resource "azurerm_virtual_network" "cell" {
   location            = var.location
   resource_group_name = local.resource_group_name
   address_space       = [each.value.address_space]
+  # The hub firewall's DNS proxy with `hub`; Azure DNS otherwise
+  dns_servers = var.hub == null ? [] : var.hub.dns_servers
 
   # The only enforcement mode there is: a VM size without support sends in the clear, so the node
   # pools' size allow-lists keep to sizes that support it.
@@ -182,6 +189,67 @@ resource "azurerm_subnet_network_security_group_association" "cell" {
   depends_on = [azurerm_network_security_rule.cell_allow]
 }
 
+# With `hub`: the cell's network is peered with the landing zone's hub - both directions, the hub's
+# side as the identity's `AKS spoke peering` role allows - and its node subnets send everything that
+# is not in the cell to the hub's firewall (Azure Firewall or labfw). The clusters then egress through
+# it (AKS outbound type `userDefinedRouting`); a public load balancer in a cell does not work behind it
+# (answers would leave by the default route), so a routed cell serves the internal exposure only.
+locals {
+  hub_subscription_id = try(split("/", var.hub.virtual_network_id)[2], null)
+  hub_virtual_network = var.hub == null ? null : {
+    id                  = var.hub.virtual_network_id
+    name                = split("/", var.hub.virtual_network_id)[8]
+    resource_group_name = split("/", var.hub.virtual_network_id)[4]
+  }
+}
+
+resource "azurerm_route_table" "cell" {
+  for_each = var.hub == null ? {} : var.cells
+
+  name                          = "rt-${each.key}"
+  location                      = var.location
+  resource_group_name           = local.resource_group_name
+  bgp_route_propagation_enabled = false
+
+  route {
+    name                   = "default-via-hub-firewall"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = var.hub.next_hop_ip
+  }
+}
+
+# Node subnets only: an internal load balancer's subnet holds no NICs.
+resource "azurerm_subnet_route_table_association" "cell" {
+  for_each = var.hub == null ? {} : { for key, subnet in local.cell_subnets : key => subnet if subnet.kind != "ilb" }
+
+  subnet_id      = azurerm_subnet.cell[each.key].id
+  route_table_id = azurerm_route_table.cell[each.value.cell].id
+}
+
+resource "azurerm_virtual_network_peering" "cell_to_hub" {
+  for_each = var.hub == null ? {} : var.cells
+
+  name                         = "peer-${each.key}-to-hub"
+  resource_group_name          = local.resource_group_name
+  virtual_network_name         = azurerm_virtual_network.cell[each.key].name
+  remote_virtual_network_id    = local.hub_virtual_network.id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
+
+resource "azurerm_virtual_network_peering" "hub_to_cell" {
+  provider = azurerm.hub
+  for_each = var.hub == null ? {} : var.cells
+
+  name                         = "peer-hub-to-${each.key}"
+  resource_group_name          = local.hub_virtual_network.resource_group_name
+  virtual_network_name         = local.hub_virtual_network.name
+  remote_virtual_network_id    = azurerm_virtual_network.cell[each.key].id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
+
 # The internal zones' names - `<zone>.<environment>.<domain>` - resolve only inside the cells, from an
 # Azure Private DNS zone each, linked to every cell's network. Each cluster's external-dns keeps the
 # records of the routes its internal zones' Gateways serve.
@@ -199,6 +267,17 @@ resource "azurerm_private_dns_zone_virtual_network_link" "internal" {
   resource_group_name   = local.resource_group_name
   private_dns_zone_name = azurerm_private_dns_zone.internal[each.value.zone].name
   virtual_network_id    = azurerm_virtual_network.cell[each.value.cell].id
+}
+
+# With `hub`, the hub too: the cells resolve through the hub firewall's DNS proxy, which answers from
+# the hub's links (and so does the corporate network behind it).
+resource "azurerm_private_dns_zone_virtual_network_link" "internal_hub" {
+  for_each = var.hub == null ? toset([]) : toset(var.internal_dns_zones)
+
+  name                  = local.hub_virtual_network.name
+  resource_group_name   = local.resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.internal[each.key].name
+  virtual_network_id    = local.hub_virtual_network.id
 }
 
 check "cells_have_room_for_every_zone" {

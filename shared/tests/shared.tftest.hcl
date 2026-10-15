@@ -4,6 +4,10 @@
 #   cd shared && terraform test
 
 mock_provider "azurerm" {
+  alias = "hub"
+}
+
+mock_provider "azurerm" {
   mock_data "azurerm_resource_group" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test"
@@ -505,14 +509,108 @@ run "the_internal_exposure_publishes_nothing_through_traffic_manager" {
   command = plan
 
   variables {
-    exposure      = "int"
-    dns_zone_name = "contoso.com"
+    exposure                     = "int"
+    dns_zone_name                = "contoso.com"
+    dns_zone_create              = false
+    dns_zone_resource_group_name = "rg-dns"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+    }
     global_hostnames = {
-      "hello.int-fi.dev" = { endpoints = ["hello-a.int-fi.dev.contoso.com"] }
+      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"], zone = "ext-fi" }
     }
   }
 
-  expect_failures = [var.exposure]
+  assert {
+    condition     = length(azurerm_traffic_manager_profile.global) == 0 && length(azurerm_dns_cname_record.global) == 0
+    error_message = "The internal exposure creates no Traffic Manager profile, even with a global hostname listed."
+  }
+}
+
+run "traffic_manager_only_for_a_deployed_external_zone" {
+  command = plan
+
+  variables {
+    exposure                     = "ext"
+    dns_zone_name                = "contoso.com"
+    dns_zone_create              = false
+    dns_zone_resource_group_name = "rg-dns"
+    isolation_zones = {
+      ext-fi = { exposure = "ext", index = 3 }
+      ext-se = { exposure = "ext", index = 4, enabled = false }
+    }
+    global_hostnames = {
+      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"], zone = "ext-fi" }
+      "hello.ext-se.dev" = { endpoints = ["hello-a.ext-se.dev.contoso.com"], zone = "ext-se" }
+      "hello.ext-dk.dev" = { endpoints = ["hello-a.ext-dk.dev.contoso.com"], zone = "ext-dk" }
+    }
+  }
+
+  assert {
+    condition     = keys(azurerm_traffic_manager_profile.global) == ["hello.ext-fi.dev"]
+    error_message = "A profile only for the global hostname of an enabled external zone."
+  }
+}
+
+run "a_disabled_country_keeps_its_index_and_gets_nothing" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+      int-se = { exposure = "int", index = 2, enabled = false }
+    }
+    cells = {
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+    }
+  }
+
+  assert {
+    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
+    error_message = "No subnet for the disabled int-se."
+  }
+}
+
+run "a_cell_behind_the_hub_firewall" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+    }
+    cells = {
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+    }
+    internal_dns_zones = ["int-fi.test.contoso.com"]
+    hub = {
+      virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
+      next_hop_ip        = "10.0.1.4"
+      dns_servers        = ["10.0.1.4"]
+    }
+  }
+
+  assert {
+    condition     = [for r in azurerm_route_table.cell["dev-int-stateless-az1"].route : r.next_hop_in_ip_address] == ["10.0.1.4"] && !azurerm_route_table.cell["dev-int-stateless-az1"].bgp_route_propagation_enabled
+    error_message = "The cell sends everything else to the hub's firewall."
+  }
+  assert {
+    condition     = sort(keys(azurerm_subnet_route_table_association.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes"])
+    error_message = "Every node subnet - not the load balancer's - takes the route table."
+  }
+  assert {
+    condition     = tolist(azurerm_virtual_network.cell["dev-int-stateless-az1"].dns_servers) == tolist(["10.0.1.4"])
+    error_message = "The cell resolves through the hub firewall's DNS proxy."
+  }
+  assert {
+    condition     = azurerm_virtual_network_peering.hub_to_cell["dev-int-stateless-az1"].virtual_network_name == "vnet-hub-germanywestcentral" && azurerm_virtual_network_peering.hub_to_cell["dev-int-stateless-az1"].resource_group_name == "rg-hub-germanywestcentral" && azurerm_virtual_network_peering.cell_to_hub["dev-int-stateless-az1"].allow_forwarded_traffic
+    error_message = "The cell and the hub are peered both ways."
+  }
+  assert {
+    condition     = azurerm_private_dns_zone_virtual_network_link.internal_hub["int-fi.test.contoso.com"].name == "vnet-hub-germanywestcentral"
+    error_message = "The internal zones' names resolve in the hub, for its DNS proxy."
+  }
 }
 
 run "an_external_exposure_with_its_zones_plans" {

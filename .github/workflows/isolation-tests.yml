@@ -10,7 +10,7 @@ name: Isolation tests
 #     refused.
 #   - Policies in the cluster (R14): the platform's constraint templates and mutations from Azure
 #     Policy (azure-landing-zone stacks/aks-policy) are present.
-#   - Placement (R17, R4): a probe pod in a test namespace of the ext-fi zone that states only
+#   - Placement (R17, R4): a probe pod in a test namespace of the int-fi zone that states only
 #     `platform/capacity: spot` is placed on the zone's nodes by the mutations alone.
 #   - Isolation from that pod (R2, R3, R5, R6, R7b): the other zones' gateway and External Secrets
 #     pods and load balancers, another application of the same zone, the node, every zone's and the
@@ -47,7 +47,7 @@ name: Isolation tests
 #   - Zones (R16): every isolation zone is the complete pattern - namespaces, Gateway, ESO, Cilium
 #     baseline, NodePools, subnet with NSG, vault - so adding one is adding the same again.
 #
-# It creates a test namespace in the ext-fi zone, runs one pod there (NAP adds a zone node for a few
+# It creates a test namespace in the int-fi zone, runs one pod there (NAP adds a zone node for a few
 # minutes) and deletes both afterwards; the dry runs create nothing. It changes nothing else.
 #
 # Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
@@ -61,9 +61,9 @@ on:
       cluster:
         description: "The cell to test"
         required: true
-        default: "aks-dev-ext-stateless-az1"
+        default: "aks-dev-int-stateless-az1"
         type: choice
-        options: [aks-dev-ext-stateless-az1, aks-dev-ext-stateless-az2]
+        options: [aks-dev-int-stateless-az1]
 
 permissions:
   contents: read
@@ -71,26 +71,26 @@ permissions:
 
 jobs:
   isolation:
-    name: isolation ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
+    name: isolation ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 60
     # One run per cell at a time: two would share the test namespace.
     concurrency:
-      group: isolation-tests-${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
+      group: isolation-tests-${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
       cancel-in-progress: false
     env:
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-ext-stateless-az1' }}
-      ZONE: ext-fi
-      NAMESPACE: ext-fi-isolation-test
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+      ZONE: int-fi
+      NAMESPACE: int-fi-isolation-test
       # The cell is external (design decision D52): its zones are the external ones, one per country;
       # OTHER_ZONE is the other country's, which the probe in $ZONE must not reach.
       EXPOSURE: ext
-      ZONES: "ext-fi ext-se"
-      OTHER_ZONE: ext-se
-      VAULT_PREFIX: kv-onek8s-dev
-      ZONE_DOMAIN: ext-fi.dev.onek8s.lol
+      ZONES: "int-fi int-se"
+      OTHER_ZONE: int-se
+      VAULT_PREFIX: kv-onek8s-gwc
+      ZONE_DOMAIN: int-fi.dev.onek8s.lol
       REGISTRY: acronek8sdev
       SIGNING_CERTIFICATE: image-signing
     steps:
@@ -247,17 +247,17 @@ jobs:
           }
           # An application namespace: its own secret in its zone's vault; another application's name
           # in the same vault (ABAC refuses by name, whether it exists or not); the platform vault.
-          if token="$(vault_token ext-fi-example)" && [ -n "$token" ]; then
+          if token="$(vault_token int-fi-example)" && [ -n "$token" ]; then
             echo "::add-mask::$token"
-            read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-ext-fi" ext-fi-example--github-webhook-token 200
-            read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-ext-fi" ext-fi-other--isolation-test 403
-            read_secret R7 ext-fi-example "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
+            read_secret R7 int-fi-example "$token" "$VAULT_PREFIX-int-fi" int-fi-example--github-webhook-token 200
+            read_secret R7 int-fi-example "$token" "$VAULT_PREFIX-int-fi" int-fi-other--isolation-test 403
+            read_secret R7 int-fi-example "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
             # Soft multi-tenancy: it reads its own by name and lists nothing - no other namespace's names.
-            code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "https://$VAULT_PREFIX-ext-fi.vault.azure.net/secrets?api-version=7.4" || true)"
-            if [ "$code" = 403 ]; then result PASS R7 "ext-fi-example lists no secret names in $VAULT_PREFIX-ext-fi" "HTTP $code"
-            else result FAIL R7 "ext-fi-example lists no secret names in $VAULT_PREFIX-ext-fi" "HTTP $code"; fi
+            code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "https://$VAULT_PREFIX-int-fi.vault.azure.net/secrets?api-version=7.4" || true)"
+            if [ "$code" = 403 ]; then result PASS R7 "int-fi-example lists no secret names in $VAULT_PREFIX-int-fi" "HTTP $code"
+            else result FAIL R7 "int-fi-example lists no secret names in $VAULT_PREFIX-int-fi" "HTTP $code"; fi
           else
-            result FAIL R7 "ext-fi-example's Key Vault identity signs in" "no token for its key-vault service account"
+            result FAIL R7 "int-fi-example's Key Vault identity signs in" "no token for its key-vault service account"
           fi
           # A gateway namespace: its own certificate in the platform vault, another zone's
           # certificate and flux-system's secret next to it, and its zone's application vault.
@@ -266,7 +266,7 @@ jobs:
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$ZONE-gateway--wildcard" 200
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$OTHER_ZONE-gateway--wildcard" 403
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" ext-fi-example--github-webhook-token 403
+            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" int-fi-example--github-webhook-token 403
           else
             result FAIL R7 "$ZONE-gateway's Key Vault identity signs in" "no token for its key-vault service account"
           fi
@@ -464,7 +464,7 @@ jobs:
             exit 1
           fi
 
-      - name: Isolation from an application pod of ext-fi
+      - name: Isolation from an application pod of int-fi
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: |
           . "$RUNNER_TEMP/lib.sh"
@@ -481,8 +481,8 @@ jobs:
             [ -z "$eso_pod" ] || blocked "R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
           done
           blocked R7b "the platform Key Vault" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-platform.vault.azure.net/healthstatus"
-          app_pod="$(kubectl -n ext-fi-example get pod -l app.kubernetes.io/name=aks-hello -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-          [ -z "$app_pod" ] || blocked R6 "another application of the same zone (ext-fi-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
+          app_pod="$(kubectl -n int-fi-example get pod -l app.kubernetes.io/name=aks-hello -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
+          [ -z "$app_pod" ] || blocked R6 "another application of the same zone (int-fi-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
           node_ip="$(kubectl get nodes -l kubernetes.azure.com/mode=system -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
           [ -z "$node_ip" ] || blocked R5 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
           blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
@@ -639,7 +639,7 @@ jobs:
           # Otherwise complete, so that only the platform's rule can refuse it (not ESO's own webhook).
           printf 'apiVersion: external-secrets.io/v1\nkind: SecretStore\nmetadata: {name: client-secret}\nspec: {controller: %s, provider: {azurekv: {authType: ServicePrincipal, tenantId: 00000000-0000-0000-0000-000000000000, vaultUrl: "https://%s.vault.azure.net/", authSecretRef: {clientId: {name: sp, key: id}, clientSecret: {name: sp, key: secret}}}}}\n' "$ZONE" "$VAULT_PREFIX-$ZONE" \
             | forbidden R7a "SecretStore with a client secret, not workload identity" k8splatformesoobjects
-          printf 'apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata: {name: other}\nspec: {secretStoreRef: {kind: SecretStore, name: key-vault}, target: {name: other}, data: [{secretKey: k, remoteRef: {key: secret/ext-fi-example--github-webhook-token}}]}\n' \
+          printf 'apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata: {name: other}\nspec: {secretStoreRef: {kind: SecretStore, name: key-vault}, target: {name: other}, data: [{secretKey: k, remoteRef: {key: secret/int-fi-example--github-webhook-token}}]}\n' \
             | forbidden R7 "ExternalSecret reading another namespace's secret" k8splatformesoobjects
           printf 'apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata: {name: cluster-store}\nspec: {secretStoreRef: {kind: ClusterSecretStore, name: platform}, target: {name: s}, data: [{secretKey: k, remoteRef: {key: x}}]}\n' \
             | forbidden R7 "ExternalSecret against a ClusterSecretStore" k8splatformesoobjects
@@ -770,8 +770,8 @@ jobs:
                 result FAIL R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
               fi
             fi
-            reported="$(jq -r '[.[].status.violations[]? | select(.namespace == "ext-fi-example")] | length' <<<"$constraints")"
-            check R14 "the signed application is not reported (ext-fi-example)" "$reported violations" "0 violations"
+            reported="$(jq -r '[.[].status.violations[]? | select(.namespace == "int-fi-example")] | length' <<<"$constraints")"
+            check R14 "the signed application is not reported (int-fi-example)" "$reported violations" "0 violations"
           fi
 
           # The Flux webhook receiver: a delivery must carry GitHub's signature with the shared token.
