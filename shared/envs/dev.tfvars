@@ -135,6 +135,11 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "63594f30e4a0b770aef7e797ce819300c4be3420"
   }
+  # The forecast refreshed in the background, so the dependency shows without visitors
+  "aks-hello:0.4.1" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "86e8752ea3e903be07d49246e3ed021846df263b"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
