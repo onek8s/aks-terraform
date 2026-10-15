@@ -610,6 +610,14 @@ run "a_cell_behind_the_hub_firewall" {
     error_message = "Every node subnet - not the load balancer's - takes the route table."
   }
   assert {
+    condition = (
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az1/snet-int-fi-ilb/icmp-from-hub-firewall"].source_address_prefix == "10.0.1.4" &&
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az1/snet-system/icmp-from-hub-firewall"].protocol == "Icmp" &&
+      length([for k in keys(azurerm_network_security_rule.cell_allow) : k if endswith(k, "/icmp-from-hub-firewall")]) == 3
+    )
+    error_message = "The nodes and the internal zone's load balancer answer ping from the hub firewall's address, and nothing wider."
+  }
+  assert {
     condition     = tolist(azurerm_virtual_network.cell["dev-int-stateless-az1"].dns_servers) == tolist(["10.0.1.4"])
     error_message = "The cell resolves through the hub firewall's DNS proxy."
   }

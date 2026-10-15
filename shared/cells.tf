@@ -125,6 +125,14 @@ locals {
         }
       } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
+    # With `hub`: ping from the hub firewall's address, which the management network and the labfw VPN
+    # arrive as (SNAT) - the nodes and an internal zone's load balancer answer it; never `VirtualNetwork`,
+    # which would let the zones ping each other.
+    merge([
+      for key, subnet in local.cell_subnets : {
+        "${key}/icmp-from-hub-firewall" = { subnet = key, priority = 220, protocol = "Icmp", ports = ["*"], sources = [var.hub.next_hop_ip] }
+      } if var.hub != null && (contains(["system", "nodes"], subnet.kind) || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int"))
+    ]...),
     # A rule takes one service tag, so the system pool's HTTPS from the network is a rule of its own.
     {
       for key, subnet in local.cell_subnets : "${key}/https-from-network" => {
