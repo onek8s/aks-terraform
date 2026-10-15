@@ -17,6 +17,11 @@ inputs:
   secret:
     description: The secret holding the client config
     default: labfw-vpn--github-runners
+  extra_allowed_ips:
+    description: >-
+      Cell system subnets added to the config's AllowedIPs (comma-separated): those of cells built after the
+      secret was stored - az3's 100.64.0.0/20 (design D59) - so the secret need not be stored again
+    default: 100.64.0.0/20
 runs:
   using: composite
   steps:
@@ -25,11 +30,13 @@ runs:
       env:
         VAULT: ${{ inputs.vault }}
         SECRET: ${{ inputs.secret }}
+        EXTRA_ALLOWED_IPS: ${{ inputs.extra_allowed_ips }}
       run: |
         set -euo pipefail
         command -v wg-quick >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools >/dev/null; }
         umask 077
         az keyvault secret show --vault-name "$VAULT" --name "$SECRET" --query value -o tsv > "$RUNNER_TEMP/labfw.conf"
+        [ -z "$EXTRA_ALLOWED_IPS" ] || sed -i -E "s|^(AllowedIPs *= *.*)$|\1, ${EXTRA_ALLOWED_IPS//,/, }|" "$RUNNER_TEMP/labfw.conf"
         sudo install -m 600 "$RUNNER_TEMP/labfw.conf" /etc/wireguard/labfw.conf
         rm -f "$RUNNER_TEMP/labfw.conf"
         sudo wg-quick up labfw
