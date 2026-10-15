@@ -2,31 +2,28 @@
 # the designed public endpoints, and the dev lab's recorded exceptions with their reason. Anything
 # else public, or with local authentication on, fails the run. Fields are regular expressions
 # (case-insensitive, whole value); `check` is public-ip, public-endpoint or local-auth.
+#
+# Since 2026-10-15 (design D60, the user's ask: no public endpoints) the vaults, the registry, Foundry,
+# the Terraform state and the Log Analytics workspaces take no public network access - they are reached
+# through private endpoints, the GitHub-hosted runners over the labfw VPN - and the API servers are
+# private (D58). What remains is below.
 allowed:
   # Designed (design sections 8 and 13): the external zones' gateways are published on a public load
-  # balancer in every cell; AKS creates its frontend IPs in the node resource group.
+  # balancer in every cell; AKS creates its frontend IPs in the node resource group. The internal cells
+  # (the lab) have none: their outbound goes through the hub (userDefinedRouting).
   - check: public-ip
-    resourceGroup: mc_rg-aks-dev_aks-dev-int-stateless-az[0-9]+_germanywestcentral
-    reason: "AKS load balancer: the ext-* zones' gateways (designed) and, in the lab's sandbox network mode, the cell's outbound IP (lab exception: no hub Firewall)"
-  # Lab exceptions
+    resourceGroup: mc_rg-aks-dev_aks-dev-ext-stateless-az[0-9]+_.*
+    reason: "AKS load balancer: the ext-* zones' gateways (designed)"
+  # AKS-managed: the Flux extension's Private Link scope in the node resource group, which AKS creates
+  # with public network access and manages itself
   - check: public-endpoint
-    type: microsoft.containerservice/managedclusters
-    reason: "Lab exception: public API server in dev (authorized ranges, Entra ID only, local accounts off)"
+    type: microsoft.kubernetesconfiguration/privatelinkscopes
+    resourceGroup: mc_rg-aks-dev_.*
+    reason: "AKS-managed (node resource group): the cluster extensions' Private Link scope, not configurable"
+  # AKS-managed: the nodes' OS disks, created with each VM (NAP's too) - a disk's public network access is
+  # only export and import over a SAS URL, which needs a role on the node resource group, and AKS offers no
+  # setting for it (an Azure Policy on disks never sees them: they are created inside the VM's request)
   - check: public-endpoint
-    type: microsoft.keyvault/vaults
-    name: kv-onek8s-(dev|gwc)-.*
-    reason: "Lab exception: the vaults are reached over their public endpoints with Entra ID (no private endpoints in the lab)"
-  - check: public-endpoint
-    type: microsoft.containerregistry/registries
-    name: acronek8sdev
-    reason: "Lab exception: the registry builds the images with ACR Tasks and is pulled over its public endpoint"
-  - check: public-endpoint
-    type: microsoft.storage/storageaccounts
-    name: stonek8sdevtfstate
-    resourceGroup: rg-aks-dev-tfstate
-    reason: "Lab exception: the Terraform state of the Deploy workflow, read over its public endpoint (GitHub-hosted runners)"
-  - check: local-auth
-    type: microsoft.storage/storageaccounts
-    name: stonek8sdevtfstate
-    resourceGroup: rg-aks-dev-tfstate
-    reason: "Lab exception: the azurerm backend reads the Terraform state with the account key (Deploy workflow)"
+    type: microsoft.compute/disks
+    resourceGroup: mc_rg-aks-dev_.*
+    reason: "AKS-managed node OS disks: export/import only with rights on the node resource group; no setting"
