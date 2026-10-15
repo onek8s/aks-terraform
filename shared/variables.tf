@@ -570,17 +570,24 @@ variable "private_endpoints" {
     subnet_name    = optional(string, "snet-shared-pe")
     address_prefix = string
     # The resource group of the landing zone's private link DNS zones (privatelink.vaultcore.azure.net,
-    # privatelink.azurecr.io), in the hub's subscription
+    # privatelink.azurecr.io, the Foundry and blob zones), in the hub's subscription
     dns_zone_resource_group_id = string
+    # The Terraform state account (Deploy's TF_STATE_STORAGE_ACCOUNT): a private endpoint, Entra ID only
+    state_storage_account_id = optional(string)
+    # false: no public network access to the vaults, the registry (Premium), Foundry, the state account and the
+    # Log Analytics workspace (in the landing zone's Azure Monitor Private Link scope)
+    public_network_access = optional(bool, true)
   })
   default     = null
   description = <<DESCRIPTION
-Private endpoints for the environment's services - the platform vault, every zone vault and, on
-container_registry_sku = "Premium" only (Azure offers none below it), the container registry - in a subnet `subnet_name` with
-`address_prefix` of the environment network virtual_network_create creates, registered in the
+Private endpoints for the environment's services - the platform vault, every zone vault, on
+container_registry_sku = "Premium" only (Azure offers none below it) the container registry, the
+agents' Foundry resource (ai_foundry) and the Terraform state account (`state_storage_account_id`) - in a subnet
+`subnet_name` with `address_prefix` of the environment network virtual_network_create creates, registered in the
 landing zone's private link DNS zones in `dns_zone_resource_group_id` (the deploying identity needs
-Private DNS Zone Contributor there). With `hub`, that network is peered with the hub. Public network
-access stays as it is. Null for none.
+Private DNS Zone Contributor there). With `hub`, that network is peered with the hub.
+`public_network_access = false` turns the services' public network access off (Azure's trusted services excepted).
+Null for none.
 DESCRIPTION
 
   validation {

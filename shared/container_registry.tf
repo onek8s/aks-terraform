@@ -15,6 +15,11 @@ resource "azurerm_container_registry" "this" {
   sku                   = var.container_registry_sku
   admin_enabled         = false
   data_endpoint_enabled = var.container_registry_sku == "Premium"
+  # Premium with a private endpoint: no public network access (private_endpoints.public_network_access) - the
+  # kubelets pull through the endpoint, the build tasks below come in as a trusted service
+  public_network_access_enabled         = var.container_registry_sku == "Premium" ? local.public_network_access : true
+  network_rule_bypass_option            = "AzureServices"
+  network_rule_bypass_for_tasks_enabled = var.container_registry_sku == "Premium"
 }
 
 # Nothing pushes to the registry from outside: it builds the images itself, with an ACR task each,

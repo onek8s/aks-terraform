@@ -103,7 +103,7 @@ locals {
 }
 
 # The vault, on the Azure RBAC permission model - access policies know no conditions - and reached
-# over its public endpoint, authenticated with Entra ID. With isolation zones it is the environment's
+# over its private endpoint (private_endpoints.tf), authenticated with Entra ID. With isolation zones it is the environment's
 # platform vault (OneK8s design sections 13 and 18): the gateways' certificates, the clusters'
 # customer-managed keys and the platform's own secrets, while the applications' secrets live in their
 # zone's vault below.
@@ -118,6 +118,13 @@ resource "azurerm_key_vault" "this" {
   # vault holds customer-managed keys - a disk encryption set refuses a key from a vault without it -
   # so that a prototype's vault can otherwise be purged and its name reused.
   purge_protection_enabled = var.key_vault_purge_protection_enabled
+  # Without public network access only through its private endpoint - and Azure's trusted services: the clusters'
+  # disk encryption sets and KMS (AKS's KMS data encryption, private mode) use the keys here
+  public_network_access_enabled = local.public_network_access
+  network_acls {
+    default_action = local.public_network_access ? "Allow" : "Deny"
+    bypass         = "AzureServices"
+  }
 }
 
 # One vault per isolation zone (design section 6): the secrets of the zone's applications, each
@@ -133,6 +140,12 @@ resource "azurerm_key_vault" "zone" {
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   rbac_authorization_enabled = true
   purge_protection_enabled   = false
+  # Without public network access only through its private endpoint (the zone's External Secrets Operator)
+  public_network_access_enabled = local.public_network_access
+  network_acls {
+    default_action = local.public_network_access ? "Allow" : "Deny"
+    bypass         = "AzureServices"
+  }
 }
 
 locals {

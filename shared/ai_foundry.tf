@@ -11,9 +11,14 @@ resource "azurerm_cognitive_account" "agents" {
   kind                  = "AIServices"
   sku_name              = "S0"
   custom_subdomain_name = var.ai_foundry.name
-  # Entra ID only: no keys to leak. Reached on its public endpoint by the GitHub-hosted agent runners.
+  # Entra ID only: no keys to leak. Reached through its private endpoint (private_endpoints.tf) - the agent
+  # workflows join the labfw VPN - and, while private_endpoints.public_network_access allows, its public one.
   local_auth_enabled            = false
-  public_network_access_enabled = true
+  public_network_access_enabled = local.public_network_access
+  network_acls {
+    default_action = local.public_network_access ? "Allow" : "Deny"
+    bypass         = "AzureServices"
+  }
   # A Foundry resource with projects - Azure turns it on (and adds a default project) with the first model
   # deployment attempt, and it cannot be turned off without deleting the resource
   project_management_enabled = true

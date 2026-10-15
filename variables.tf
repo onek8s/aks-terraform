@@ -1750,6 +1750,9 @@ variable "customer_managed_keys" {
     key_vault_name                = string
     key_vault_resource_group_name = optional(string)
     key_vault_network_access      = optional(string, "Public")
+    # AKS's KMS data encryption (preview, Kubernetes 1.33+): `Private` then needs no API Server VNet
+    # Integration - AKS reaches a vault without public network access as a trusted service
+    kms_data_encryption = optional(bool, false)
   })
   default     = null
   description = <<DESCRIPTION
@@ -1759,7 +1762,10 @@ Kubernetes secrets in etcd (KMS), and `key-<cluster>-disk`, the key of a disk en
 OS disks of every node - the system pool and the NAP nodes. Null leaves both to platform-managed keys.
 
 The vault - the environment's platform vault, with purge protection, which a disk encryption set
-needs - is reached `Public`ly or, with API Server VNet Integration, `Private`ly. Both settings take
+needs - is reached `Public`ly or `Private`ly. Classic KMS reaches a private vault only with API Server
+VNet Integration (which Azure refuses on an encrypted network with v4+ VM sizes, design D58);
+`kms_data_encryption = true` turns on AKS's newer KMS data encryption instead (kms.tf), which reaches a
+vault without public network access through its trusted services exception. Both settings take
 effect only on a new cluster: a cluster created without a disk encryption set has to be built again.
 DESCRIPTION
 

@@ -65,12 +65,15 @@ resource "azurerm_role_assignment" "disk_encryption_set_key" {
 }
 
 # The cluster identity: the KMS key, and reading the disk encryption set it creates the nodes' disks
-# with.
+# with; with KMS data encryption also Key Vault Contributor on the vault, which AKS asks for.
 resource "azurerm_role_assignment" "cluster_customer_managed_keys" {
-  for_each = var.customer_managed_keys != null && var.create_role_assignments ? {
+  for_each = var.customer_managed_keys != null && var.create_role_assignments ? merge({
     kms_key             = { scope = azurerm_key_vault_key.cluster["kms"].resource_versionless_id, role = "Key Vault Crypto User" }
     disk_encryption_set = { scope = azurerm_disk_encryption_set.this[0].id, role = "Reader" }
-  } : {}
+    }, !var.customer_managed_keys.kms_data_encryption ? {} : {
+    # KMS data encryption reads the vault's network settings (AKS's documented prerequisite)
+    kms_vault = { scope = data.azurerm_key_vault.customer_managed_keys[0].id, role = "Key Vault Contributor" }
+  }) : {}
 
   principal_id         = azurerm_user_assigned_identity.this[0].principal_id
   scope                = each.value.scope
@@ -91,7 +94,9 @@ resource "time_sleep" "customer_managed_keys_propagation" {
 
 locals {
   disk_encryption_set_id = one(azurerm_disk_encryption_set.this[*].id)
-  azure_key_vault_kms = var.customer_managed_keys == null ? null : {
+  # Classic KMS through the AVM module; KMS data encryption is set beside it (kms.tf)
+  kms_data_encryption = var.customer_managed_keys == null ? false : var.customer_managed_keys.kms_data_encryption
+  azure_key_vault_kms = var.customer_managed_keys == null || local.kms_data_encryption ? null : {
     enabled                  = true
     key_id                   = azurerm_key_vault_key.cluster["kms"].id
     key_vault_network_access = var.customer_managed_keys.key_vault_network_access
