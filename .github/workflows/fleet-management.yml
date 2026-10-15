@@ -1,0 +1,81 @@
+name: Fleet Management
+
+# Grafana Cloud Fleet Management's pipelines (design D48: collection is managed there, not in Git), read and - for the
+# one change Git cannot make - their cluster matchers set: a pipeline matching `cluster="<name>"` sends nothing from a
+# cluster with another name, so after a rename or a new cell its collectors get only Grafana's survey pipelines (which
+# label `k8s_cluster_name` but not `cluster`). Signed in with the stack's Fleet Management credentials from the
+# platform vault secret `flux-system--grafana-cloud` (remote-config-url, -username, -password).
+#
+#   show            every pipeline: name, enabled, matchers; with `pipeline`, also its contents
+#   match-clusters  set the `cluster` matcher of `pipeline` to the regular expression `clusters`
+#                   (e.g. aks-dev-int-stateless-.*), keeping its other matchers and contents
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [show, match-clusters]
+        default: show
+      pipeline:
+        description: "Pipeline name (show: its contents; match-clusters: the one to change)"
+        default: ""
+      clusters:
+        description: "match-clusters: regular expression of the cluster names"
+        default: "aks-dev-int-stateless-.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fleet:
+    name: ${{ inputs.action }} ${{ inputs.pipeline }}
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 10
+    steps:
+      - name: Check the inputs
+        env:
+          PIPELINE: ${{ inputs.pipeline }}
+          CLUSTERS: ${{ inputs.clusters }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          [[ "$PIPELINE" =~ ^[A-Za-z0-9_.-]*$ ]] || { echo "::error::pipeline: letters, digits, _ . - only"; exit 1; }
+          [[ "$CLUSTERS" =~ ^[A-Za-z0-9_.*|-]+$ ]] || { echo "::error::clusters: a simple regular expression"; exit 1; }
+          [ "$ACTION" != match-clusters ] || [ -n "$PIPELINE" ] || { echo "::error::match-clusters needs pipeline"; exit 1; }
+
+      - name: Sign in to Azure (GitHub OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ${{ inputs.action }}
+        env:
+          ACTION: ${{ inputs.action }}
+          PIPELINE: ${{ inputs.pipeline }}
+          CLUSTERS: ${{ inputs.clusters }}
+          VAULT: kv-onek8s-gwc-platform
+        run: |
+          set -euo pipefail
+          creds="$(az keyvault secret show --vault-name "$VAULT" --name flux-system--grafana-cloud --query value -o tsv)"
+          url="$(jq -r '."remote-config-url"' <<<"$creds")"
+          user="$(jq -r '."remote-config-username"' <<<"$creds")"
+          password="$(jq -r '."remote-config-password"' <<<"$creds")"
+          echo "::add-mask::$password"
+          unset creds
+          rpc() { curl -sS --fail-with-body -u "$user:$password" -H 'Content-Type: application/json' -d "$2" "${url%/}/$1"; }
+
+          rpc pipeline.v1.PipelineService/ListPipelines '{}' | jq -c '(.pipelines // [])[] | {name, enabled, matchers}'
+          [ -n "$PIPELINE" ] || exit 0
+          pipeline="$(rpc pipeline.v1.PipelineService/ListPipelines '{}' | jq --arg n "$PIPELINE" '(.pipelines // [])[] | select(.name == $n)')"
+          [ -n "$pipeline" ] || { echo "::error::no pipeline $PIPELINE"; exit 1; }
+          echo "== $PIPELINE"
+          jq -r '.contents' <<<"$pipeline"
+
+          if [ "$ACTION" = match-clusters ]; then
+            updated="$(jq --arg c "cluster=~\"$CLUSTERS\"" '.matchers = ([.matchers[] | select(startswith("cluster") | not)] + [$c])' <<<"$pipeline")"
+            rpc pipeline.v1.PipelineService/UpdatePipeline "$(jq -c '{pipeline: .}' <<<"$updated")" | jq -c '{name, enabled, matchers}'
+          fi
