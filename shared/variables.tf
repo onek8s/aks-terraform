@@ -547,8 +547,8 @@ variable "private_endpoints" {
   })
   default     = null
   description = <<DESCRIPTION
-Private endpoints for the environment's services - the platform vault, every zone vault and the
-container registry (which needs container_registry_sku = "Premium") - in a subnet `subnet_name` with
+Private endpoints for the environment's services - the platform vault, every zone vault and, on
+container_registry_sku = "Premium" only (Azure offers none below it), the container registry - in a subnet `subnet_name` with
 `address_prefix` of the environment network virtual_network_create creates, registered in the
 landing zone's private link DNS zones in `dns_zone_resource_group_id` (the deploying identity needs
 Private DNS Zone Contributor there). With `hub`, that network is peered with the hub. Public network

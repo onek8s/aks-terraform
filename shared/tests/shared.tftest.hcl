@@ -1049,7 +1049,7 @@ run "private_endpoints_for_the_vaults_and_the_registry" {
   }
 }
 
-run "a_basic_registry_cannot_have_a_private_endpoint" {
+run "a_basic_registry_gets_no_private_endpoint" {
   command = plan
 
   variables {
@@ -1063,5 +1063,8 @@ run "a_basic_registry_cannot_have_a_private_endpoint" {
     }
   }
 
-  expect_failures = [check.a_registry_endpoint_needs_premium]
+  assert {
+    condition     = keys(azurerm_private_endpoint.this) == ["kv-platform"] && !azurerm_container_registry.this[0].data_endpoint_enabled
+    error_message = "Only the vaults get endpoints while the registry is Basic (Azure offers it none)."
+  }
 }
