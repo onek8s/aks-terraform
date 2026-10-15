@@ -362,7 +362,7 @@ locals {
 
   # The ranges the cluster will actually run on, whichever of the two they came from.
   effective_cluster_cidrs = local.network_profile_is_sent ? compact([
-    var.network_profile.pod_cidr,
+    local.pod_overlay ? var.network_profile.pod_cidr : null,
     var.network_profile.service_cidr,
   ]) : local.azure_assigned_cluster_cidrs
 

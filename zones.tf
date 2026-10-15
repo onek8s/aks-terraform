@@ -3,7 +3,11 @@
 
 locals {
   # The network profile as sent: the variable's, with ACNS (design section 16) where it is asked for.
-  network_profile = merge(var.network_profile, var.advanced_networking == null ? {} : {
+  # Without an overlay (network_plugin_mode "none", Azure CNI node subnet) no mode and no pod range.
+  network_profile = merge(var.network_profile, {
+    network_plugin_mode = local.pod_overlay ? var.network_profile.network_plugin_mode : null
+    pod_cidr            = local.pod_overlay ? var.network_profile.pod_cidr : null
+    }, var.advanced_networking == null ? {} : {
     advanced_networking = {
       enabled = true
       observability = {
@@ -23,6 +27,9 @@ locals {
   })
 
   ebpf_host_routing = try(var.advanced_networking.ebpf_host_routing, false)
+
+  # Whether the pods have an overlay range of their own, or addresses of their nodes' subnets.
+  pod_overlay = var.network_profile.network_plugin_mode == "overlay"
 
   # Whether the system pool keeps everything but the platform's controllers off it.
   system_pool_critical_addons_only = anytrue([for taint in coalesce(var.default_node_pool.node_taints, []) : startswith(taint, "CriticalAddonsOnly")])

@@ -1383,7 +1383,10 @@ variable "network_profile" {
   default     = {}
   description = <<DESCRIPTION
 Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal
-ranges and must not overlap with the address space of the existing virtual network. Use
+ranges and must not overlap with the address space of the existing virtual network.
+`network_plugin_mode = "none"` turns the overlay off - Azure CNI node subnet: every pod takes an address
+of its node's subnet (the zones' subnets for node auto provisioning), so a firewall outside the cluster
+sees the pod's own address (design D59) - and `pod_cidr` is not used. Use
 `outbound_type = "userDefinedRouting"` when the existing subnet routes egress through a firewall,
 which also avoids creating a public load balancer.
 
@@ -1394,6 +1397,10 @@ DESCRIPTION
   validation {
     condition     = contains(["azure", "kubenet", "none"], var.network_profile.network_plugin)
     error_message = "network_profile.network_plugin must be one of \"azure\", \"kubenet\" or \"none\"."
+  }
+  validation {
+    condition     = contains(["overlay", "none"], var.network_profile.network_plugin_mode)
+    error_message = "network_profile.network_plugin_mode must be \"overlay\" (Azure CNI Overlay) or \"none\" (Azure CNI node subnet: pods take addresses of their nodes' subnets)."
   }
   validation {
     condition     = contains(["azure", "calico", "cilium", "none"], var.network_profile.network_policy)
@@ -1486,8 +1493,8 @@ DESCRIPTION
     error_message = "node_auto_provisioning_enabled cannot be combined with default_node_pool.enable_auto_scaling: AKS refuses node auto provisioning on a cluster that runs the cluster autoscaler on any node pool."
   }
   validation {
-    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || (var.network_profile.network_plugin == "azure" && var.network_profile.network_plugin_mode == "overlay" && var.network_profile.network_dataplane == "cilium")
-    error_message = "node_auto_provisioning_enabled needs Azure CNI Overlay powered by Cilium: network_profile.network_plugin = \"azure\", network_plugin_mode = \"overlay\" and network_dataplane = \"cilium\"."
+    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || (var.network_profile.network_plugin == "azure" && contains(["overlay", "none"], var.network_profile.network_plugin_mode) && var.network_profile.network_dataplane == "cilium")
+    error_message = "node_auto_provisioning_enabled needs Azure CNI Overlay or node subnet powered by Cilium: network_profile.network_plugin = \"azure\", network_plugin_mode = \"overlay\" or \"none\" and network_dataplane = \"cilium\" (NAP does not support a pod subnet with dynamic IP allocation)."
   }
 }
 
