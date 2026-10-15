@@ -32,9 +32,9 @@ on:
       cluster:
         description: "The cluster to benchmark"
         required: true
-        default: "aks-dev-int-stateless-az1"
+        default: "aks-dev-int-stateless-az2"
         type: choice
-        options: [aks-dev-int-stateless-az1, aks-dev-int-stateful]
+        options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az1, aks-dev-int-stateful]
 
 permissions:
   contents: read
@@ -48,16 +48,16 @@ env:
 
 jobs:
   cis:
-    name: cis ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+    name: cis ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 30
     concurrency:
-      group: cis-benchmark-${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+      group: cis-benchmark-${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
       cancel-in-progress: false
     env:
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az1' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
       REGISTRY: acronek8sdev
       OUT: ${{ github.workspace }}/cis-results
     steps:

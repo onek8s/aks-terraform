@@ -22,9 +22,11 @@
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
   isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
+  # The enabled cells: a disabled cell keeps its address space but gets no network.
+  cells = { for cell, c in var.cells : cell => c if c.enabled }
 
   cell_subnets = merge([
-    for cell, settings in var.cells : merge(
+    for cell, settings in local.cells : merge(
       {
         "${cell}/snet-system" = {
           cell   = cell
@@ -57,7 +59,7 @@ locals {
 
   # Every node subnet of a cell - the system pool's and each zone's - for the rules between nodes.
   cell_node_prefixes = {
-    for cell in keys(var.cells) : cell => [
+    for cell in keys(local.cells) : cell => [
       for key, subnet in local.cell_subnets : subnet.prefix if subnet.cell == cell && subnet.kind != "ilb"
     ]
   }
@@ -110,7 +112,7 @@ locals {
 }
 
 resource "azurerm_virtual_network" "cell" {
-  for_each = var.cells
+  for_each = local.cells
 
   name                = "vnet-${each.key}"
   location            = var.location
@@ -204,7 +206,7 @@ locals {
 }
 
 resource "azurerm_route_table" "cell" {
-  for_each = var.hub == null ? {} : var.cells
+  for_each = var.hub == null ? {} : local.cells
 
   name                          = "rt-${each.key}"
   location                      = var.location
@@ -228,7 +230,7 @@ resource "azurerm_subnet_route_table_association" "cell" {
 }
 
 resource "azurerm_virtual_network_peering" "cell_to_hub" {
-  for_each = var.hub == null ? {} : var.cells
+  for_each = var.hub == null ? {} : local.cells
 
   name                         = "peer-${each.key}-to-hub"
   resource_group_name          = local.resource_group_name
@@ -240,7 +242,7 @@ resource "azurerm_virtual_network_peering" "cell_to_hub" {
 
 resource "azurerm_virtual_network_peering" "hub_to_cell" {
   provider = azurerm.hub
-  for_each = var.hub == null ? {} : var.cells
+  for_each = var.hub == null ? {} : local.cells
 
   name                         = "peer-hub-to-${each.key}"
   resource_group_name          = local.hub_virtual_network.resource_group_name
@@ -261,7 +263,7 @@ resource "azurerm_private_dns_zone" "internal" {
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "internal" {
-  for_each = { for pair in setproduct(var.internal_dns_zones, keys(var.cells)) : "${pair[0]}/${pair[1]}" => { zone = pair[0], cell = pair[1] } }
+  for_each = { for pair in setproduct(var.internal_dns_zones, keys(local.cells)) : "${pair[0]}/${pair[1]}" => { zone = pair[0], cell = pair[1] } }
 
   name                  = "vnet-${each.value.cell}"
   resource_group_name   = local.resource_group_name

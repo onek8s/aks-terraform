@@ -46,9 +46,13 @@ isolation_zones = {
 
 # The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system, and per
 # zone snet-<zone>-nodes and snet-<zone>-ilb, each with its own NSG; VNet encryption on.
-# One cell in the lab, in availability zone 1; 172.22.16.0/20 is kept for an az2 cell.
+# The design's cells, one per availability zone. The lab runs one: az1 is disabled (2026-10-15) because
+# germanywestcentral's logical zone 1 is "NotAvailableForSubscription" for every VM size in sub-aks-dev
+# (enabling it is a support request to Microsoft), so az2 runs. A disabled cell keeps its address space
+# and its tfvars (envs/dev-int-stateless-az1.tfvars) but has no network.
 cells = {
-  dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+  dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
+  dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
 }
 
 # The landing zone's hub (azure-landing-zone network mode labfw): every cell is peered with it, sends

@@ -984,3 +984,31 @@ run "rejects_a_platform_viewer_group_that_is_not_an_object_id" {
 
   expect_failures = [var.platform_viewer_group_object_ids]
 }
+
+run "a_disabled_cell_keeps_its_address_space_but_gets_no_network" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+    }
+    cells = {
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
+      dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
+    }
+    hub = {
+      virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
+      next_hop_ip        = "10.0.1.4"
+    }
+  }
+
+  assert {
+    condition     = keys(azurerm_virtual_network.cell) == ["dev-int-stateless-az2"] && keys(azurerm_route_table.cell) == ["dev-int-stateless-az2"] && keys(azurerm_virtual_network_peering.hub_to_cell) == ["dev-int-stateless-az2"]
+    error_message = "Only the enabled cell gets a network, a route table and a hub peering."
+  }
+  assert {
+    condition     = azurerm_subnet.cell["dev-int-stateless-az2/snet-int-fi-nodes"].address_prefixes[0] == "172.22.17.0/25"
+    error_message = "The enabled cell's zone takes the /24 of its index in the cell's own address space."
+  }
+}

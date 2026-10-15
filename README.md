@@ -33,7 +33,7 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-int-stateless-az1.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters (since 2026-10-15, in germanywestcentral), `aks-dev-int-stateless-az1` and `aks-dev-int-stateful`, on the **Free** tier: one system node, no uptime SLA. Internal (`exposure = "int"`: Finland's zone `int-fi` only; Sweden's `int-se` is disabled in `shared/`). The stateless cluster is one of the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): in availability zone 1 and a network of its own peered with the landing zone's hub, egress through labfw (`userDefinedRouting`), with the isolation zone's nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys, an ephemeral OS disk and no persistent storage; no platform gateway and no Flux webhook (no public entry point). It serves `hello-aks-dev-int-stateless-az1.int-fi.dev.onek8s.lol` on its zone's internal load balancer. The stateful one is defined but not deployed for now. |
+| `envs/dev-int-stateless-az1.tfvars`, `envs/dev-int-stateless-az2.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters (since 2026-10-15, in germanywestcentral), `aks-dev-int-stateless-az1` (disabled in `shared/`: zone 1 is not available to the subscription), `aks-dev-int-stateless-az2` (running) and `aks-dev-int-stateful`, on the **Free** tier: one system node, no uptime SLA. Internal (`exposure = "int"`: Finland's zone `int-fi` only; Sweden's `int-se` is disabled in `shared/`). The stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own peered with the landing zone's hub, egress through labfw (`userDefinedRouting`), with the isolation zone's nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys, an ephemeral OS disk and no persistent storage; no platform gateway and no Flux webhook (no public entry point). The running one serves `hello-aks-dev-int-stateless-az2.int-fi.dev.onek8s.lol` on its zone's internal load balancer. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -721,7 +721,7 @@ az keyvault secret set --vault-name <key_vault_name> --name example--api-key --v
 An environment can run more than one cluster on the same **shared resources**, so that a workload can
 move from one cluster to another - which is how a cluster is replaced rather than upgraded in place:
 build the next one beside it, move the workloads over, destroy the old one. `dev` does this with
-`aks-dev-int-stateless-az1` and `aks-dev-int-stateful`, and everything - the
+`aks-dev-int-stateless-az1`, `aks-dev-int-stateless-az2` and `aks-dev-int-stateful`, and everything - the
 clusters and what they share - is in one resource group, `rg-aks-dev`, in `sub-aks-dev` of the
 [landing zone](https://github.com/onek8s/azure-landing-zone). These are the **internal** exposure's
 (since 2026-10-15; before, the external one's in swedencentral): the OneK8s design keeps internal and
@@ -729,8 +729,9 @@ external workloads in separate subscriptions and clusters (decision D52), with t
 isolation zones inside them - a country can be disabled (`isolation_zones.<zone>.enabled = false` in
 `shared/`; Sweden is). `sub-aks-dev` plays `sub-aks-dev-int`; the lab has no external subscription,
 which would run `shared/` and the same cluster configuration once more with `exposure = "ext"` and the
-external zones (Traffic Manager only for a deployed external zone). Only `aks-dev-int-stateless-az1`
-runs, behind the hub's labfw (`shared/` `hub`). The one exception is the public zone
+external zones (Traffic Manager only for a deployed external zone). Only `aks-dev-int-stateless-az2`
+runs, behind the hub's labfw (`shared/` `hub`); az1 is disabled (`cells.<cell>.enabled = false`)
+because the region's zone 1 is not available to `sub-aks-dev`. The one exception is the public zone
 `onek8s.lol`, which is created once with the Azure CLI in `rg-onek8s-dns`, outside every state, so
 that its name servers - which the registrar points at - outlive any rebuild.
 
