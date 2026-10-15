@@ -88,6 +88,15 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **labfw VPN** (WireGuard, UDP 51820 on 4.184.103.12): peer `olli-1` 10.0.12.10 (public key in azure-landing-zone
   terraform.tfvars, private key in `kv-onek8s-gwc-platform` as `labfw-vpn--olli-1-private-key`). The pool counts as
   management: API server private endpoints, jump host, the cells' 443 (int-fi gateway); DNS 10.0.12.1.
+- **Internal app names by home cell** (2026-10-15, design section 8): `hello.int-fi.dev.onek8s.lol` (aks-fluxcd-example
+  `apps/aks-hello-home`) next to the per-cell `hello-<cluster>...`. Every route carries `platform/home-cell: <cluster>`;
+  external-dns-int publishes only routes naming its own cluster (`--annotation-filter=platform/home-cell=${cluster_name}`).
+  The tfvars' `managed_namespaces.<ns>.flux.substitute.home_cell` (the same in every cell) stands in for the placement
+  artifact. Not a true/false value: kustomize drops the quotes and a substituted `true` became a YAML boolean, which
+  the API server refused. Not built yet: shared txt-owner-id + upsert-only (migration), a policy against the annotation.
+- **labfw SSH and ping**: `ssh azureuser@10.0.12.1` over the VPN from `labfw.ssh.sources` (olli-1) with
+  `labfw.ssh.authorized_keys` (azure-landing-zone tfvars); no NSG rule. Ping: firewall rule `management-ping-cells`
+  plus the node subnets' NSG ICMP from labfw's address only - nodes answer; internal LBs and private endpoints never do.
 - **Isolation tests** were only renamed mechanically for the internal one-zone cell (cross-zone, external HTTPS, R2
   steps still assume the external two-zone lab) - adapt before the next run.
 - The notes below describe the external lab in swedencentral before 2026-10-15 unless they say otherwise.
@@ -391,5 +400,5 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (azure/login) before az/kubectl steps that follow a cluster build.
 - **`az aks command invoke`** (break-glass into the private cluster, no VPN needed) runs in namespace `aks-command`,
   which the AKS policy counts as a platform namespace since 2026-10-15 (namespace-ownership refused it before).
- <repo> <run_id>...` if it exists (polls the runs API),
+- Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.
