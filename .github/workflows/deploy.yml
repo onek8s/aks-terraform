@@ -259,6 +259,11 @@ jobs:
       # control plane, and the Service keeps a public IP whose selector (`gateway-name`) also matches
       # Traefik's pods. Deleted here by name, only for Gateways that no longer name approuting-istio -
       # never Traefik's own objects. Idempotent; runs on every apply of a cluster, changes or not.
+      # The private API server, through the hub firewall's VPN (.github/actions/labfw-vpn)
+      - name: Join the labfw VPN
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        uses: ./.github/actions/labfw-vpn
+
       - name: Remove App Routing's leftovers from Gateways of another class
         if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
         run: |

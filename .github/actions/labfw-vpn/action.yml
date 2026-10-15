@@ -1,0 +1,41 @@
+# Joins a GitHub-hosted runner to the hub firewall's (labfw's) WireGuard VPN, so that it reaches the
+# dev cells' private API servers (API Server VNet Integration in snet-apiserver, OneK8s design
+# section 3). The client config - the peer `github-runners` of onek8s/azure-landing-zone's labfw, its
+# private key and the cells' API server subnets as AllowedIPs - is the platform vault's secret
+# `labfw-vpn-github-runners`, stored with the Store secret workflow; the runner must be signed in to
+# Azure first. The API server's public FQDN resolves to its private address, so the tunnel needs no DNS.
+#
+# One peer for every workflow: WireGuard follows a peer to its latest endpoint, so two runners on the
+# tunnel at once take it from each other. The workflows that use it share the concurrency group
+# `labfw-vpn`.
+name: labfw VPN
+description: Join the runner to the labfw VPN (dev cells' private API servers)
+inputs:
+  vault:
+    description: The vault holding the client config
+    default: kv-onek8s-gwc-platform
+  secret:
+    description: The secret holding the client config
+    default: labfw-vpn-github-runners
+runs:
+  using: composite
+  steps:
+    - name: Join the labfw VPN
+      shell: bash
+      env:
+        VAULT: ${{ inputs.vault }}
+        SECRET: ${{ inputs.secret }}
+      run: |
+        set -euo pipefail
+        command -v wg-quick >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools >/dev/null; }
+        umask 077
+        az keyvault secret show --vault-name "$VAULT" --name "$SECRET" --query value -o tsv > "$RUNNER_TEMP/labfw.conf"
+        sudo install -m 600 "$RUNNER_TEMP/labfw.conf" /etc/wireguard/labfw.conf
+        rm -f "$RUNNER_TEMP/labfw.conf"
+        sudo wg-quick up labfw
+        # The tunnel is up once labfw answered a handshake
+        for _ in $(seq 1 15); do
+          [ "$(sudo wg show labfw latest-handshakes | awk '{print $2}')" != "0" ] && break
+          sleep 2
+        done
+        sudo wg show labfw | grep -E 'endpoint|allowed ips|latest handshake' || true

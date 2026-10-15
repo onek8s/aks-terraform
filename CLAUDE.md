@@ -70,7 +70,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   shared/ `hub`: cells peered with `vnet-hub-germanywestcentral`, route table `rt-<cell>` 0.0.0.0/0 -> 10.0.1.4 on the node
   subnets, VNet DNS = labfw's DNS proxy, internal private DNS (`int-fi.dev.onek8s.lol`) also linked to the hub. Clusters
   `outbound_type = "userDefinedRouting"`; the cluster identity gets Network Contributor on the route table. Cell egress
-  allow-lists: parent `rcg-platform` (AKS FQDN tag, `AzureCloud.germanywestcentral` 443 for the public API server,
+  allow-lists: parent `rcg-platform` (AKS FQDN tag, `AzureCloud.germanywc` 443 - service tags use the short region name,
+  `service_tag_region`; the long one matched nothing and labfw sent the no-SNI API server traffic to its app proxy, which denied it -
   `platform_source_fqdns` = chart/image sources) + child `rcg-aks-dev` (vaults, ACR, Grafana, zone lists). A denied
   flow shows in labfw's logs (azure-lab-fw view-logs or `labfw logs --action deny` via Run Command).
 - **No public entry point in the internal cell**: a public LB cannot answer behind labfw (asymmetric routing), so
@@ -258,8 +259,15 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   Accepted losses: no rate limits / request size limits / EnvoyFilter in the gateway. Needs a preview
   cluster API that knows `appRoutingIstio`: AVM 0.8.5 (upstream fix of our report) pins
   `2026-03-02-preview` when the ALB setting is stated, which knows it.
-- **Public API server in dev** (authorized ranges, Entra ID only, local accounts off) - a lab
-  exception the user asked for. Private API server stays the design for acc/prd.
+- **Private API server in dev too** (2026-10-15, the user's ask; the public API server was a lab exception before):
+  API Server VNet Integration in the cell's delegated `snet-apiserver` (shared/: the first /28 of the cell's last /24 -
+  az1 172.22.15.0/28, az2 172.22.31.0/28; zone indexes now 1-14), `private_cluster_enabled`, `private_dns_zone_mode =
+  "none"` + public FQDN (resolves to the private IP; an AKS-managed zone would be linked only to the cell VNet, which
+  resolves through labfw in the hub - CIS 5.4.2 accepted for that). Reached through the hub: the landing zone's
+  `system_prefixes` carry the API server subnets (management-to-cells, VPN routes). **GitHub-hosted runners join the
+  labfw VPN** (`.github/actions/labfw-vpn`, peer `github-runners` 10.0.12.11, its config is the platform vault secret
+  `labfw-vpn-github-runners`) before kubectl; one peer, so Cluster status, Isolation tests and CIS share the
+  concurrency group `labfw-vpn`. If labfw's public IP or key changes, re-store that secret (Store secret).
 - **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24 each (nodes /25, ILB /27),
   own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own
   Gateway (class `traefik-<zone>` or `approuting-istio`) and ESO (`controllerClass: <zone>`), Cilium CCNP baseline.

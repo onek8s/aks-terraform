@@ -1427,6 +1427,35 @@ run "warns_about_a_byo_private_dns_zone_with_no_identity_to_grant_it" {
 
 # A bring-your-own private DNS zone is still reachable without a network of your own - it is the
 # private cluster that needs it, not the subnets - so the grant on the zone survives.
+run "a_private_cluster_without_a_private_dns_zone_resolves_by_its_public_fqdn" {
+  command = plan
+
+  variables {
+    private_dns_zone_mode               = "none"
+    private_cluster_public_fqdn_enabled = true
+    api_server_subnet_name              = "snet-apiserver"
+  }
+
+  assert {
+    condition     = local.private_dns_zone == "none" && length(azurerm_role_assignment.private_dns_zone_contributor) == 0
+    error_message = "private_dns_zone_mode none hands AKS \"none\" and grants no zone."
+  }
+  assert {
+    condition     = local.api_server_vnet_integration
+    error_message = "The API server joins snet-apiserver."
+  }
+}
+
+run "no_private_dns_zone_needs_the_public_fqdn" {
+  command = plan
+
+  variables {
+    private_dns_zone_mode = "none"
+  }
+
+  expect_failures = [var.private_dns_zone_mode]
+}
+
 run "a_cluster_without_a_network_still_grants_the_private_dns_zone" {
   command = plan
 

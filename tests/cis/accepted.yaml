@@ -21,12 +21,9 @@
 #         (design section 6), and its cert controller, which patches its webhook configurations.
 accepted:
   # --- Lab exceptions (dev only; the corporate design has none of these) ---
-  - id: "5.4.1"
-    objects: managedCluster/aks-dev-.*
-    reason: "Lab exception: public API server with authorized range 0.0.0.0/0, for GitHub-hosted runners; Entra ID only, local accounts off. Design section 3: private API server in acc/prd"
   - id: "5.4.2"
     objects: managedCluster/aks-dev-.*
-    reason: "Lab exception: public API server in dev (see 5.4.1). Design section 3: private cluster in acc/prd"
+    reason: "Lab exception: the private API server keeps its public FQDN (private_dns_zone_mode none), which resolves to its private address - the cells resolve through labfw's DNS proxy in the hub, outside an AKS-managed zone's link. Design section 3: a private DNS zone in acc/prd"
   - id: "5.1.1"
     objects: managedCluster/aks-dev-.*
     reason: "Lab exception: Defender for Containers off for cost (Microsoft.Security not registered in the build subscription); images are built in ACR from pinned commits and Notation-signed, Image Integrity verifies them. Design sections 14 and 19: Defender for Containers on in the corporate tenant"

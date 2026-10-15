@@ -682,7 +682,7 @@ locals {
   # The grant on a bring-your-own private DNS zone needs a principal that exists before the cluster,
   # which a system assigned identity is not.
   create_private_dns_zone_assignment   = var.create_role_assignments && local.use_byo_private_dns_zone && !local.system_assigned_identity
-  private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : "system") : null
+  private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : var.private_dns_zone_mode) : null
   private_dns_zone_resource_group_name = coalesce(var.private_dns_zone_resource_group_name, var.resource_group_name)
   use_byo_private_dns_zone             = var.private_cluster_enabled && var.private_dns_zone_name != null
 

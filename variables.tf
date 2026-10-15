@@ -1566,6 +1566,28 @@ DESCRIPTION
   }
 }
 
+variable "private_dns_zone_mode" {
+  type        = string
+  default     = "system"
+  description = <<DESCRIPTION
+How a private cluster's API server name resolves when `private_dns_zone_name` brings no zone of its own:
+`system` - an AKS-managed private DNS zone, linked to the cluster's network only; `none` - no private
+zone, the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address
+from anywhere, which suits a network that resolves through a DNS server elsewhere, such as the hub
+firewall's DNS proxy (the dev lab behind labfw).
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition     = contains(["system", "none"], var.private_dns_zone_mode)
+    error_message = "private_dns_zone_mode must be \"system\" or \"none\"."
+  }
+  validation {
+    condition     = var.private_dns_zone_mode != "none" || var.private_cluster_public_fqdn_enabled
+    error_message = "private_dns_zone_mode = \"none\" leaves the API server only its public FQDN to be found by: set private_cluster_public_fqdn_enabled = true."
+  }
+}
+
 variable "private_dns_zone_resource_group_name" {
   type        = string
   default     = null

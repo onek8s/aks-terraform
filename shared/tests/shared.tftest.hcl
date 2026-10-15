@@ -449,12 +449,22 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
       azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
       azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
       azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25"
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-apiserver"].address_prefixes[0] == "172.21.15.0/28"
     )
-    error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second."
+    error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second; the API server a /28 at the start of the last."
   }
   assert {
-    condition     = length(azurerm_network_security_group.cell) == 5 && length(azurerm_network_security_rule.cell_deny) == 5
+    condition = (
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-apiserver"].delegation[0].service_delegation[0].name == "Microsoft.ContainerService/managedClusters" &&
+      length(azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].delegation) == 0 &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-apiserver/https"].source_address_prefix == "VirtualNetwork" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/api-server"].source_address_prefix == "172.21.15.0/28"
+    )
+    error_message = "snet-apiserver is delegated to AKS and takes HTTPS from the network; the node subnets take the API server."
+  }
+  assert {
+    condition     = length(azurerm_network_security_group.cell) == 6 && length(azurerm_network_security_rule.cell_deny) == 6
     error_message = "Every subnet has an NSG of its own that denies what it does not allow."
   }
   assert {
@@ -567,7 +577,7 @@ run "a_disabled_country_keeps_its_index_and_gets_nothing" {
   }
 
   assert {
-    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
+    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-apiserver", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
     error_message = "No subnet for the disabled int-se."
   }
 }
@@ -629,8 +639,8 @@ run "an_external_exposure_with_its_zones_plans" {
   }
 
   assert {
-    condition     = length(azurerm_network_security_group.cell) == 5
-    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets."
+    condition     = length(azurerm_network_security_group.cell) == 6
+    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets, and the API server's."
   }
   assert {
     condition     = output.exposure == "ext"
