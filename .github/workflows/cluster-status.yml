@@ -89,6 +89,8 @@ jobs:
             --output table
 
       - name: Flux configuration
+        # A cluster whose Flux extension is still installing has no configuration yet: report the rest anyway
+        continue-on-error: true
         run: |
           id=$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query id --output tsv)
           az rest --method get \
