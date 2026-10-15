@@ -250,6 +250,36 @@ jobs:
         if: (inputs.action == 'apply' || inputs.action == 'destroy') && steps.plan.outputs.changes == 'true'
         run: terraform apply -no-color tfplan
 
+      # App Routing's istiod creates an Envoy Deployment, a LoadBalancer Service (a public IP), an
+      # autoscaler, a disruption budget and a ServiceAccount, all `<gateway>-approuting-istio`, for
+      # every Gateway of class approuting-istio. Once a Gateway names another class (gateway_implementation
+      # = "traefik"), istiod is gone and nothing removes them: the Envoy pods crash without their
+      # control plane, and the Service keeps a public IP whose selector (`gateway-name`) also matches
+      # Traefik's pods. Deleted here by name, only for Gateways that no longer name approuting-istio -
+      # never Traefik's own objects. Idempotent; runs on every apply of a cluster, changes or not.
+      - name: Remove App Routing's leftovers from Gateways of another class
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        run: |
+          set -euo pipefail
+          cluster=$(terraform output -raw name)
+          resource_group=$(sed -n 's/^resource_group_name *= *"\(.*\)"/\1/p' "$VAR_FILE")
+          sudo az aks install-cli --only-show-errors >/dev/null
+          az aks get-credentials -g "$resource_group" -n "$cluster" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl get gateways.gateway.networking.k8s.io -A \
+            -o jsonpath='{range .items[?(@.spec.gatewayClassName!="approuting-istio")]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' |
+            while read -r namespace gateway; do
+              [ -n "$gateway" ] || continue
+              echo "== ${namespace}/${gateway}-approuting-istio"
+              kubectl -n "$namespace" delete --ignore-not-found --wait=false \
+                deployment/"${gateway}-approuting-istio" \
+                service/"${gateway}-approuting-istio" \
+                horizontalpodautoscaler/"${gateway}-approuting-istio" \
+                poddisruptionbudget/"${gateway}-approuting-istio" \
+                serviceaccount/"${gateway}-approuting-istio"
+            done
+
       - name: Summary
         if: always() && steps.plan.outcome != 'skipped'
         env:

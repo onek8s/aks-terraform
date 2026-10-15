@@ -329,6 +329,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **The system node is nearly full**: on 2026-10-14 the two D4als_v6 held ~11 GiB of requests, istiod 4 GiB and
   the VPA add-on 2.4 GiB of it; without both, one node (~5.8 GiB allocatable) holds the rest with ~2 GiB to spare.
   New system-pool workloads need small requests or node-critical priority.
+- **Leaving App Routing orphans its per-Gateway objects** (seen 2026-10-15): istiod's `<gateway>-approuting-istio`
+  Deployment (crash-looping without istiod), public LoadBalancer Service (selector `gateway-name` also matches Traefik's
+  pods), HPA, PDB and ServiceAccount stayed in every gateway namespace after the Traefik switch. Deploy's apply now
+  deletes them for Gateways of another class (step "Remove App Routing's leftovers").
 - **GitHub OIDC subjects of this org carry immutable IDs** (`repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`),
   not `repo:onek8s/aks-terraform:...`: a federated credential on the short form gets 401 at Entra ID.
 - **Azure refuses two Kustomizations of one Flux configuration on the same path** (`InvalidInputParameter`).

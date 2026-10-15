@@ -582,7 +582,10 @@ Traefik refuses with `Accepted: False`):
 Traefik's manifests live here rather than in the Flux repository so that the choice and everything
 it brings are one change of this repository. Switching re-creates the Gateways under their new class
 (Flux `force`): the cell's gateways are down for a few minutes, so drain the cell in Traffic Manager
-first where that matters.
+first where that matters. Leaving App Routing leaves its per-Gateway objects behind (istiod, which
+would remove them, is gone): every Deploy apply of a cluster deletes `<gateway>-approuting-istio`
+(Deployment, Service, autoscaler, disruption budget, ServiceAccount) for each Gateway that names
+another class.
 
 With App Routing, for every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
