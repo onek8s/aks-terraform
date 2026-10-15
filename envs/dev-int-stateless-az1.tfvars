@@ -227,9 +227,13 @@ managed_namespaces = {
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
       # The zone and its domain, for the team's routes: the gateway they attach to and their hostnames.
+      # dns_publish: whether this cell publishes the team's home-cell names (<app>.<zone domain>,
+      # design section 8: an internal app runs in one home cell, whose external-dns alone publishes
+      # it) - not the home cell (az2 is). A lab stand-in for the design's placement artifact.
       substitute = {
         zone        = "int-fi"
         zone_domain = "int-fi.dev.onek8s.lol"
+        dns_publish = "false"
       }
     }
   }
