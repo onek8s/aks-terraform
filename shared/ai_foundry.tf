@@ -17,6 +17,11 @@ resource "azurerm_cognitive_account" "agents" {
   # A Foundry resource with projects - Azure turns it on (and adds a default project) with the first model
   # deployment attempt, and it cannot be turned off without deleting the resource
   project_management_enabled = true
+
+  # Projects need the resource's own identity
+  identity {
+    type = "SystemAssigned"
+  }
 }
 
 # Anthropic's models need the deploying organisation's attestation (modelProviderData: legal name, country, industry):
