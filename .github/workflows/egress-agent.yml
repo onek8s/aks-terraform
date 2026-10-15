@@ -1,0 +1,135 @@
+name: Egress agent
+
+# The egress agent of onek8s/aks-ai-agents (design D59) on the dev environment: it reads the connections the hub
+# firewall denied from the cells, finds the pod behind each source address - the firewall-egress cell (az3) has no
+# overlay, so a pod keeps its own address up to the firewall - and opens one pull request per application namespace
+# to onek8s/azure-landing-zone, adding the destinations to that application's firewall rules
+# (stacks/platform-extensions/firewall-applications/dev-int/<namespace>.yaml). A human reviews and merges it; the
+# landing zone's Platform workflow applies it, and labfw enforces it within minutes. The agent never allows anything
+# itself.
+#
+# What it reads, all with the dev deployment identity's read access:
+#   - labfw's denied connections in Log Analytics (workspace log-labfw-<region> in sub-hub, table
+#     LabfwFirewallLog_CL, filled by the Azure Monitor Agent on labfw's VM; azure-landing-zone modules/labfw logs.tf)
+#     with its Reader on sub-hub - an Azure Firewall's AZFW tables the same way;
+#   - the cells' pods, nodes and namespaces (kubectl read verbs) through the labfw VPN;
+#   - the repositories.
+# The model is Claude on Microsoft Foundry (shared/ ai_foundry, Entra ID). Pull requests are opened with the
+# organisation's GH_OWNER token: the lab has no GitHub App per agent yet (the design gives each agent its own); the
+# agent's tool grants limit it to the landing zone's per-application files. So, like Lab admin, by hand only - no
+# schedule while it holds an owner credential. The run's audit trail is an artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since_hours:
+        description: "Denied connections of the last ... hours"
+        default: "3"
+      dry_run:
+        description: "Record the pull request instead of opening it"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# The labfw VPN's one runner peer (.github/actions/labfw-vpn): one such run at a time
+concurrency:
+  group: labfw-vpn
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    name: egress agent
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 30
+    env:
+      RESOURCE_GROUP: rg-aks-dev
+      # labfw's log workspace (azure-landing-zone network mode labfw)
+      HUB_SUBSCRIPTION_ID: 56b07081-ca7e-4343-b000-bc0998a8c347
+      FIREWALL_WORKSPACE_GROUP: rg-hub-labfw-germanywestcentral
+      FIREWALL_WORKSPACE: log-labfw-germanywestcentral
+    steps:
+      - name: Check the inputs
+        env:
+          SINCE_HOURS: ${{ inputs.since_hours || '3' }}
+        run: |
+          [[ "$SINCE_HOURS" =~ ^[0-9]{1,3}$ ]] && [ "$SINCE_HOURS" -ge 1 ] && [ "$SINCE_HOURS" -le 168 ] || { echo "::error::since_hours must be 1 to 168"; exit 1; }
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/aks-ai-agents
+          path: aks-ai-agents
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/onek8s.github.io
+          path: onek8s.github.io
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the agents
+        run: pip install --quiet ./aks-ai-agents
+
+      - name: Sign in to Azure (GitHub OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: The firewall's log workspace
+        run: |
+          set -euo pipefail
+          id=$(az monitor log-analytics workspace show --subscription "$HUB_SUBSCRIPTION_ID" -g "$FIREWALL_WORKSPACE_GROUP" -n "$FIREWALL_WORKSPACE" --query customerId -o tsv)
+          echo "AKS_AGENT_FIREWALL_WORKSPACE=$id" >> "$GITHUB_ENV"
+          # What the agent will see: denied connections per hour and source, last 6 hours
+          az monitor log-analytics query -w "$id" -o table --analytics-query \
+            'LabfwFirewallLog_CL | where TimeGenerated > ago(6h) | summarize count() by bin(TimeGenerated, 1h), SourceIp, Fqdn, DestinationIp, DestinationPort | order by TimeGenerated desc | take 50' || true
+
+      # The private API servers, through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
+
+      - name: Kubernetes credentials (the agent runs read verbs only)
+        run: |
+          set -euo pipefail
+          sudo az aks install-cli --only-show-errors >/dev/null
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          for cluster in $(az aks list -g "$RESOURCE_GROUP" --query "[?starts_with(name, 'aks-dev-int-stateless')].name" -o tsv); do
+            az aks get-credentials -g "$RESOURCE_GROUP" -n "$cluster" --file "$KUBECONFIG" --only-show-errors
+          done
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl config get-contexts
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+
+      - name: Run the egress agent
+        working-directory: aks-ai-agents
+        env:
+          AKS_AGENT_PLATFORM: config/onek8s-dev.yaml
+          AKS_AGENT_ENV: dev
+          AKS_AGENT_DESIGN: ${{ github.workspace }}/onek8s.github.io
+          AKS_AGENT_DRY_RUN: ${{ inputs.dry_run && 'true' || '' }}
+          AKS_AGENT_GITHUB_TOKEN: ${{ secrets.GH_OWNER }}
+          SINCE_HOURS: ${{ inputs.since_hours || '3' }}
+        run: |
+          set -euo pipefail
+          aks-agent run egress-agent --env dev --task "Look at the connections the hub firewall denied in the last ${SINCE_HOURS} hours from the dev cells (firewall_denied_flows with since_hours ${SINCE_HOURS}). For each application namespace behind them, propose its firewall rules in azure-landing-zone's stacks/platform-extensions/firewall-applications/dev-int/<namespace>.yaml with one pull request per namespace, as your instructions say. The clusters are aks-dev-int-stateless-az3 (the firewall-egress cell, 100.64.0.0/16) and aks-dev-int-stateless-az2." | tee "$RUNNER_TEMP/result.json"
+          {
+            echo '### Egress agent'
+            echo '```json'
+            cat "$RUNNER_TEMP/result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: egress-agent-run
+          path: aks-ai-agents/runs
+          retention-days: 30
