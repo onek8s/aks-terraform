@@ -68,3 +68,8 @@ output "exposure" {
   description = "The exposure these shared resources serve (`int` or `ext`, OneK8s design decision D52), or null when none is stated."
   value       = var.exposure
 }
+
+output "ai_foundry" {
+  description = "The agents' Foundry resource name and model deployment, for aks-ai-agents' model.foundryResource and model.name."
+  value       = var.ai_foundry == null ? null : { resource = azurerm_cognitive_account.agents[0].name, model = azurerm_cognitive_deployment.agents[0].name }
+}

@@ -600,3 +600,20 @@ variable "container_registry_sku" {
     error_message = "container_registry_sku must be Basic, Standard or Premium."
   }
 }
+
+variable "ai_foundry" {
+  type = object({
+    name          = string
+    location      = string
+    model         = optional(string, "claude-sonnet-5-5")
+    model_version = optional(string, "1")
+    capacity      = optional(number, 50)
+  })
+  default     = null
+  description = <<DESCRIPTION
+The AI agents' model endpoint (onek8s/aks-ai-agents, `model.provider: foundry`): a Microsoft Foundry (AI Services)
+resource `name` in `location` - a region that offers Anthropic's models - with one GlobalStandard deployment of
+`model`, named like the model. Entra ID only (no keys); the identity that applies this stack, which also runs the
+agent workflows, gets `Cognitive Services User` on it. Null for none.
+DESCRIPTION
+}
