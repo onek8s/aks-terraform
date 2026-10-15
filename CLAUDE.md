@@ -56,15 +56,40 @@ time), then dispatch the workflow on `main` and check the result. Verify with Cl
 the Isolation tests and the CIS benchmark run **only when the user asks for them separately**. Order for network changes:
 merge + apply `dev-shared` before merging a fleet change that depends on it.
 
-## Current state of dev (2026-10-14)
+## Current state of dev (2026-10-15)
 
-- **Lab reset 2026-10-15** (azure-landing-zone Lab reset, `skip_policies` off, no redeploy): everything in the build
-  tenant is gone - clusters, `rg-aks-dev` (shared/), `rg-aks-dev-tfstate` with this repo's state, hub, management,
-  management groups and policies, Terraform state of the platform and AKS policy. Kept: subscriptions, ALZ bootstrap
-  (`rg-alz-build-*`), `rg-onek8s-dns`. The notes below describe the lab before the reset. To rebuild: Platform apply,
-  AKS policy apply, then Deploy dev-shared and the cells with `allow_empty_state`. `kv-onek8s-dev-platform` is soft-deleted
-  (purge protection) and is recovered when created again. Lab reset's `skip_policies` (default on) keeps management
-  groups and Azure Policy with their state, because removing them takes most of a reset's time.
+- **The lab moved (2026-10-15, design D57)**: after the Lab reset (azure-landing-zone, `skip_policies` off) the build
+  tenant runs in **germanywestcentral** (the ALZ bootstrap stays in swedencentral) as the **internal exposure**:
+  `sub-aks-dev` plays `sub-aks-dev-int`, `exposure = "int"`, Finland only (`int-fi`; `int-se` defined with
+  `isolation_zones.<zone>.enabled = false`). Cells `dev-int-stateless-az1` (172.22.0.0/20, **disabled** with
+  `cells.<cell>.enabled = false`: logical zone 1 of germanywestcentral is `NotAvailableForSubscription` for every VM size
+  in sub-aks-dev) and `dev-int-stateless-az2` (172.22.16.0/20, zone 2, **the running cell**). Stacks/workflows:
+  `dev-int-stateless-az1|az2`, `dev-int-stateful`; the `dev-ext-*` tfvars are gone (fleet keeps its `clusters/dev-ext-*`).
+- **Network: azure-landing-zone mode `labfw` = firewall mode with labfw** (VM `labfw-fw`, Standard_B2ats_v2, 10.0.1.4,
+  public IP 4.184.103.12, `rg-hub-labfw-germanywestcentral` in sub-hub; enforces `afwp-hub-int-germanywestcentral` + parent).
+  shared/ `hub`: cells peered with `vnet-hub-germanywestcentral`, route table `rt-<cell>` 0.0.0.0/0 -> 10.0.1.4 on the node
+  subnets, VNet DNS = labfw's DNS proxy, internal private DNS (`int-fi.dev.onek8s.lol`) also linked to the hub. Clusters
+  `outbound_type = "userDefinedRouting"`; the cluster identity gets Network Contributor on the route table. Cell egress
+  allow-lists: parent `rcg-platform` (AKS FQDN tag, `AzureCloud.germanywestcentral` 443 for the public API server,
+  `platform_source_fqdns` = chart/image sources) + child `rcg-aks-dev` (vaults, ACR, Grafana, zone lists). A denied
+  flow shows in labfw's logs (azure-lab-fw view-logs or `labfw logs --action deny` via Run Command).
+- **No public entry point in the internal cell**: a public LB cannot answer behind labfw (asymmetric routing), so
+  `platform_gateway_enabled = false`, `flux_github_webhook = false` (Flux polls every minute; the Flux webhooks workflow
+  removes the hooks). The fleet's `flux-system-key-vault` Kustomization gives flux-system its SecretStore.
+  Traffic Manager: only for a deployed external zone (`global_hostnames.<name>.zone`), so none now.
+- **Vaults `kv-onek8s-gwc-platform` and `kv-onek8s-gwc-int-fi`** (kv-onek8s-dev-platform is soft-deleted with purge
+  protection in swedencentral until 2027-01). Store secret / Sign images use the new one. ACR `acronek8sdev` kept its name.
+- **System node `Standard_D4alds_v6` with `os_disk_type = "Ephemeral"`** (no Premium SSD; quota family
+  `standardDaldv6Family`). Quotas in germanywestcentral (sub-aks-dev): regional 38, Dpsv6 16, Daldv6 8, low-priority 3
+  (a raise was throttled). sub-hub: Basv2 4 (raised for labfw).
+- **Identity**: the landing zone recreated `id-aks-dev-apply-germanywestcentral` (client ID b975d49a-...); this repo's
+  `dev` environment AZURE_CLIENT_ID was set to it with Lab admin (gh). Do the same after any rebuild of sub-mgmt.
+- **labfw VPN** (WireGuard, UDP 51820 on 4.184.103.12): peer `olli-1` 10.0.12.10 (public key in azure-landing-zone
+  terraform.tfvars, private key in `kv-onek8s-gwc-platform` as `labfw-vpn--olli-1-private-key`). The pool counts as
+  management: API server private endpoints, jump host, the cells' 443 (int-fi gateway); DNS 10.0.12.1.
+- **Isolation tests** were only renamed mechanically for the internal one-zone cell (cross-zone, external HTTPS, R2
+  steps still assume the external two-zone lab) - adapt before the next run.
+- The notes below describe the external lab in swedencentral before 2026-10-15 unless they say otherwise.
 - **Internal and external are separate subscriptions and clusters** (security's decision 2026-10-14, design D52);
   countries stay isolation zones (node pool + network + vault) inside them. dev is **external only**:
   `sub-aks-dev` plays `sub-aks-dev-ext`, `shared/envs/dev.tfvars` has `exposure = "ext"` and only ext-fi/ext-se,
