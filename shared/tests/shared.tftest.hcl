@@ -435,7 +435,7 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
       ext-fi = { exposure = "ext", index = 3 }
     }
     cells = {
-      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20", api_server_subnet = true }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
   }
@@ -461,7 +461,7 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
       azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-apiserver/https"].source_address_prefix == "VirtualNetwork" &&
       azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/api-server"].source_address_prefix == "172.21.15.0/28"
     )
-    error_message = "snet-apiserver is delegated to AKS and takes HTTPS from the network; the node subnets take the API server."
+    error_message = "With api_server_subnet, snet-apiserver is delegated to AKS and takes HTTPS from the network; the node subnets take the API server."
   }
   assert {
     condition     = length(azurerm_network_security_group.cell) == 6 && length(azurerm_network_security_rule.cell_deny) == 6
@@ -577,7 +577,7 @@ run "a_disabled_country_keeps_its_index_and_gets_nothing" {
   }
 
   assert {
-    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-apiserver", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
+    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
     error_message = "No subnet for the disabled int-se."
   }
 }
@@ -639,8 +639,8 @@ run "an_external_exposure_with_its_zones_plans" {
   }
 
   assert {
-    condition     = length(azurerm_network_security_group.cell) == 6
-    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets, and the API server's."
+    condition     = length(azurerm_network_security_group.cell) == 5
+    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets."
   }
   assert {
     condition     = output.exposure == "ext"

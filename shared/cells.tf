@@ -18,10 +18,9 @@
 #
 # Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the
 # system pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first
-# half) and its internal load balancer (a /27 in the second half). The last /24 (slot 15) starts with
-# `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design section 3): a private
-# API server is an internal load balancer there, which the nodes reach directly and the management
-# network and the labfw VPN through the hub.
+# half) and its internal load balancer (a /27 in the second half). With `api_server_subnet`, the last /24
+# (slot 15) starts with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design
+# section 3) - which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
   isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
@@ -38,6 +37,8 @@ locals {
           kind   = "system"
           prefix = cidrsubnet(settings.address_space, 4, 0)
         }
+      },
+      !settings.api_server_subnet ? {} : {
         "${cell}/snet-apiserver" = {
           cell   = cell
           name   = "snet-apiserver"
@@ -91,9 +92,13 @@ locals {
         "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = [var.cell_pod_cidr] }
         "${key}/lb-probes"   = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
         "${key}/same-subnet" = { subnet = key, priority = 150, protocol = "*", ports = ["*"], sources = [subnet.prefix] }
-        # The VNet-integrated API server: the kubelet (logs, exec) and admission webhooks
-        "${key}/api-server" = { subnet = key, priority = 160, protocol = "Tcp", ports = ["*"], sources = [local.cell_subnets["${subnet.cell}/snet-apiserver"].prefix] }
       } if contains(["system", "nodes"], subnet.kind)
+    ]...),
+    # The VNet-integrated API server: the kubelet (logs, exec) and admission webhooks
+    merge([
+      for key, subnet in local.cell_subnets : {
+        "${key}/api-server" = { subnet = key, priority = 160, protocol = "Tcp", ports = ["*"], sources = [local.cell_subnets["${subnet.cell}/snet-apiserver"].prefix] }
+      } if contains(["system", "nodes"], subnet.kind) && contains(keys(local.cell_subnets), "${subnet.cell}/snet-apiserver")
     ]...),
     # The API server's subnet: HTTPS from the network (the nodes, and through the hub's peering the
     # management network and the labfw VPN, which arrive SNATed to the firewall), the nodes' tunnel

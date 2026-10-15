@@ -1,7 +1,7 @@
 # Joins a GitHub-hosted runner to the hub firewall's (labfw's) WireGuard VPN, so that it reaches the
-# dev cells' private API servers (API Server VNet Integration in snet-apiserver, OneK8s design
-# section 3). The client config - the peer `github-runners` of onek8s/azure-landing-zone's labfw, its
-# private key and the cells' API server subnets as AllowedIPs - is the platform vault's secret
+# dev cells' private API servers (Private Link endpoints in their system subnets, OneK8s design
+# section 3, D58). The client config - the peer `github-runners` of onek8s/azure-landing-zone's labfw, its
+# private key and the cells' system subnets as AllowedIPs - is the platform vault's secret
 # `labfw-vpn--github-runners`, stored with the Store secret workflow; the runner must be signed in to
 # Azure first. The API server's public FQDN resolves to its private address, so the tunnel needs no DNS.
 #
