@@ -126,12 +126,13 @@ locals {
       } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
     # With `hub`: ping from the hub firewall's address, which the management network and the labfw VPN
-    # arrive as (SNAT) - the nodes and an internal zone's load balancer answer it; never `VirtualNetwork`,
-    # which would let the zones ping each other.
+    # arrive as (SNAT) - the nodes answer it; never `VirtualNetwork`, which would let the zones ping each
+    # other. Not the load balancers' subnets: an internal load balancer's frontend forwards only its rules'
+    # protocols (TCP 443) and does not answer ping itself, nor does a private endpoint.
     merge([
       for key, subnet in local.cell_subnets : {
         "${key}/icmp-from-hub-firewall" = { subnet = key, priority = 220, protocol = "Icmp", ports = ["*"], sources = [var.hub.next_hop_ip] }
-      } if var.hub != null && (contains(["system", "nodes"], subnet.kind) || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int"))
+      } if var.hub != null && contains(["system", "nodes"], subnet.kind)
     ]...),
     # A rule takes one service tag, so the system pool's HTTPS from the network is a rule of its own.
     {
