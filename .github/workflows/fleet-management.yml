@@ -36,6 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 10
+    # The labfw VPN's runner peer (.github/actions/labfw-vpn): one such run at a time
+    concurrency:
+      group: labfw-vpn
+      cancel-in-progress: false
     steps:
       - name: Check the inputs
         env:
@@ -53,6 +57,11 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The vault (no public network access), through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
 
       - name: ${{ inputs.action }}
         env:

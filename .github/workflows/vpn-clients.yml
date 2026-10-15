@@ -1,0 +1,110 @@
+name: VPN clients
+
+# The GitHub-hosted runners' WireGuard client configs for the hub firewall's (labfw's) VPN
+# (.github/actions/labfw-vpn), kept as secrets of this repository's `dev` environment: the vaults are
+# private (no public network access), so the one credential a runner needs to reach them - the VPN -
+# cannot come from a vault itself. Values are never printed.
+#
+#   copy-runners  the platform vault's `labfw-vpn--github-runners` (peer github-runners, 10.0.12.11)
+#                 -> secret LABFW_VPN_GITHUB_RUNNERS; while the vault still answers on its public
+#                 endpoint, or over the VPN
+#   new-peer      a new key pair for `peer` with `address`, otherwise the runners' config (labfw's key,
+#                 endpoint, AllowedIPs) -> secret LABFW_VPN_<PEER>; prints the public key, which goes into
+#                 onek8s/azure-landing-zone stacks/platform-extensions/terraform.tfvars (labfw.vpn.peers)
+#
+# Peers: github-runners (every VPN workflow but Deploy, concurrency group labfw-vpn), github-deploy
+# (Deploy, which holds the tunnel for a whole Terraform run). WireGuard follows a peer to its latest
+# endpoint, so two runners must never share one at the same time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [copy-runners, new-peer]
+        default: copy-runners
+      peer:
+        description: "new-peer: the peer's name, e.g. github-deploy"
+        default: github-deploy
+      address:
+        description: "new-peer: its tunnel address"
+        default: 10.0.12.12/32
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  vpn:
+    name: ${{ inputs.action }} ${{ inputs.action == 'new-peer' && inputs.peer || '' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      VAULT: kv-onek8s-gwc-platform
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Check the inputs
+        env:
+          PEER: ${{ inputs.peer }}
+          ADDRESS: ${{ inputs.address }}
+        run: |
+          [[ "$PEER" =~ ^[a-z0-9-]+$ ]] || { echo "::error::peer: lower-case letters, digits and -"; exit 1; }
+          [[ "$ADDRESS" =~ ^10\.0\.12\.[0-9]+/32$ ]] || { echo "::error::address: one address of the VPN pool, 10.0.12.x/32"; exit 1; }
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: The runners' config
+        env:
+          CONFIG: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -n "$CONFIG" ]; then
+            printf '%s\n' "$CONFIG" > "$RUNNER_TEMP/runners.conf"
+          else
+            az keyvault secret show --vault-name "$VAULT" --name labfw-vpn--github-runners --query value -o tsv > "$RUNNER_TEMP/runners.conf"
+          fi
+          grep -q '^\[Peer\]' "$RUNNER_TEMP/runners.conf" || { echo "::error::no WireGuard config"; exit 1; }
+
+      - name: copy-runners
+        if: inputs.action == 'copy-runners'
+        env:
+          GH_TOKEN: ${{ secrets.GH_OWNER }}
+        run: |
+          set -euo pipefail
+          gh secret set LABFW_VPN_GITHUB_RUNNERS --env dev --repo "$REPO" < "$RUNNER_TEMP/runners.conf"
+          echo "LABFW_VPN_GITHUB_RUNNERS set"
+
+      - name: new-peer
+        if: inputs.action == 'new-peer'
+        env:
+          GH_TOKEN: ${{ secrets.GH_OWNER }}
+          PEER: ${{ inputs.peer }}
+          ADDRESS: ${{ inputs.address }}
+        run: |
+          set -euo pipefail
+          umask 077
+          command -v wg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools >/dev/null; }
+          key="$(wg genkey)"
+          echo "::add-mask::$key"
+          public="$(wg pubkey <<<"$key")"
+          sed -E -e "s|^(PrivateKey *= *).*$|\1${key}|" -e "s|^(Address *= *).*$|\1${ADDRESS}|" \
+            "$RUNNER_TEMP/runners.conf" > "$RUNNER_TEMP/peer.conf"
+          grep -qE "^Address *= *${ADDRESS}$" "$RUNNER_TEMP/peer.conf" || { echo "::error::the runners' config has no Address line"; exit 1; }
+          name="LABFW_VPN_$(tr 'a-z-' 'A-Z_' <<<"$PEER")"
+          gh secret set "$name" --env dev --repo "$REPO" < "$RUNNER_TEMP/peer.conf"
+          rm -f "$RUNNER_TEMP/peer.conf"
+          {
+            echo "### $name set"
+            echo "Add to onek8s/azure-landing-zone labfw.vpn.peers:"
+            echo '```'
+            echo "{ name = \"$PEER\", public_key = \"$public\", allowed_ips = [\"$ADDRESS\"] },"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/runners.conf"

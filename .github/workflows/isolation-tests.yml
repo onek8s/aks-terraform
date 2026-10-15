@@ -184,6 +184,8 @@ jobs:
 
       # The private API server, through the hub firewall's VPN
       - uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
 
       - name: Credentials
         run: |

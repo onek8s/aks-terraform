@@ -1,42 +1,70 @@
-# Joins a GitHub-hosted runner to the hub firewall's (labfw's) WireGuard VPN, so that it reaches the
-# dev cells' private API servers (Private Link endpoints in their system subnets, OneK8s design
-# section 3, D58). The client config - the peer `github-runners` of onek8s/azure-landing-zone's labfw, its
-# private key and the cells' system subnets as AllowedIPs - is the platform vault's secret
-# `labfw-vpn--github-runners`, stored with the Store secret workflow; the runner must be signed in to
-# Azure first. The API server's public FQDN resolves to its private address, so the tunnel needs no DNS.
+# Joins a GitHub-hosted runner to the hub firewall's (labfw's) WireGuard VPN, so that it reaches what has no
+# public endpoint: the dev cells' private API servers (Private Link endpoints in their system subnets, OneK8s
+# design section 3, D58) and the private endpoints of the environment's services - the vaults, the registry,
+# Foundry and the Terraform state (shared/ snet-shared-pe) and Azure Monitor (the hub's Private Link scope in the
+# management network's snet-pe).
 #
-# One peer for every workflow: WireGuard follows a peer to its latest endpoint, so two runners on the
-# tunnel at once take it from each other. The workflows that use it share the concurrency group
-# `labfw-vpn`.
+# The client config is a secret of the `dev` environment, passed as `config` (LABFW_VPN_GITHUB_RUNNERS, or
+# LABFW_VPN_GITHUB_DEPLOY for Deploy; set by the VPN clients workflow): the vaults are private, so the VPN's
+# own credential cannot come from one. Without `config` the platform vault's `labfw-vpn--github-runners` is read
+# (the runner must be signed in to Azure), which works only while the vault still answers publicly.
+#
+# Names: the API servers' public FQDNs resolve to their private addresses, but a private endpoint's name does
+# only through the hub's private link zones, which labfw's DNS proxy (10.0.12.1) answers from. Only the names in
+# `private_names` (and their subdomains) are sent there - everything else the runner resolves as before.
+#
+# One peer per config: WireGuard follows a peer to its latest endpoint, so two runners on one peer at once take
+# it from each other. The workflows on github-runners share the concurrency group `labfw-vpn`; Deploy has its own.
 name: labfw VPN
-description: Join the runner to the labfw VPN (dev cells' private API servers)
+description: Join the runner to the labfw VPN (private API servers and private endpoints)
 inputs:
+  config:
+    description: The WireGuard client config (a secret); empty reads it from the vault
+    default: ""
   vault:
-    description: The vault holding the client config
+    description: Without config, the vault holding it
     default: kv-onek8s-gwc-platform
   secret:
-    description: The secret holding the client config
+    description: Without config, the secret holding it
     default: labfw-vpn--github-runners
   extra_allowed_ips:
     description: >-
       Routes added to the config's AllowedIPs (comma-separated): az3's system subnet and its zones' ranges (their
-      internal load balancers, design D59) and labfw's DNS proxy - built after the secret was stored, so it need
-      not be stored again
-    default: 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32
+      internal load balancers, design D59), labfw's DNS proxy, the environment's private endpoints (shared/
+      snet-shared-pe) and the management network's (snet-pe: Azure Monitor Private Link scope)
+    default: 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32, 172.20.2.0/26, 10.0.8.128/26
+  private_names:
+    description: >-
+      DNS names (with their subdomains) resolved through labfw's DNS proxy, space-separated: the private
+      endpoints' services. Narrow on purpose - a whole suffix such as blob.core.windows.net would also send
+      other accounts' names to the hub's private zones, where an account with a private endpoint elsewhere does
+      not resolve.
+    default: >-
+      kv-onek8s-gwc-platform.vault.azure.net kv-onek8s-gwc-int-fi.vault.azure.net kv-onek8s-gwc-int-se.vault.azure.net
+      acronek8sdev.azurecr.io acronek8sdev.germanywestcentral.data.azurecr.io
+      ais-onek8s-dev-agents.cognitiveservices.azure.com ais-onek8s-dev-agents.openai.azure.com
+      ais-onek8s-dev-agents.services.ai.azure.com stonek8sdevtfstate.blob.core.windows.net
+      api.loganalytics.io api.loganalytics.azure.com
 runs:
   using: composite
   steps:
     - name: Join the labfw VPN
       shell: bash
       env:
+        CONFIG: ${{ inputs.config }}
         VAULT: ${{ inputs.vault }}
         SECRET: ${{ inputs.secret }}
         EXTRA_ALLOWED_IPS: ${{ inputs.extra_allowed_ips }}
+        PRIVATE_NAMES: ${{ inputs.private_names }}
       run: |
         set -euo pipefail
         command -v wg-quick >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools >/dev/null; }
         umask 077
-        az keyvault secret show --vault-name "$VAULT" --name "$SECRET" --query value -o tsv > "$RUNNER_TEMP/labfw.conf"
+        if [ -n "$CONFIG" ]; then
+          printf '%s\n' "$CONFIG" > "$RUNNER_TEMP/labfw.conf"
+        else
+          az keyvault secret show --vault-name "$VAULT" --name "$SECRET" --query value -o tsv > "$RUNNER_TEMP/labfw.conf"
+        fi
         [ -z "$EXTRA_ALLOWED_IPS" ] || sed -i -E "s|^(AllowedIPs *= *.*)$|\1, ${EXTRA_ALLOWED_IPS//,/, }|" "$RUNNER_TEMP/labfw.conf"
         sudo install -m 600 "$RUNNER_TEMP/labfw.conf" /etc/wireguard/labfw.conf
         rm -f "$RUNNER_TEMP/labfw.conf"
@@ -47,3 +75,14 @@ runs:
           sleep 2
         done
         sudo wg show labfw | grep -E 'endpoint|allowed ips|latest handshake' || true
+        # The private endpoints' names through labfw's DNS proxy (systemd-resolved routing domains)
+        if [ -n "$PRIVATE_NAMES" ]; then
+          domains=()
+          for name in $PRIVATE_NAMES; do domains+=("~$name"); done
+          sudo resolvectl dns labfw 10.0.12.1
+          sudo resolvectl domain labfw "${domains[@]}"
+          sudo resolvectl flush-caches
+          for name in $PRIVATE_NAMES; do
+            echo "$name -> $(getent hosts "$name" | awk '{print $1}' | head -1)"
+          done
+        fi

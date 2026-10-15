@@ -147,6 +147,8 @@ jobs:
 
       # The private API server, through the hub firewall's VPN
       - uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
 
       - name: Inside the cluster
         continue-on-error: true
