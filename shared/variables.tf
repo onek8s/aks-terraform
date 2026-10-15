@@ -608,6 +608,9 @@ variable "ai_foundry" {
     model         = optional(string, "claude-sonnet-5-5")
     model_version = optional(string, "1")
     capacity      = optional(number, 50)
+    # The deployment needs Foundry quota for the model (Tokens Per Minute, per subscription and region); false
+    # keeps the attestation below but makes no deployment until the quota is granted
+    deploy = optional(bool, true)
     # Who deploys Anthropic's model: sent to Anthropic, and the Marketplace offer is signed in this name. Null: the
     # Foundry resource without a deployment.
     model_provider = optional(object({

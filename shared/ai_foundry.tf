@@ -21,7 +21,7 @@ resource "azurerm_cognitive_account" "agents" {
 # Anthropic with every request - so the deployment is made only when ai_foundry.model_provider says who that is.
 # azapi: azurerm has no modelProviderData.
 resource "azapi_resource" "agents_model" {
-  count = var.ai_foundry == null ? 0 : var.ai_foundry.model_provider == null ? 0 : 1
+  count = var.ai_foundry == null ? 0 : var.ai_foundry.model_provider == null || !var.ai_foundry.deploy ? 0 : 1
 
   type      = "Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview"
   name      = var.ai_foundry.model
