@@ -44,6 +44,68 @@ private_endpoints = {
   public_network_access      = true
 }
 
+# The isolation zones (OneK8s design, "Isolation zone") of the internal exposure: the internal
+# workloads of Finland and Sweden. The external ones (ext-fi index 3, ext-se index 4) belong to the
+# external subscription and its clusters; their indexes stay reserved. Each has its own address
+# range in every cell, its own node subnet and NAP NodePools, its own Key Vault, gateway and External
+# Secrets Operator. `index` is the zone's /24 in each cell's address space and never changes.
+#
+# Sweden is enabled again since 2026-10-15 for the firewall-egress cell az3 (design D59), the only cell
+# that runs it: every cell gets its subnets, but only az3's tfvars and the fleet's zones.yaml name it.
+# `enabled = false` would take its subnets, vault, namespaces and private DNS away again.
+isolation_zones = {
+  int-fi = { exposure = "int", index = 1 }
+  int-se = { exposure = "int", index = 2 }
+}
+
+# The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system, and per
+# zone snet-<zone>-nodes and snet-<zone>-ilb, each with its own NSG; VNet encryption on.
+# The design's cells, one per availability zone. The lab runs one: az1 is disabled (2026-10-15) because
+# germanywestcentral's logical zone 1 is "NotAvailableForSubscription" for every VM size in sub-aks-dev
+# (enabling it is a support request to Microsoft), so az2 runs. A disabled cell keeps its address space
+# and its tfvars (envs/dev-int-stateless-az1.tfvars) but has no network.
+#
+# az3 (2026-10-15, design D59) is the lab's firewall-egress cell: no overlay (`pod_network = "subnet"`),
+# so its pods take addresses of their zone's node subnet in 100.64.0.0/16 (RFC 6598 shared address
+# space, never routed outside the landing zone), keep them up to labfw, and labfw - not Cilium - decides
+# every flow that leaves the cluster, by zone and by the pod's address. Cilium keeps the policies inside
+# the cluster. Its layout: snet-system 100.64.0.0/20, int-fi 100.64.16.0/21, int-se 100.64.32.0/21.
+cells = {
+  dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
+  dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
+  dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
+}
+
+# The landing zone's hub (azure-landing-zone network mode labfw): every cell is peered with it, sends
+# 0.0.0.0/0 to labfw at 10.0.1.4 - the stand-in for the hub's Azure Firewall, enforcing the internal
+# exposure's Firewall Policy - and uses labfw's DNS proxy. The internal zones' private DNS is linked
+# to the hub too. The cells' clusters egress through it (outbound type userDefinedRouting).
+hub = {
+  virtual_network_id = "/subscriptions/56b07081-ca7e-4343-b000-bc0998a8c347/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
+  next_hop_ip        = "10.0.1.4"
+  dns_servers        = ["10.0.1.4"]
+}
+
+# The internal zones' names (int-fi.dev.onek8s.lol), resolved in the cells and - through labfw's DNS
+# proxy - in the corporate network behind the hub.
+internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
+
+
+# The environment's platform Key Vault (OneK8s design sections 13 and 18), which the clusters name
+# in key_vault_name with key_vault_create = false: the gateways' certificates, the clusters'
+# customer-managed keys (so purge protection - a disk encryption set needs it) and the Flux webhook
+# token. Key Vault names are global; pick another if this one is taken. kv-onek8s-gwc-* since the
+# move to germanywestcentral: kv-onek8s-dev-platform is soft-deleted with purge protection in
+# swedencentral (until 2027-01) and cannot be recovered into another region.
+key_vault_name                     = "kv-onek8s-gwc-platform"
+key_vault_purge_protection_enabled = true
+
+# One vault per isolation zone, for the secrets of the zone's applications (design section 6).
+zone_key_vault_names = {
+  int-fi = "kv-onek8s-gwc-int-fi"
+  int-se = "kv-onek8s-gwc-int-se"
+}
+
 # The environment's Log Analytics workspace (design section 19): every cluster's Kubernetes audit log
 # (CIS AKS Benchmark 2.1.1), 30 days, at most 1 GB a day.
 log_analytics_workspace_name = "log-dev-platform"
@@ -83,12 +145,6 @@ container_registry_builds = {
   "aks-hello:0.4.1" = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "86e8752ea3e903be07d49246e3ed021846df263b"
-  }
-  # The node's public IP (/public-ip, api.ipify.org once at start): which address the platform's egress
-  # gave the pod, and a second outbound dependency for the firewall-egress cell
-  "aks-hello:0.5.0" = {
-    repository = "https://github.com/onek8s/aks-hello.git"
-    commit     = "553980c84d1eeeed34060eff76f9b8b2c539a2ed"
   }
 }
 
