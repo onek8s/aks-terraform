@@ -536,3 +536,39 @@ DESCRIPTION
     error_message = "hub.next_hop_ip must be an IPv4 address."
   }
 }
+
+variable "private_endpoints" {
+  type = object({
+    subnet_name    = optional(string, "snet-shared-pe")
+    address_prefix = string
+    # The resource group of the landing zone's private link DNS zones (privatelink.vaultcore.azure.net,
+    # privatelink.azurecr.io), in the hub's subscription
+    dns_zone_resource_group_id = string
+  })
+  default     = null
+  description = <<DESCRIPTION
+Private endpoints for the environment's services - the platform vault, every zone vault and the
+container registry (which needs container_registry_sku = "Premium") - in a subnet `subnet_name` with
+`address_prefix` of the environment network virtual_network_create creates, registered in the
+landing zone's private link DNS zones in `dns_zone_resource_group_id` (the deploying identity needs
+Private DNS Zone Contributor there). With `hub`, that network is peered with the hub. Public network
+access stays as it is. Null for none.
+DESCRIPTION
+
+  validation {
+    condition     = var.private_endpoints == null || can(cidrhost(try(var.private_endpoints.address_prefix, ""), 0))
+    error_message = "private_endpoints.address_prefix must be a CIDR range."
+  }
+}
+
+variable "container_registry_sku" {
+  type        = string
+  default     = "Basic"
+  description = "SKU of the environment's container registry: Basic, Standard or Premium. Premium for a private endpoint (private_endpoints); it also gets a dedicated data endpoint then, so the image layers come through the endpoint too."
+  nullable    = false
+
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.container_registry_sku)
+    error_message = "container_registry_sku must be Basic, Standard or Premium."
+  }
+}

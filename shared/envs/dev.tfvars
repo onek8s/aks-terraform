@@ -29,6 +29,15 @@ subnets = {
   snet-aks-nodes = "172.20.0.0/23"
 }
 
+# The environment's services on private endpoints in that network (snet-shared-pe, design section 8):
+# the platform vault, the int-fi vault and the registry, registered in the hub's private link zones.
+# The cells and the labfw VPN's clients resolve them to these addresses through labfw's DNS proxy.
+# Public access stays on for the GitHub-hosted deployment pipelines.
+private_endpoints = {
+  address_prefix             = "172.20.2.0/26"
+  dns_zone_resource_group_id = "/subscriptions/56b07081-ca7e-4343-b000-bc0998a8c347/resourceGroups/rg-hub-dns-germanywestcentral"
+}
+
 # The isolation zones (OneK8s design, "Isolation zone") of the internal exposure: the internal
 # workloads of Finland and Sweden. The external ones (ext-fi index 3, ext-se index 4) belong to the
 # external subscription and its clusters; their indexes stay reserved. Each has its own address
@@ -91,6 +100,8 @@ log_analytics_workspace_name = "log-dev-platform"
 # The environment's container registry, which every cluster pulls from as its kubelet identity. Not
 # part of the landing zone. Registry names are global; pick another if this one is taken.
 container_registry_name = "acronek8sdev"
+# Premium for its private endpoint (and a dedicated data endpoint for the layers).
+container_registry_sku = "Premium"
 
 # The images the registry builds itself, from the apps' public repositories at a pinned commit.
 # Releasing an image is adding its tag here.

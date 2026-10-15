@@ -1012,3 +1012,56 @@ run "a_disabled_cell_keeps_its_address_space_but_gets_no_network" {
     error_message = "The enabled cell's zone takes the /24 of its index in the cell's own address space."
   }
 }
+
+run "private_endpoints_for_the_vaults_and_the_registry" {
+  command = plan
+
+  variables {
+    resource_group_create         = true
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
+    zone_key_vault_names          = { int-fi = "kv-test-int-fi" }
+    container_registry_name       = "acrtest"
+    container_registry_sku        = "Premium"
+    private_endpoints = {
+      address_prefix             = "172.20.2.0/26"
+      dns_zone_resource_group_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns"
+    }
+    hub = {
+      virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub"
+      next_hop_ip        = "10.0.1.4"
+    }
+  }
+
+  assert {
+    condition     = sort(keys(azurerm_private_endpoint.this)) == sort(["kv-platform", "kv-int-fi", "acr"])
+    error_message = "Every vault and the registry get a private endpoint."
+  }
+  assert {
+    condition     = tolist(azurerm_private_endpoint.this["acr"].private_service_connection[0].subresource_names) == tolist(["registry"]) && one(azurerm_private_endpoint.this["kv-int-fi"].private_dns_zone_group).private_dns_zone_ids[0] == "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    error_message = "The endpoints register in the hub's private link zones."
+  }
+  assert {
+    condition     = azurerm_container_registry.this[0].data_endpoint_enabled && length(azurerm_virtual_network_peering.hub_to_environment) == 1
+    error_message = "A Premium registry gets a dedicated data endpoint; the environment network is peered with the hub."
+  }
+}
+
+run "a_basic_registry_cannot_have_a_private_endpoint" {
+  command = plan
+
+  variables {
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    container_registry_name       = "acrtest"
+    private_endpoints = {
+      address_prefix             = "172.20.2.0/26"
+      dns_zone_resource_group_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns"
+    }
+  }
+
+  expect_failures = [check.a_registry_endpoint_needs_premium]
+}

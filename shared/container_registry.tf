@@ -3,15 +3,18 @@
 # configuration, so nothing secret is kept for it anywhere. It is part of the clusters' estate here,
 # not of the landing zone.
 #
-# Basic: a prototype's few images. Admin user off - only Entra ID identities reach it.
+# container_registry_sku: Basic for a prototype's few images, Premium for a private endpoint (with a
+# dedicated data endpoint, so the layers come through it too). Admin user off - only Entra ID
+# identities reach it.
 resource "azurerm_container_registry" "this" {
   count = var.container_registry_name == null ? 0 : 1
 
-  name                = var.container_registry_name
-  location            = var.location
-  resource_group_name = local.resource_group_name
-  sku                 = "Basic"
-  admin_enabled       = false
+  name                  = var.container_registry_name
+  location              = var.location
+  resource_group_name   = local.resource_group_name
+  sku                   = var.container_registry_sku
+  admin_enabled         = false
+  data_endpoint_enabled = var.container_registry_sku == "Premium"
 }
 
 # Nothing pushes to the registry from outside: it builds the images itself, with an ACR task each,
