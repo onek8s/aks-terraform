@@ -7,9 +7,10 @@ name: Renew Certificate
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Gateway
 #
 #   int-fi-gateway--wildcard     *.int-fi.dev.onek8s.lol     the int-fi zone's gateway
+#   int-se-gateway--wildcard     *.int-se.dev.onek8s.lol     the int-se zone's gateway (az3, design D59)
 #
 # dev's platform vault is the internal exposure's since 2026-10-15 (OneK8s design decision D52): only
-# the enabled internal zones' certificates - Sweden's int-se is disabled - and no platform gateway
+# the enabled internal zones' certificates - Finland's and, since 2026-10-15, Sweden's - and no platform gateway
 # (an internal cell has no public entry point). The external ones (*.onek8s.lol for the platform
 # gateway, *.ext-fi.dev.onek8s.lol, ...) belong in the external exposure's platform vault. The names
 # are private (int-fi.dev.onek8s.lol is a private zone), but DNS-01 runs in the public onek8s.lol.
@@ -113,7 +114,7 @@ jobs:
       # One certificate at a time: they share one ACME account, whose key the first run stores.
       max-parallel: 1
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.int-fi.dev.onek8s.lol","certificate_name":"int-fi-gateway--wildcard"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"domains":"{0}","certificate_name":"{1}"}}]', inputs.domains, inputs.certificate_name) || '[{"domains":"*.int-fi.dev.onek8s.lol","certificate_name":"int-fi-gateway--wildcard"},{"domains":"*.int-se.dev.onek8s.lol","certificate_name":"int-se-gateway--wildcard"}]') }}
     # A GitHub environment per Terraform environment, so a principal can be scoped to one of them.
     # Variables and secrets set on the repository apply when the environment sets none. Protection
     # rules apply to scheduled runs too: required reviewers hold the renewal until someone approves.
