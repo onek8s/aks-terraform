@@ -266,7 +266,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   resolves through labfw in the hub - CIS 5.4.2 accepted for that). Reached through the hub: the landing zone's
   `system_prefixes` carry the API server subnets (management-to-cells, VPN routes). **GitHub-hosted runners join the
   labfw VPN** (`.github/actions/labfw-vpn`, peer `github-runners` 10.0.12.11, its config is the platform vault secret
-  `labfw-vpn-github-runners`) before kubectl; one peer, so Cluster status, Isolation tests and CIS share the
+  `labfw-vpn--github-runners`) before kubectl; one peer, so Cluster status, Isolation tests and CIS share the
   concurrency group `labfw-vpn`. If labfw's public IP or key changes, re-store that secret (Store secret).
 - **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24 each (nodes /25, ILB /27),
   own NSG, own Key Vault (`kv-onek8s-dev-<zone>`), own NAP AKSNodeClass + NodePools, own

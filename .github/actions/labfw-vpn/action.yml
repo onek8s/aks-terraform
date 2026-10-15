@@ -2,7 +2,7 @@
 # dev cells' private API servers (API Server VNet Integration in snet-apiserver, OneK8s design
 # section 3). The client config - the peer `github-runners` of onek8s/azure-landing-zone's labfw, its
 # private key and the cells' API server subnets as AllowedIPs - is the platform vault's secret
-# `labfw-vpn-github-runners`, stored with the Store secret workflow; the runner must be signed in to
+# `labfw-vpn--github-runners`, stored with the Store secret workflow; the runner must be signed in to
 # Azure first. The API server's public FQDN resolves to its private address, so the tunnel needs no DNS.
 #
 # One peer for every workflow: WireGuard follows a peer to its latest endpoint, so two runners on the
@@ -16,7 +16,7 @@ inputs:
     default: kv-onek8s-gwc-platform
   secret:
     description: The secret holding the client config
-    default: labfw-vpn-github-runners
+    default: labfw-vpn--github-runners
 runs:
   using: composite
   steps:
