@@ -120,8 +120,14 @@ platform_gateway_enabled = false
 # every node's OS disk (encryption at host covers the ephemeral one).
 key_vault_name   = "kv-onek8s-gwc-platform"
 key_vault_create = false
+# KMS data encryption (preview): AKS reaches the vault - which takes no public network access - as a trusted
+# service; classic KMS would need API Server VNet Integration, which the encrypted cell network refuses (D58, D60).
+# Public first: AKS refuses to change the vault's network access in the update that turns it on for a cluster
+# with classic KMS; Private in the next apply.
 customer_managed_keys = {
-  key_vault_name = "kv-onek8s-gwc-platform"
+  key_vault_name           = "kv-onek8s-gwc-platform"
+  key_vault_network_access = "Public"
+  kms_data_encryption      = true
 }
 
 # The platform's namespaces with a share of the platform vault: each zone's gateway reads its
