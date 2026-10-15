@@ -71,9 +71,19 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (`log-labfw-germanywestcentral`, table `LabfwFirewallLog_CL`, Azure Monitor Agent on the VM; ~10 min latency).
 - **Egress agent** (aks-ai-agents `egress-agent`, workflow `egress-agent.yml`, by hand only - it opens PRs with GH_OWNER):
   denied flows from that table (dev identity's Reader on sub-hub), `pods_by_ip` over the VPN, one PR per namespace to the
-  landing zone. Model: Claude Sonnet 5.5 on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID), attested as OneK8s/FI
-  (the user's choice, billed to Azure) - **not deployed: sub-aks-dev has 0 Foundry quota for every Claude model**
-  (`ai_foundry.deploy = false` until a quota request in the portal is granted). Everything up to the model call is verified.
+  landing zone. Model: **gpt-4.1-mini** on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID; created by the user,
+  imported as `ai_foundry.openai_deployments`; aks-ai-agents `model.provider: azure-openai`, openai_compat.py) - Claude
+  Sonnet 5.5 there is attested as OneK8s/FI but **not deployed: 0 Foundry quota for every Claude model** (`deploy = false`).
+  First real run 2026-10-15 opened **azure-landing-zone#66** (int-se-example -> api.open-meteo.com, 10 turns) - left open
+  for the user's review: merging it allows the weather traffic. gpt-4.1-mini looped on guesses until `application_source`
+  and the repeated-call guard; keep instructions step by step for it.
+- **Grafana `cluster` label**: Fleet Management's k8s pipeline `k8s_monitoring_k8s_monitoring_aks_dev_stateless_az1` sets
+  `cluster` from `CLUSTER_NAME` but matched only `cluster="aks-dev-stateless-az1"`, so az2/az3 got only the survey pipelines
+  (`k8s_cluster_name`, no `cluster`). Workflow `fleet-management.yml` `match-clusters` fixes the matcher
+  (`aks-dev-int-stateless-.*`) once the vault secret `flux-system--grafana-cloud` has `fleet-management-write-token`; the
+  collectors' token gets 401 on UpdatePipeline. Not changed yet.
+- **VPN clients reach az3's int-se gateway**: labfw's client routes include 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20;
+  `hello.int-se.dev.onek8s.lol` -> 100.64.40.4 via labfw DNS, HTTP 200 over the VPN (Cluster status "as a VPN client").
 - Cluster status has `route_path` (e.g. `/weather`): every route through its gateway pod over the VPN.
 - **The lab moved (2026-10-15, design D57)**: after the Lab reset (azure-landing-zone, `skip_policies` off) the build
   tenant runs in **germanywestcentral** (the ALZ bootstrap stays in swedencentral) as the **internal exposure**:
