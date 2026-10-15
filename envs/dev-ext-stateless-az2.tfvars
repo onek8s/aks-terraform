@@ -1,5 +1,5 @@
 # External cell `ext-stateless-az2` of the OneK8s dev environment - a stateless cluster in availability zone 2
-# (OneK8s design section 8), on the Free tier: one system node, no uptime SLA. Its sibling is
+# (OneK8s design section 8), on a lab budget - see "Non-production cost savings" below. Its sibling is
 # aks-dev-ext-stateless-az1 (envs/dev-ext-stateless-az1.tfvars); every external application runs in both,
 # and Azure Traffic Manager hands out one or the other (shared/: global_hostnames).
 # shared/envs/dev.tfvars is applied first.
@@ -11,8 +11,67 @@ name     = "aks-dev-ext-stateless-az2"
 location = "swedencentral"
 
 sku_name = "Base"
+
+# ---------------------------------------------------------------------------------------------------
+# Non-production cost savings
+#
+# Every setting in this block departs from the module's defaults, which are the production settings
+# of the OneK8s design (acc and prd use the defaults). Together they let a lab cell run on ONE small
+# system node instead of two larger ones, at the price of an SLA, of Azure's standard gateway and of
+# pod right-sizing. Do not copy this block to an acceptance or production environment.
+#
+# They depend on each other: the single 8 GiB system node (~5.8 GiB allocatable) holds the platform
+# only with Traefik and without the VPA add-on. Going back to production means all of them together:
+# delete the block (or set each to its production value below) and apply.
+# ---------------------------------------------------------------------------------------------------
+
+# AKS Free tier: no uptime SLA, API server not scaled for load. Production: "Standard" (design D31).
 sku_tier = "Free"
 
+# Gateway API implementation: Traefik Proxy, one small Deployment per Gateway (2 x 25m/64Mi), no
+# control plane (gateways/traefik of this repository, deployed by Flux). Production:
+# "approuting-istio" - App Routing's Gateway API, the Azure standard offering, upgraded by AKS - whose
+# istiod alone requests 1 CPU and 4 GiB that cannot be tuned (https://github.com/Azure/AKS/issues/5939;
+# design D55). Switching re-creates the cell's Gateways (minutes without them).
+gateway_implementation = "traefik"
+
+# No Vertical Pod Autoscaler add-on: its recommender, updater and admission controller request
+# ~2.4 GiB on the system pool. aks-hello's VerticalPodAutoscaler is left out with it
+# (aks-fluxcd-example, stateless/). Production: true - pod right-sizing (design section 4).
+vertical_pod_autoscaler_enabled = false
+
+# ACNS without container network observability (Hubble): no hubble-relay, flow logs or Hubble metrics
+# (design D56). FQDN network policies and eBPF host routing stay on - the isolation zones' egress
+# needs them, so they are never a cost saving. Production: advanced_networking = {} (all on, the
+# default); turning Hubble back on is an in-place update.
+advanced_networking = {
+  observability = false
+}
+
+# The system pool: ONE amd64 node in availability zone 2, Standard_D4als_v6 (4 vCPU, 8 GiB, offered
+# in both zones the cells use, with VNet encryption) - fits only with the two savings above.
+# Production: node_count = 2 on the default Standard_D4ds_v5 (16 GiB) - room for istiod and the VPA
+# add-on, and a node to spare during an upgrade (design section 4). AKS's cilium-operator runs two
+# replicas on different nodes, so with one system node its second replica brings up one small zone
+# spot node.
+# The other attributes are the design's in every environment: Azure Linux 3.0 (eBPF host routing needs
+# it on every node), encryption at host, SSH off, and the CriticalAddonsOnly taint - only the
+# platform's own controllers run here, every isolation zone's pods on that zone's NAP nodes. A system
+# node pool cannot run on Spot VMs, and a node pool cannot change its architecture or OS in place.
+default_node_pool = {
+  vm_size             = "Standard_D4als_v6"
+  availability_zones  = ["2"]
+  enable_auto_scaling = false
+  node_count          = 1
+  os_sku              = "AzureLinux"
+  encryption_at_host  = true
+  ssh_access          = "Disabled"
+  node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
+}
+
+# ---------------------------------------------------------------------------------------------------
+# End of the non-production cost savings
+# ---------------------------------------------------------------------------------------------------
 # Every cluster starts on 1.36, the platform floor (design R12a). AKS never upgrades a cell on its
 # own: the version pipeline changes it while the cell is drained (section 12).
 kubernetes_version = "1.36"
@@ -39,14 +98,6 @@ exposure = "ext"
 isolation_zones = {
   ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
   ext-se = { node_subnet_name = "snet-ext-se-nodes" }
-}
-
-# Azure CNI Overlay powered by Cilium with ACNS: FQDN network policies and eBPF host routing
-# (design section 16). Hubble (container network observability) is off - a lab exception (D56):
-# no hubble-relay, no flow logs or Hubble metrics; drops are read with Cluster status instead.
-# The design's default stays on: drop `observability = false` to bring it back (in place).
-advanced_networking = {
-  observability = false
 }
 
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here: the gateways'
@@ -94,12 +145,6 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# The Gateway API implementation of the zones' and the platform's Gateways, which aks-fluxcd-platform
-# deploys: `traefik` (Traefik Proxy per Gateway, from gateways/traefik of this repository) or
-# `approuting-istio` (App Routing's istiod: 1 CPU and 4 GiB of requests before the first Gateway,
-# https://github.com/Azure/AKS/issues/5939).
-gateway_implementation = "traefik"
-
 # A public API server - the one exception of the dev lab to design section 3, which has no network
 # path into the cells' networks. Entra ID authenticates every call; local accounts are disabled.
 private_cluster_enabled         = false
@@ -114,37 +159,10 @@ entra_reader_group_object_ids = []
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy).
 azure_policy_enabled = true
 
-# The system pool: one amd64 node in availability zone 2, 4 vCPU and 8 GiB (the platform's
-# controllers and the Azure Policy add-on do not fit in 2 vCPU). One node holds everything only with
-# Traefik as the Gateway API implementation and the VPA add-on off (below): App Routing's istiod
-# would add 1 CPU and 4 GiB of requests (https://github.com/Azure/AKS/issues/5939), the VPA add-on
-# ~2.4 GiB, and 5.8 GiB of the node's 8 is allocatable; either one back means node_count = 2. On
-# Azure Linux 3.0 - which eBPF host routing needs on every node - with encryption at host, SSH off
-# and the CriticalAddonsOnly taint: only the platform's own controllers run here, every
-# isolation zone's pods on that zone's NAP nodes.
-# Standard_D4als_v6 is offered in both zones the cells use and supports VNet encryption. A system
-# node pool cannot run on Spot VMs, and a node pool cannot change its architecture or OS in place.
-default_node_pool = {
-  vm_size             = "Standard_D4als_v6"
-  availability_zones  = ["2"]
-  enable_auto_scaling = false
-  node_count          = 1
-  os_sku              = "AzureLinux"
-  encryption_at_host  = true
-  ssh_access          = "Disabled"
-  node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
-}
-
 # Node auto provisioning (NAP, the AKS-managed Karpenter) for the isolation zones' nodes - design
 # section 4. The platform repository's node-pools define two NodePools per zone, on-demand and spot,
 # each in its zone's subnet (isolation_zones) and in this cell's availability zone.
 node_auto_provisioning_enabled = true
-
-# Lab cost exception (dev only, 2026-10-14): no VPA add-on. Its recommender, updater and admission
-# controller request ~2.4 GiB, which one 8 GiB system node does not hold beside the rest; the cell
-# keeps one system node instead of two. aks-hello's VerticalPodAutoscaler is left out with it
-# (aks-fluxcd-example, stateless/). Pod right-sizing (design section 4) stays the design for acc/prd.
-vertical_pod_autoscaler_enabled = false
 
 # The `example` team's application, in the ext-fi zone (design section 7: one namespace per
 # application and zone, `<zone>-<app>`). Its own Flux configuration deploys stateless/ of

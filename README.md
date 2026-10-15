@@ -575,9 +575,9 @@ Traefik refuses with `Accepted: False`):
 
 | `gateway_implementation` | What runs | Cost |
 | --- | --- | --- |
-| `traefik` (the dev cells) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
-| `approuting-istio` | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
-| null | No implementation: the stateful cluster (R9a). | - |
+| `traefik` (the dev cells, a non-production cost saving) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
+| `approuting-istio` (the default, production) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
+| null | No implementation: the stateful cluster (R9a), which states it. | - |
 
 Traefik's manifests live here rather than in the Flux repository so that the choice and everything
 it brings are one change of this repository. Switching re-creates the Gateways under their new class
@@ -823,6 +823,26 @@ Kubernetes Secrets from External Secrets Operator (design section 6).
 The one difference from the design that the lab keeps on purpose: **the API server is public**
 (`private_cluster_enabled = false`), with Entra ID and Azure RBAC on every call and local accounts
 disabled, because the build tenant's lab has no network path into the cells.
+
+## Production defaults and non-production cost savings
+
+Every variable defaults to the **production setting** of the OneK8s design, so an acceptance or
+production environment states what is its own (names, networks, zones, namespaces) and nothing
+about how big or how managed the cluster is. A non-production environment that wants to spend less
+turns on, by name, the cost savings below; the dev lab's tfvars keep them together in one block,
+"Non-production cost savings", at the top of each file.
+
+| Variable | Production default | Non-production cost saving (dev lab) | What the saving gives up |
+| --- | --- | --- | --- |
+| `sku_tier` | `Standard` - uptime SLA, API server scaled for load (D31) | `Free` | The control plane SLA; cost analysis. |
+| `gateway_implementation` | `approuting-istio` - App Routing's Gateway API, the Azure standard offering, upgraded by AKS (D55) | `traefik` | A gateway Azure upgrades and supports; istiod's 1 CPU / 4 GiB of requests ([Azure/AKS#5939][aks5939]) is what is saved. |
+| `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 4) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
+| `advanced_networking` | `{}` - Hubble, FQDN policies, eBPF host routing (section 16) | `{ observability = false }` (D56) | Hubble flow logs and metrics. FQDN policies and eBPF host routing are never a saving: the zones' egress needs them. |
+| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4als_v6` (8 GiB) | A second node during upgrades and failures; room for istiod and the VPA add-on. Fits only together with `traefik` and the VPA add-on off. With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
+
+The savings depend on each other - the one 8 GiB system node holds the platform only with Traefik and
+without the VPA add-on - so going back to production means all of them: delete the block and apply.
+Changing the gateway implementation re-creates the cell's Gateways; the rest are in-place updates.
 
 ## GitOps with Flux
 

@@ -1,5 +1,5 @@
-# The external stateful cluster `ext-stateful` of the OneK8s dev environment, on the Free tier: one system node pool, Azure CNI
-# overlay with Cilium, no uptime SLA. Keeps state: persistent volumes, with the platform's
+# The external stateful cluster `ext-stateful` of the OneK8s dev environment, on a lab budget (see "Non-production
+# cost savings" below), Azure CNI overlay with Cilium. Keeps state: persistent volumes, with the platform's
 # `portable-disk` StorageClass whose disks outlive the cluster. Beside the stateless clusters
 # (envs/dev-ext-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
 # between them. shared/envs/dev.tfvars is applied first. Defined, but not deployed for now.
@@ -14,7 +14,23 @@ location = "swedencentral"
 exposure = "ext"
 
 sku_name = "Base"
+
+# ---------------------------------------------------------------------------------------------------
+# Non-production cost savings
+#
+# Every setting in this block departs from the module's defaults, which are the production settings
+# of the OneK8s design (acc and prd use the defaults). Do not copy it to an acceptance or production
+# environment; delete it (or set each to its production value) to go back.
+# ---------------------------------------------------------------------------------------------------
+
+# AKS Free tier: no uptime SLA. Production: "Standard" (design D31).
 sku_tier = "Free"
+
+# ACNS without container network observability (Hubble), as in the dev cells (design D56). FQDN
+# network policies and eBPF host routing stay on. Production: advanced_networking = {} (the default).
+advanced_networking = {
+  observability = false
+}
 
 # The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
 # the environment and what they share. What is this cluster's own carries its name (`aks-dev-ext-stateful`,
@@ -68,6 +84,10 @@ log_analytics_workspace_name = "log-dev-platform"
 private_cluster_enabled         = false
 api_server_authorized_ip_ranges = ["0.0.0.0/0"]
 
+# No Gateway API implementation: the stateful cluster has no gateway of its own (design R9a), whatever
+# the environment - not a cost saving.
+gateway_implementation = null
+
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster: `Azure Kubernetes Service RBAC Cluster Admin` for the admins, `... RBAC Reader` for
 # the readers. Members of both still need `Azure Kubernetes Service Cluster User Role` on the
@@ -80,6 +100,9 @@ entra_reader_group_object_ids = []
 # cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory.
 azure_policy_enabled = true
 
+# Non-production cost saving: ONE Standard_D4als_v6 system node. Production: node_count = 2 on the
+# default Standard_D4ds_v5 (design section 4).
+#
 # Standard_D4als_v6: one amd64 node, 4 vCPU and 8 GiB, with availability zones 1 and 2. Two vCPU
 # are not enough: the platform's pods ask for about 1600m of the 1900m a 2-vCPU node has, and the
 # Azure Policy add-on for 360m more. The cheaper Arm64 sizes are not available for both zonal

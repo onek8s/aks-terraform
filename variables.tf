@@ -174,11 +174,13 @@ DESCRIPTION
 
 variable "gateway_implementation" {
   type        = string
-  default     = null
+  default     = "approuting-istio"
   description = <<DESCRIPTION
 The Gateway API implementation that serves the cluster's Gateways - one per isolation zone and the
-platform's, which the Flux repository deploys (OneK8s design section 13). Null for a cluster without
-Gateways: the stateful cluster has no Gateway API implementation (R9a).
+platform's, which the Flux repository deploys (OneK8s design section 13). Defaults to
+`approuting-istio`, the production setting (D55: the Azure standard offering, upgraded by AKS);
+`traefik` is a non-production cost saving. Null for a cluster without Gateways: the stateful
+cluster has no Gateway API implementation (R9a).
 
 - `traefik`: [Traefik Proxy][traefik], one Helm release per Gateway on the system pool, each with a
   GatewayClass of its own (`traefik-<gateway>`), deployed from this repository's `gateways/traefik`
@@ -338,7 +340,7 @@ variable "default_node_pool" {
   type = object({
     name                = optional(string, "system")
     vm_size             = optional(string, "Standard_D4ds_v5")
-    node_count          = optional(number, 1)
+    node_count          = optional(number, 2)
     enable_auto_scaling = optional(bool, false)
     min_count           = optional(number, 1)
     max_count           = optional(number, 1)
@@ -350,7 +352,7 @@ variable "default_node_pool" {
     drain_timeout_minutes      = optional(number)
     node_soak_duration_minutes = optional(number)
 
-    os_sku             = optional(string)
+    os_sku             = optional(string, "AzureLinux")
     encryption_at_host = optional(bool)
     ssh_access         = optional(string)
     node_taints        = optional(list(string))
@@ -360,8 +362,14 @@ variable "default_node_pool" {
 System node pool of the cluster. **Ignored for AKS Automatic apart from `name`**, which sizes,
 scales and rolls its own node pools - see the README for what that SKU drops.
 
-- `os_sku` - The node OS, such as `AzureLinux` (Azure Linux 3.0, which eBPF host routing needs on
-  every node). Null leaves the AKS default.
+The defaults are the production setting (OneK8s design section 4): two `Standard_D4ds_v5` nodes
+(4 vCPU, 16 GiB), room for App Routing's istiod, the VPA add-on and the platform's controllers, and
+a second node while one is upgraded or lost. One smaller node (the dev lab's single 8 GiB
+`Standard_D4als_v6`) is a non-production cost saving that only fits with `gateway_implementation =
+"traefik"` and `vertical_pod_autoscaler_enabled = false`.
+
+- `os_sku` - The node OS. Defaults to `AzureLinux` (Azure Linux 3.0, the design's node OS, which
+  eBPF host routing needs on every node); null leaves the AKS default.
 - `encryption_at_host` - Encrypts the node's temporary disk and caches with the disk encryption set's
   key too. The subscription needs the `Microsoft.Compute/EncryptionAtHost` feature registered.
 - `ssh_access` - `Disabled` turns off SSH to the nodes; null leaves the AKS default (`LocalUser`).
@@ -1574,8 +1582,12 @@ variable "sku_name" {
 
 variable "sku_tier" {
   type        = string
-  default     = "Free"
-  description = "Managed cluster SKU tier: `Free`, `Standard` or `Premium`."
+  default     = "Standard"
+  description = <<DESCRIPTION
+Managed cluster SKU tier: `Free`, `Standard` or `Premium`. Defaults to `Standard`, the production
+setting (OneK8s design D31): the uptime SLA and API server scaling. `Free` is a non-production
+cost saving only - no SLA, the dev lab's choice (see "Non-production cost savings" in its tfvars).
+DESCRIPTION
   nullable    = false
 
   validation {
@@ -1642,6 +1654,8 @@ design section 4, pod right-sizing): each application's `VerticalPodAutoscaler` 
 repository resizes its pods in place (`updateMode: InPlaceOrRecreate`, Kubernetes 1.35+), within
 the bounds stated there. Turning it off removes the add-on and with it every resize; the
 `VerticalPodAutoscaler` objects then do nothing. Ignored for AKS Automatic, which runs it anyway.
+On is the production setting; off is a non-production cost saving (its components request ~2.4 GiB
+on the system pool).
 
 [vpa]: https://learn.microsoft.com/en-us/azure/aks/vertical-pod-autoscaler
 DESCRIPTION
@@ -1659,10 +1673,12 @@ variable "advanced_networking" {
     fqdn_policies     = optional(bool, true)
     ebpf_host_routing = optional(bool, true)
   })
-  default     = null
+  default     = {}
   description = <<DESCRIPTION
 Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium - OneK8s design
-section 16. Null leaves it off.
+section 16. Defaults to all three on, the production setting; null turns ACNS off (only for a
+cluster without the Cilium dataplane - the zones' FQDN egress policies need it).
+`observability = false` is a non-production cost saving (D56): FQDN policies keep working.
 
 - `observability` - Hubble flow logs and metrics.
 - `fqdn_policies` - Cilium network policies with `toFQDNs`, resolved by the ACNS DNS proxy: what lets
@@ -1674,7 +1690,7 @@ DESCRIPTION
 
   validation {
     condition     = var.advanced_networking == null || var.network_profile.network_dataplane == "cilium"
-    error_message = "advanced_networking needs network_profile.network_dataplane = \"cilium\"."
+    error_message = "advanced_networking needs network_profile.network_dataplane = \"cilium\". Set advanced_networking = null for another dataplane."
   }
 }
 

@@ -75,6 +75,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (`InPlaceOrRecreate`, RequestsOnly, CPU 3m-20m, memory 64Mi-128Mi) stays in aks-fluxcd-example `apps/` but
   `stateless/` deletes it with a patch (no CRD without the add-on). Isolation tests: R11 VPA follows the tfvars,
   the VPA dry runs are AUDIT without the CRD. To bring it back: tfvars true, drop the patch, `node_count = 2`.
+- **Production defaults, lab savings in one block** (2026-10-15, the user's ask): variables.tf defaults are the
+  production settings (`sku_tier = "Standard"`, `gateway_implementation = "approuting-istio"`, VPA on,
+  `advanced_networking = {}`, system pool 2 x Standard_D4ds_v5 on `AzureLinux`); the dev tfvars state every
+  departure in a "Non-production cost savings" block at the top (Free, traefik, VPA off, Hubble off, 1 x D4als_v6).
+  README "Production defaults and non-production cost savings". The stateful tfvars state `gateway_implementation =
+  null` (R9a, not a saving). A non-Cilium cluster must now say `advanced_networking = null`.
 - **Hubble off in the dev cells** (2026-10-15, D56, the user's choice, lab cost exception): `advanced_networking =
   { observability = false }` in the stateless tfvars - ACNS stays on for FQDN policies and eBPF host routing (the
   isolation design needs both); no hubble-relay, flow logs or Hubble metrics. Bring back by dropping the line (in place).
@@ -243,7 +249,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   was vendored with patches until 2026-10-14 and is back on the registry.
 - **CMK**: per cluster `key-<cluster>-kms` and `key-<cluster>-disk` in `kv-onek8s-dev-platform`
   (purge protection), DES `des-<cluster>`, encryption at host. Azure Linux, SSH off, system pool
-  tainted `CriticalAddonsOnly`, Kubernetes 1.36, auto-upgrade none, Free tier.
+  tainted `CriticalAddonsOnly`, Kubernetes 1.36, auto-upgrade none, Free tier in dev (Standard is the default).
 - **Secrets only through ESO**; vault shares by ABAC prefix `<namespace>--`; gateway certs
   `<zone>-gateway--wildcard` and `platform-gateway--wildcard`.
 - **One policy engine (R14)**: no ValidatingAdmissionPolicies in the fleet; every admission rule is an
