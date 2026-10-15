@@ -224,9 +224,12 @@ monthly_budget = {
 # user: the egress agent (design D59), which proposes the firewall rules of the applications from labfw's denials.
 # The deployment signs Anthropic's Azure Marketplace offer in OneK8s's name, billed to sub-aks-dev; the organisation,
 # country and industry go to Anthropic with every request (the user's choice, 2026-10-15).
+# Not deployed yet: sub-aks-dev has 0 Foundry quota (Tokens Per Minute) for every Claude model in swedencentral
+# (InsufficientQuota, 2026-10-15) - a quota request in the Azure portal (Foundry > Quotas) first, then deploy = true.
 ai_foundry = {
   name     = "ais-onek8s-dev-agents"
   location = "swedencentral"
+  deploy   = false
   model_provider = {
     organization_name = "OneK8s"
     country_code      = "FI"
