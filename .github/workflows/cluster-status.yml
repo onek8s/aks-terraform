@@ -229,6 +229,27 @@ jobs:
           for app in alloy-daemon alloy-operator kube-state-metrics beyla-k8s-cache opencost; do
             kubectl logs -n infra-observability -l "app.kubernetes.io/name=$app" --tail=15 --prefix
           done
+          # Alloy without its once-a-minute clustering line, which hides everything else in a tail.
+          kubectl logs -n infra-observability -l app.kubernetes.io/name=alloy-daemon -c alloy --tail=5000 --prefix \
+            | grep -v 'rejoining peers' | tail -n 60
+          # Fleet Management: the pipelines (name, enabled, matchers) and the collectors with their attributes.
+          # A collector gets only the pipelines whose matchers fit its attributes; the chart sets `cluster` to the
+          # cluster's name, so a pipeline matching another cluster's name sends nothing from this one.
+          # No xtrace here: it would print the token before the mask is set.
+          set +x
+          fm_values="$(kubectl get secret -n flux-system grafana-cloud -o jsonpath='{.data.values\.yaml}' | base64 -d)"
+          fm_url="$(yq '.collectorCommon.alloy.remoteConfig.url' <<<"$fm_values")"
+          fm_user="$(yq '.collectorCommon.alloy.remoteConfig.auth.username' <<<"$fm_values")"
+          fm_password="$(yq '.collectorCommon.alloy.remoteConfig.auth.password' <<<"$fm_values")"
+          echo "::add-mask::$fm_password"
+          unset fm_values
+          for rpc in pipeline.v1.PipelineService/ListPipelines collector.v1.CollectorService/ListCollectors; do
+            echo "Fleet Management $rpc:"
+            curl -sS -u "$fm_user:$fm_password" -H 'Content-Type: application/json' -d '{}' "${fm_url%/}/$rpc" \
+              | jq -c '((.pipelines // [])[] | {name, enabled, matchers}), ((.collectors // [])[] | {id, enabled, remoteAttributes, localAttributes}), (.code // empty), (.message // empty)'
+          done
+          unset fm_password
+          set -x
           # Cilium: the platform's baseline and the applications' egress policies.
           kubectl get ciliumclusterwidenetworkpolicies,ciliumnetworkpolicies -A
           kubectl get ciliumnetworkpolicies -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions}{"\n"}{end}'
