@@ -382,5 +382,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - `kubectl auth can-i` on an Azure RBAC cluster answers `no - Azure does not have opinion...`: parse the first word.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml` (encrypted to the vault key
   `secret-transport`), never into Git or a workflow input.
-- Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
+- **Behind labfw, a denied source shows only in labfw's log**: `labfw logs --action deny --src <node IP> --tail 20`
+  (Lab admin Run Command on `labfw-fw`, or SSH over the VPN). Upstreams redirect to CDNs the allow-list must name too
+  (`cdn.registry.k8s.io`, `production.cloudfront.docker.com`, `external-secrets.io`; 2026-10-15). labfw applies a policy
+  change within ~2 min of the Platform apply (`systemctl kill -s HUP labfw` refreshes at once). The fleet's HelmReleases
+  retry their install forever (`retries: -1`) so a release that timed out on a blocked source recovers by itself.
+- **Long applies outlive the GitHub OIDC token** (AADSTS700024 ~5 min after the first sign-in): sign in again
+  (azure/login) before az/kubectl steps that follow a cluster build.
+- **`az aks command invoke`** (break-glass into the private cluster, no VPN needed) runs in namespace `aks-command`,
+  which the AKS policy counts as a platform namespace since 2026-10-15 (namespace-ownership refused it before).
+ <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.
