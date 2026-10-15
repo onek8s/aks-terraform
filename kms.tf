@@ -17,13 +17,14 @@ resource "azapi_update_resource" "kms_data_encryption" {
   body = {
     properties = {
       securityProfile = {
-        azureKeyVaultKms = merge({
+        # KMS data encryption names the vault in either mode (AKS: "Key Vault resource ID must be specified
+        # when customer-managed key (CMK) properties change")
+        azureKeyVaultKms = {
           enabled               = true
           keyId                 = azurerm_key_vault_key.cluster["kms"].versionless_id
           keyVaultNetworkAccess = var.customer_managed_keys.key_vault_network_access
-          }, var.customer_managed_keys.key_vault_network_access != "Private" ? {} : {
-          keyVaultResourceId = data.azurerm_key_vault.customer_managed_keys[0].id
-        })
+          keyVaultResourceId    = data.azurerm_key_vault.customer_managed_keys[0].id
+        }
         kubernetesResourceObjectEncryptionProfile = {
           infrastructureEncryption = "Enabled"
         }
