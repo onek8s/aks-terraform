@@ -292,7 +292,7 @@ jobs:
           # Cilium's own drop monitor on every node while the routes are tried: what Hubble would show
           if [ -n "$CILIUM_DROPS" ]; then
             for pod in $(kubectl -n kube-system get pods -l k8s-app=cilium -o name); do
-              kubectl -n kube-system exec "$pod" -c cilium-agent -- timeout 90 cilium-dbg monitor --type drop > "$RUNNER_TEMP/drops-${pod#pod/}.txt" 2>&1 &
+              timeout 90 kubectl -n kube-system exec "$pod" -c cilium-agent -- cilium-dbg monitor --type drop > "$RUNNER_TEMP/drops-${pod#pod/}.txt" 2>&1 &
             done
             sleep 5
           fi
