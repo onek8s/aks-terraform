@@ -281,12 +281,16 @@ jobs:
         env:
           ROUTE_PATH: ${{ inputs.route_path }}
         run: |
+          set +e
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           [[ -z "$ROUTE_PATH" || "$ROUTE_PATH" =~ ^/[A-Za-z0-9/._-]*$ ]] || { echo "::error::route_path must be a plain path"; exit 1; }
           kubectl get httproutes -A -o json | jq -r '.items[] | .metadata.namespace as $ns | .spec.parentRefs[0] as $p | .spec.hostnames[]? as $h | "\($p.namespace // $ns) \($p.name) \($h)"' |
           while read -r gwns gw host; do
-            ip=$(kubectl get pods -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.podIP}')
-            [ -n "$ip" ] || { echo "$host: no pod of gateway $gwns/$gw"; continue; }
+            # The gateway's internal load balancer, which the VPN reaches in every cell; a gateway pod's own address
+            # only where pods have VNet addresses (no overlay)
+            ip=$(kubectl get svc -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+            [ -n "$ip" ] || ip=$(kubectl get pods -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.podIP}')
+            [ -n "$ip" ] || { echo "$host: no address of gateway $gwns/$gw"; continue; }
             for path in / ${ROUTE_PATH}; do
               out=$(curl -sk -m 15 -o "$RUNNER_TEMP/body" -w '%{http_code}' --resolve "$host:443:$ip" "https://$host$path")
               echo "== https://$host$path via $gwns/$gw ($ip): $out"
