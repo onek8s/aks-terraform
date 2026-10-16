@@ -60,16 +60,22 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
-- **Weekend pause (2026-10-16, the user's ask: minimal lab cost, nothing removed)**: the `Lab power` workflow
-  (`lab-power.yml`, the user's sequence): `stop` = Flux paused, the zone namespaces' apps scaled to 0 in the cluster, NAP
-  off (every NodePool's cpu limit 0, NAP nodes deleted, `--node-provisioning-mode Manual` - **a NAP cluster cannot be
-  stopped**: "You can't stop clusters which use the NAP feature", learn.microsoft.com/azure/aks/start-stop-cluster; the
-  system pool cannot scale to 0 either), `az aks stop` of az2 and az3, labfw deallocated last; `start` = labfw first,
-  `az aks start`, NAP Auto, Flux resumed - Flux re-applies the Git state (NodePool limits, replicas 2). aks-fluxcd-example
-  `lab/scale/kustomization.yaml` (a kustomize component every cell directory includes) is an independent Git-only
-  switch for aks-hello's replicas (0 = off, 2 = running; the rollout guardrails allow 0): **it must say 2 for a Lab
-  power start to bring the app back**. The first stop run's result is below in the notes of 2026-10-16 (look for
-  "Lab power run"). A stopped cluster: Flux suspended, apps 0, NAP Manual - run `start`, never fix those by hand.
+- **The lab is STOPPED for the weekend (2026-10-16, Lab power run 38904999392, the user's ask: minimal cost, nothing
+  removed)**: az2 and az3 `powerState Stopped`, labfw `deallocated` (no VPN: every data-plane workflow fails until the
+  start), every Flux configuration and Kustomization suspended, the zone namespaces' Deployments at 0 (apps, and the
+  zones' Traefik gateways and ESO - their namespaces carry `platform/zone` too), NAP `Manual` with every NodePool's cpu
+  limit 0. **Bring it back with `Lab power` `start`** (labfw first, `az aks start`, NAP Auto without default pools,
+  annotated replicas restored, Flux resumed, every HelmRelease force-reconciled); never undo those by hand. The sequence
+  is the user's (2026-10-16): pause Flux, scale down in the cluster, wait, autoscaling off, stop - because **a NAP
+  cluster cannot be stopped as it is** ("You can't stop clusters which use the NAP feature",
+  learn.microsoft.com/azure/aks/start-stop-cluster; the system pool cannot scale to 0 either). Verified in that run:
+  `az aks update --node-provisioning-mode Manual` is accepted once no NAP node or VM is left (~3 min), `az aks stop`
+  then stops in ~5 min, the whole stop of two cells took 22 min. aks-fluxcd-example `lab/scale/kustomization.yaml` (a
+  kustomize component every cell directory includes) is an independent Git-only switch for aks-hello's replicas (2 =
+  running, what Git says now; 0 = off with the clusters running; the rollout guardrails allow 0).
+  **The start path is untested**: a test `start` of az3 (run 38908224078) was cancelled by the user after labfw and
+  `az aks start` had been issued - the user stopped az3 and labfw by hand (2026-10-16) and fixes the start next week if
+  it fails. A stop re-run is idempotent (a cluster already Manual / suspended / at 0 is skipped step by step).
 - **The registry is Basic and public again (2026-10-16, design D62, the user's ask: Premium is too much for a lab)**:
   shared/ `container_registry_sku` defaults by environment - Premium (private endpoint, data endpoint, no public access)
   in `prd` only, Basic on its public endpoint (Entra ID only, admin off) below it. dev's `acronek8sdev` was downgraded in
