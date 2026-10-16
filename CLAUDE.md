@@ -116,6 +116,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   the PR merges/closes; merged 1 h, rejected 7 d), sources' namespaces and ignored sources (nodes, platform pods) - known
   flows are dropped before cluster access and the model sees only new, unproposed flows (verified: re-runs end at
   "new to look at: 0" or "to propose: 0", no model call). **Do not merge the agent's PRs: the user validates them.**
+  **Guard rails in the tools** (2026-10-16): `firewall_egress_add` adds entries and `create_pull_request` refuses a change
+  that removes or rewrites an existing entry (aks-ai-agents#12, after azure-landing-zone#72 replaced api.open-meteo.com) and
+  a pull request with two namespaces' files (aks-ai-agents#13, after azure-landing-zone#75 carried int-fi-example's file
+  under int-se-example's title and replaced its stats.grafana.org with api.ipify.org - close #75). #73 and #75 were opened
+  after #12 merged but in the old format, and **no Egress agent workflow run exists for them**: they came from a run outside
+  this workflow (an older aks-ai-agents checkout). The workflow checks out aks-ai-agents `main` on every run, so a fix is
+  live at once there; a local run needs a pull of aks-ai-agents first. A closed PR's destinations count as rejected for 7 d.
 - **Grafana `cluster` label**: Fleet Management's k8s pipeline `k8s_monitoring_k8s_monitoring_aks_dev_stateless_az1` sets
   `cluster` from `CLUSTER_NAME` but matched only `cluster="aks-dev-stateless-az1"`, so az2/az3 got only the survey pipelines
   (`k8s_cluster_name`, no `cluster`). Workflow `fleet-management.yml` `match-clusters` fixes the matcher
