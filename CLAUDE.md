@@ -498,5 +498,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (azure/login) before az/kubectl steps that follow a cluster build.
 - **`az aks command invoke`** (break-glass into the private cluster, no VPN needed) runs in namespace `aks-command`,
   which the AKS policy counts as a platform namespace since 2026-10-15 (namespace-ownership refused it before).
+- **`az k8s-configuration flux update --suspend` alone is refused** (`ValidationFailed: source kind 'GitRepository' must
+  contain corresponding body`): PATCH the one property with `az rest` (Lab power's `flux_suspend`); the extension's agent
+  copies it to the cluster's Kustomizations within a minute.
 - Waiting: use `/tmp/claude-0/bin/waitrun.sh <repo> <run_id>...` if it exists (polls the runs API),
   or a loop over the runs API; long foreground `sleep` is blocked in the sandbox.

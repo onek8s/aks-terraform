@@ -132,6 +132,23 @@ jobs:
             kubelogin convert-kubeconfig -l azurecli
           }
           flux_configurations() { az k8s-configuration flux list -g "$RESOURCE_GROUP" -c "$1" -t managedClusters --query '[].name' -o tsv; }
+          flux_suspend() { # <cluster> <configuration> true|false : the CLI's `flux update --suspend` alone is refused
+            # (ValidationFailed: "source kind 'GitRepository' must contain corresponding body"), so the one property is patched
+            local id; id="$(az aks show -g "$RESOURCE_GROUP" -n "$1" --query id -o tsv)"
+            az rest --method patch --only-show-errors -o none \
+              --url "https://management.azure.com${id}/providers/Microsoft.KubernetesConfiguration/fluxConfigurations/$2?api-version=2023-05-01" \
+              --body "{\"properties\":{\"suspend\":$3}}"
+          }
+          wait_flux_suspended() { # <cluster> true|false : until every Flux Kustomization in the cluster says so (the extension's agent copies it), 5 min
+            local i other
+            for i in $(seq 1 20); do
+              other="$(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq -r --argjson want "$2" '[.items[] | select((.spec.suspend // false) != $want) | .metadata.namespace + "/" + .metadata.name] | join(" ")')"
+              [ -z "$other" ] && { echo "$1: every Flux Kustomization suspend=$2"; return 0; }
+              echo "$1: not yet suspend=$2: $other"
+              sleep 15
+            done
+            echo "::error::$1: Flux Kustomizations not at suspend=$2: $other"; return 1
+          }
           LIB
 
       - name: Find labfw's VM
@@ -188,10 +205,11 @@ jobs:
           for cluster in $CLUSTERS; do
             echo "== $cluster: $(power_state "$cluster")"
             for config in $(flux_configurations "$cluster"); do
-              az k8s-configuration flux update -g "$RESOURCE_GROUP" -c "$cluster" -t managedClusters -n "$config" --suspend true --no-wait --only-show-errors -o none
+              flux_suspend "$cluster" "$config" true
               echo "$cluster: Flux configuration $config suspended"
             done
             kubeconfig "$cluster"
+            wait_flux_suspended "$cluster" true
             namespaces="$(kubectl get namespaces -l platform/zone -o jsonpath='{.items[*].metadata.name}')"
             for ns in $namespaces; do
               kubectl -n "$ns" scale deployments,statefulsets --all --replicas=0
@@ -276,9 +294,11 @@ jobs:
             wait_provisioned "$cluster"
             echo "$cluster: node provisioning $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)"
             for config in $(flux_configurations "$cluster"); do
-              az k8s-configuration flux update -g "$RESOURCE_GROUP" -c "$cluster" -t managedClusters -n "$config" --suspend false --no-wait --only-show-errors -o none
+              flux_suspend "$cluster" "$config" false
               echo "$cluster: Flux configuration $config resumed"
             done
+            kubeconfig "$cluster"
+            wait_flux_suspended "$cluster" false
           done
           # What came back: Flux's first reconcile puts the limits and replicas of Git back; NAP's nodes follow.
           sleep 120
