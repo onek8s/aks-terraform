@@ -38,10 +38,10 @@ inputs:
     description: >-
       DNS names looked up at labfw's DNS proxy, space-separated: the private endpoints' services. Exact names
       on purpose - a whole suffix such as blob.core.windows.net would also send other accounts' names to the
-      hub's private zones, where an account with a private endpoint elsewhere does not resolve.
+      hub's private zones, where an account with a private endpoint elsewhere does not resolve. Not the
+      registry: Basic in dev, on its public endpoint (design D62).
     default: >-
       kv-onek8s-gwc-platform.vault.azure.net kv-onek8s-gwc-int-fi.vault.azure.net kv-onek8s-gwc-int-se.vault.azure.net
-      acronek8sdev.azurecr.io acronek8sdev.germanywestcentral.data.azurecr.io
       ais-onek8s-dev-agents.cognitiveservices.azure.com ais-onek8s-dev-agents.openai.azure.com
       ais-onek8s-dev-agents.services.ai.azure.com stonek8sdevtfstate.blob.core.windows.net
       api.loganalytics.io api.loganalytics.azure.com

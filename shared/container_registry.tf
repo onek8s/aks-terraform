@@ -3,23 +3,31 @@
 # configuration, so nothing secret is kept for it anywhere. It is part of the clusters' estate here,
 # not of the landing zone.
 #
-# container_registry_sku: Basic for a prototype's few images, Premium for a private endpoint (with a
-# dedicated data endpoint, so the layers come through it too). Admin user off - only Entra ID
-# identities reach it.
+# The tier follows the environment (design D62) unless container_registry_sku says otherwise: Premium
+# in prd - a private endpoint (private_endpoints) with a dedicated data endpoint, so the layers come
+# through it too, and no public network access - and Basic everywhere else, on its public endpoint:
+# Azure offers private endpoints on Premium alone, and the non-production registries are not worth
+# its price. Admin user off in every tier - only Entra ID identities reach it.
+locals {
+  container_registry_sku     = coalesce(var.container_registry_sku, var.environment == "prd" ? "Premium" : "Basic")
+  container_registry_premium = local.container_registry_sku == "Premium"
+}
+
 resource "azurerm_container_registry" "this" {
   count = var.container_registry_name == null ? 0 : 1
 
   name                  = var.container_registry_name
   location              = var.location
   resource_group_name   = local.resource_group_name
-  sku                   = var.container_registry_sku
+  sku                   = local.container_registry_sku
   admin_enabled         = false
-  data_endpoint_enabled = var.container_registry_sku == "Premium"
+  data_endpoint_enabled = local.container_registry_premium
   # Premium with a private endpoint: no public network access (private_endpoints.public_network_access) - the
-  # kubelets pull through the endpoint, the build tasks below come in as a trusted service
-  public_network_access_enabled         = var.container_registry_sku == "Premium" ? local.public_network_access : true
+  # kubelets pull through the endpoint, the build tasks below come in as a trusted service. Below Premium
+  # Azure allows neither, so the registry answers publicly.
+  public_network_access_enabled         = local.container_registry_premium ? local.public_network_access : true
   network_rule_bypass_option            = "AzureServices"
-  network_rule_bypass_for_tasks_enabled = var.container_registry_sku == "Premium"
+  network_rule_bypass_for_tasks_enabled = local.container_registry_premium
 }
 
 # Nothing pushes to the registry from outside: it builds the images itself, with an ACR task each,

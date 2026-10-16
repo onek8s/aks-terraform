@@ -574,15 +574,15 @@ variable "private_endpoints" {
     dns_zone_resource_group_id = string
     # The Terraform state account (Deploy's TF_STATE_STORAGE_ACCOUNT): a private endpoint, Entra ID only
     state_storage_account_id = optional(string)
-    # false: no public network access to the vaults, the registry (Premium), Foundry, the state account and the
-    # Log Analytics workspace (in the landing zone's Azure Monitor Private Link scope)
+    # false: no public network access to the vaults, the registry (Premium: prd), Foundry, the state account and
+    # the Log Analytics workspace (in the landing zone's Azure Monitor Private Link scope)
     public_network_access = optional(bool, true)
   })
   default     = null
   description = <<DESCRIPTION
-Private endpoints for the environment's services - the platform vault, every zone vault, on
-container_registry_sku = "Premium" only (Azure offers none below it) the container registry, the
-agents' Foundry resource (ai_foundry) and the Terraform state account (`state_storage_account_id`) - in a subnet
+Private endpoints for the environment's services - the platform vault, every zone vault, on a
+Premium registry only (prd by default - container_registry_sku; Azure offers none below it) the
+container registry, the agents' Foundry resource (ai_foundry) and the Terraform state account (`state_storage_account_id`) - in a subnet
 `subnet_name` with `address_prefix` of the environment network virtual_network_create creates, registered in the
 landing zone's private link DNS zones in `dns_zone_resource_group_id` (the deploying identity needs
 Private DNS Zone Contributor there). With `hub`, that network is peered with the hub.
@@ -598,12 +598,18 @@ DESCRIPTION
 
 variable "container_registry_sku" {
   type        = string
-  default     = "Basic"
-  description = "SKU of the environment's container registry: Basic, Standard or Premium. Premium for a private endpoint (private_endpoints); it also gets a dedicated data endpoint then, so the image layers come through the endpoint too."
-  nullable    = false
+  default     = null
+  description = <<DESCRIPTION
+SKU of the environment's container registry: Basic, Standard or Premium. Null, the default, follows
+the environment (design D62): Premium in `prd` - a private endpoint (private_endpoints, with a
+dedicated data endpoint so the image layers come through it too) and no public network access -
+and Basic in every other environment, on its public endpoint with Entra ID authentication only
+(admin user off). Azure offers private endpoints on Premium alone, and a Premium registry costs
+about eight times a Basic one, so the non-production registries stay public.
+DESCRIPTION
 
   validation {
-    condition     = contains(["Basic", "Standard", "Premium"], var.container_registry_sku)
+    condition     = var.container_registry_sku == null || contains(["Basic", "Standard", "Premium"], coalesce(var.container_registry_sku, "-"))
     error_message = "container_registry_sku must be Basic, Standard or Premium."
   }
 }
