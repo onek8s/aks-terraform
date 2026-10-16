@@ -73,6 +73,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   then stops in ~5 min, the whole stop of two cells took 22 min. aks-fluxcd-example `lab/scale/kustomization.yaml` (a
   kustomize component every cell directory includes) is an independent Git-only switch for aks-hello's replicas (2 =
   running, what Git says now; 0 = off with the clusters running; the rollout guardrails allow 0).
+  **The start path is untested**: a test `start` of az3 (run 38908224078) was cancelled by the user after labfw and
+  `az aks start` had been issued - the user stopped az3 and labfw by hand (2026-10-16) and fixes the start next week if
+  it fails. A stop re-run is idempotent (a cluster already Manual / suspended / at 0 is skipped step by step).
 - **The registry is Basic and public again (2026-10-16, design D62, the user's ask: Premium is too much for a lab)**:
   shared/ `container_registry_sku` defaults by environment - Premium (private endpoint, data endpoint, no public access)
   in `prd` only, Basic on its public endpoint (Entra ID only, admin off) below it. dev's `acronek8sdev` was downgraded in
