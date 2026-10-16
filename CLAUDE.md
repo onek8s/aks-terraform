@@ -78,6 +78,17 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   or read vaults any more. Break glass: ARM stays public - `az ... update --public-network-access Enabled`.
   **onek8s/azure-lab-fw must stay public**: the labfw VM downloads its release anonymously (a private repo gives 404; the
   user tested it 2026-10-16 and made it public again). labfw's reconfigure skips the download of an installed release.
+- **az2 is overlay + the hub firewall only, without ACNS (2026-10-16, design D61, the proposed default)**: rebuilt with
+  `advanced_networking = null` (ACNS, eBPF host routing and Hubble off - decided at creation). The fleet patches az2's Cilium
+  policies to layer 4 (no DNS proxy) and adds `firewall-egress-int-fi`; aks-hello 0.4.1 (Helsinki forecast, no public IP
+  query) runs on int-fi's zone nodes from aks-fluxcd-example `firewall-egress-int-fi/`. labfw sees the zone's node addresses
+  (172.22.17.x), denies api.open-meteo.com, and the egress agent attributes a zone node's address to the application pods on
+  it (`node_candidates`, flows marked `viaNode`): it opened **azure-landing-zone#71** (int-fi-example -> api.open-meteo.com) -
+  left open for the user. Verified: routes 200 through the int-fi ILB as a VPN client, `/weather` "Connection reset by peer".
+  Gotchas: the runners' VPN routes needed int-fi's zone ranges (172.22.17.0/24) for its ILB; Cluster status reaches routes
+  through the gateway's ILB (pod addresses are not routable with an overlay) and has `cilium_drops` (Cilium's drop monitor,
+  for cells without Hubble). The model needs each flow's `cluster` (it passed the zone as cluster once); a blocked run no
+  longer declines its flows, and `forget_declined` retries ones the model passed on (declined for a day otherwise).
 - **az3, the firewall-egress cell (2026-10-15, design D59 - NOT decided, both models under test, H15)**:
   `aks-dev-int-stateless-az3`, zone 3, **Sweden's int-se only** (int-se enabled in shared/; az2 keeps int-fi). No overlay:
   `network_profile.network_plugin_mode = "none"` (Azure CNI node subnet + Cilium; NAP has no pod-subnet mode), shared/
