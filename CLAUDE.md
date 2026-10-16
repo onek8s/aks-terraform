@@ -76,8 +76,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   #69). Remaining public: labfw's IP (VPN/SNAT), AKS-managed node OS disks and extension Private Link scopes, the ALZ
   bootstrap state account (builds labfw itself). **Lab admin's runner is not on the VPN**: it cannot query Log Analytics
   or read vaults any more. Break glass: ARM stays public - `az ... update --public-network-access Enabled`.
-  **onek8s/azure-lab-fw is private now**: labfw's reconfigure skips the download of an installed release, but a
-  rebuilt labfw VM (Lab reset) cannot install it - needs a public release or a credential (the user's call).
+  **onek8s/azure-lab-fw must stay public**: the labfw VM downloads its release anonymously (a private repo gives 404; the
+  user tested it 2026-10-16 and made it public again). labfw's reconfigure skips the download of an installed release.
 - **az3, the firewall-egress cell (2026-10-15, design D59 - NOT decided, both models under test, H15)**:
   `aks-dev-int-stateless-az3`, zone 3, **Sweden's int-se only** (int-se enabled in shared/; az2 keeps int-fi). No overlay:
   `network_profile.network_plugin_mode = "none"` (Azure CNI node subnet + Cilium; NAP has no pod-subnet mode), shared/
