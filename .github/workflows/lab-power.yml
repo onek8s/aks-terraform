@@ -268,7 +268,8 @@ jobs:
           source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
             if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" != "Auto" ]; then
-              az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Auto --no-wait --only-show-errors -o none
+              # As Terraform created it (main.tf node_provisioning_profile): no default NodePools, the fleet brings its own
+              az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Auto --node-provisioning-default-pools None --no-wait --only-show-errors -o none
             fi
           done
           for cluster in $CLUSTERS; do
