@@ -12,9 +12,12 @@ name: Egress agent
 # file kept between runs in the Actions cache (pending, merged and rejected proposals, the sources already seen, the
 # last ingestion time):
 #
-#   new      denials Log Analytics ingested in the last `since_minutes` (5) and since the previous run - allowed
-#            traffic is never read, older events are ignored, bare IPs, nodes, platform pods and sources of
-#            namespaces with a pending proposal are dropped. No cluster, no model. Nothing new: the run ends here.
+#   new      what Log Analytics ingested after the last processed ingestion time (the checkpoint in the state), never
+#            more than `max_lookback_hours` (3) back - a first run or one after a pause starts there, older events
+#            are ignored. Denials only, unless `include_allowed` (a firewall that still allows by default, whose log
+#            keeps allowed lines: azure-landing-zone labfw.log_analytics.denied_only = false). Bare IPs, nodes,
+#            platform pods and sources of namespaces with a pending proposal are dropped. No cluster, no model.
+#            Nothing new: the run ends here.
 #   propose  only when `new` found something: maps the sources to pods, drops what is already in the firewall file,
 #            an open agent PR or the state, and starts the model only for what is left.
 #
@@ -35,9 +38,13 @@ name: Egress agent
 on:
   workflow_dispatch:
     inputs:
-      since_minutes:
-        description: "Denials ingested in the last ... minutes (older ones are ignored)"
-        default: "5"
+      max_lookback_hours:
+        description: "Continue from the last processed log line, but never more than ... hours back"
+        default: "3"
+      include_allowed:
+        description: "Allowed flows too (a firewall that still allows by default)"
+        type: boolean
+        default: false
       dry_run:
         description: "Record the pull request instead of opening it"
         type: boolean
@@ -71,9 +78,9 @@ jobs:
     steps:
       - name: Check the inputs
         env:
-          SINCE_MINUTES: ${{ inputs.since_minutes || '5' }}
+          MAX_LOOKBACK_HOURS: ${{ inputs.max_lookback_hours || '3' }}
         run: |
-          [[ "$SINCE_MINUTES" =~ ^[0-9]{1,3}$ ]] && [ "$SINCE_MINUTES" -ge 1 ] && [ "$SINCE_MINUTES" -le 120 ] || { echo "::error::since_minutes must be 1 to 120"; exit 1; }
+          [[ "$MAX_LOOKBACK_HOURS" =~ ^[0-9]{1,2}$ ]] && [ "$MAX_LOOKBACK_HOURS" -ge 1 ] && [ "$MAX_LOOKBACK_HOURS" -le 24 ] || { echo "::error::max_lookback_hours must be 1 to 24"; exit 1; }
 
       - uses: actions/checkout@v7
 
@@ -115,12 +122,15 @@ jobs:
           AKS_AGENT_PLATFORM: config/onek8s-dev.yaml
           AKS_AGENT_ENV: dev
           AKS_AGENT_GITHUB_TOKEN: ${{ secrets.GH_OWNER }}
-          SINCE_MINUTES: ${{ inputs.since_minutes || '5' }}
+          MAX_LOOKBACK_HOURS: ${{ inputs.max_lookback_hours || '3' }}
+          INCLUDE_ALLOWED: ${{ inputs.include_allowed && 'true' || '' }}
         run: |
           set -euo pipefail
           mkdir -p ../state
           export AKS_AGENT_FIREWALL_WORKSPACE=$(az monitor log-analytics workspace show --subscription "$HUB_SUBSCRIPTION_ID" -g "$FIREWALL_WORKSPACE_GROUP" -n "$FIREWALL_WORKSPACE" --query customerId -o tsv)
-          aks-agent egress new --state ../state/egress.json --out ../state/new.json --since-minutes "$SINCE_MINUTES" | tee -a "$GITHUB_STEP_SUMMARY"
+          args=(--state ../state/egress.json --out ../state/new.json --max-lookback-minutes "$((MAX_LOOKBACK_HOURS * 60))")
+          [ -z "$INCLUDE_ALLOWED" ] || args+=(--include-allowed)
+          aks-agent egress new "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v7
         if: steps.new.outputs.new != '0'

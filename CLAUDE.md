@@ -98,8 +98,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   First real run 2026-10-15 opened **azure-landing-zone#66** (int-se-example -> api.open-meteo.com, 10 turns) - left open
   for the user's review: merging it allows the weather traffic. gpt-4.1-mini looped on guesses until `application_source`
   and the repeated-call guard; keep instructions step by step for it. **No token waste** (aks-ai-agents egress.py,
-  `aks-agent egress new|propose`): only denials (labfw logs denials only, the query asks `Action == "Deny"`) ingested in
-  the last `since_minutes` (5) and after the last checkpoint; state in the Actions cache remembers proposals (pending until
+  `aks-agent egress new|propose`): only what was ingested after the last processed ingestion time (checkpoint), never more
+  than `max_lookback_hours` (3) back (2026-10-16, the user's ask); only denials unless `include_allowed` (for a firewall that
+  still allows by default; labfw logs denials only - azure-landing-zone `labfw.log_analytics.denied_only`). It is a
+  workflow on a GitHub-hosted runner, dispatched by hand, not a running service. State in the Actions cache remembers proposals (pending until
   the PR merges/closes; merged 1 h, rejected 7 d), sources' namespaces and ignored sources (nodes, platform pods) - known
   flows are dropped before cluster access and the model sees only new, unproposed flows (verified: re-runs end at
   "new to look at: 0" or "to propose: 0", no model call). **Do not merge the agent's PRs: the user validates them.**
