@@ -1727,8 +1727,9 @@ variable "advanced_networking" {
   default     = {}
   description = <<DESCRIPTION
 Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium - OneK8s design
-section 16. Defaults to all three on, the production setting; null turns ACNS off (only for a
-cluster without the Cilium dataplane - the zones' FQDN egress policies need it).
+section 16. Defaults to all three on, the production setting; null turns ACNS off - a cluster without
+the Cilium dataplane, or a cell whose egress the hub firewall decides (design D61: overlay + the hub
+Firewall only; the zones' Cilium policies then stay at layer 4). Decided when the cluster is created.
 `observability = false` is a non-production cost saving (D56): FQDN policies keep working.
 
 - `observability` - Hubble flow logs and metrics.

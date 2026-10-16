@@ -40,13 +40,12 @@ gateway_implementation = "traefik"
 # (aks-fluxcd-example, stateless/). Production: true - pod right-sizing (design section 4).
 vertical_pod_autoscaler_enabled = false
 
-# ACNS without container network observability (Hubble): no hubble-relay, flow logs or Hubble metrics
-# (design D56). FQDN network policies and eBPF host routing stay on - the isolation zones' egress
-# needs them, so they are never a cost saving. Production: advanced_networking = {} (all on, the
-# default); turning Hubble back on is an in-place update.
-advanced_networking = {
-  observability = false
-}
+# No Advanced Container Networking Services (2026-10-16, design D61, proposed default egress model: overlay +
+# the hub Firewall only): no FQDN policies, no Hubble, no eBPF host routing - and none of their per-node cost.
+# The hub firewall decides what leaves the cell, per zone (with the overlay it sees the zone's node addresses);
+# Cilium keeps the in-cluster policies at layer 4 (aks-fluxcd-platform clusters/dev-int-stateless-az2 patches
+# them). ACNS on or off - eBPF host routing above all - is decided when the cluster is created: a rebuild.
+advanced_networking = null
 
 # The system pool: ONE amd64 node in availability zone 2, Standard_D4alds_v6 (4 vCPU, 8 GiB, VNet
 # encryption) - fits only with the two savings above - on an ephemeral OS disk on the size's local
@@ -194,10 +193,11 @@ azure_policy_enabled = true
 node_auto_provisioning_enabled = true
 
 # The `example` team's application, in the int-fi zone (design section 7: one namespace per
-# application and zone, `<zone>-<app>`). Its own Flux configuration deploys stateless/ of
-# onek8s/aks-fluxcd-example into it, and its routes attach to the int-fi gateway. Ingress and egress
-# are closed to its own namespace by the namespace's default policies; the platform's Cilium baseline
-# opens DNS and the zone gateway, and the team's own FQDN policy anything outside the cluster.
+# application and zone, `<zone>-<app>`). Its own Flux configuration deploys firewall-egress-int-fi/ of
+# onek8s/aks-fluxcd-example into it (aks-hello with a weather forecast, on the zone's nodes), and its routes
+# attach to the int-fi gateway. Ingress and egress are closed to its own namespace by the namespace's
+# default policies; the platform's Cilium baseline opens DNS and the zone gateway, and the zone's
+# firewall-egress policy the way out, where the hub firewall decides (design D61).
 managed_namespaces = {
   int-fi-example = {
     # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
@@ -225,7 +225,7 @@ managed_namespaces = {
     }
     flux = {
       url  = "https://github.com/onek8s/aks-fluxcd-example"
-      path = "./stateless"
+      path = "./firewall-egress-int-fi"
       # Read every minute, like the platform's repository.
       sync_interval_seconds = 60
       # The zone and its domain, for the team's routes: the gateway they attach to and their hostnames.
