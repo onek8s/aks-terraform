@@ -59,6 +59,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **aks-hello is switched off in every cell (2026-10-16, the user's ask: weekend cost)**: aks-fluxcd-example
+  `lab/scale/kustomization.yaml` (a kustomize component every cell directory includes) sets aks-hello's replicas to **0**
+  in int-fi (az2) and int-se (az3) - no application pod, so NAP removes the zones' nodes and each cell is its system node
+  (plus the cilium-operator spot node). Nothing was removed: Deployment, routes, gateways, namespaces, firewall rules stay.
+  **Switch back on**: aks-fluxcd-example workflow `Lab scale` (`lab-scale.yml`, input `replicas` = `2`; pushes to main,
+  Flux applies within a minute, NAP adds the zone nodes in a few minutes) - or `0` again for the next pause. Until then
+  the routes have no pod behind them: scale up before Isolation tests or a Cluster status with `route_path`.
 - **No public endpoints (2026-10-16, design D60, the user's ask)**: vaults (firewall Deny + trusted bypass), ACR
   (**Premium**, private endpoint incl. data endpoint, ACR Tasks as trusted service), Foundry, the state account
   `stonek8sdevtfstate` (Entra ID only: backend `use_azuread_auth`; apply identity has Storage Blob Data Contributor) and
