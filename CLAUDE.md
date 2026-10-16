@@ -80,8 +80,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   user tested it 2026-10-16 and made it public again). labfw's reconfigure skips the download of an installed release.
 - **az2 is overlay + the hub firewall only, without ACNS (2026-10-16, design D61, the proposed default)**: rebuilt with
   `advanced_networking = null` (ACNS, eBPF host routing and Hubble off - decided at creation). The fleet patches az2's Cilium
-  policies to layer 4 (no DNS proxy) and adds `firewall-egress-int-fi`; aks-hello 0.4.1 (Helsinki forecast, no public IP
-  query) runs on int-fi's zone nodes from aks-fluxcd-example `firewall-egress-int-fi/`. labfw sees the zone's node addresses
+  policies to layer 4 (no DNS proxy) and adds `firewall-egress-int-fi`; aks-hello 0.5.0 (Helsinki forecast, public IP from
+  api.ipify.org at start - since 2026-10-16; `/public-ip` "Connection reset by peer" until labfw allows it) runs on int-fi's zone nodes from aks-fluxcd-example `firewall-egress-int-fi/`. labfw sees the zone's node addresses
   (172.22.17.x), denies api.open-meteo.com, and the egress agent attributes a zone node's address to the application pods on
   it (`node_candidates`, flows marked `viaNode`): it opened **azure-landing-zone#71** (int-fi-example -> api.open-meteo.com) -
   left open for the user. Verified: routes 200 through the int-fi ILB as a VPN client, `/weather` "Connection reset by peer".
