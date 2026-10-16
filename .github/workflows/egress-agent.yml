@@ -45,6 +45,10 @@ on:
         description: "Allowed flows too (a firewall that still allows by default)"
         type: boolean
         default: false
+      forget_declined:
+        description: "Look again at flows the model proposed nothing for (skipped for a day otherwise)"
+        type: boolean
+        default: false
       dry_run:
         description: "Record the pull request instead of opening it"
         type: boolean
@@ -124,12 +128,14 @@ jobs:
           AKS_AGENT_GITHUB_TOKEN: ${{ secrets.GH_OWNER }}
           MAX_LOOKBACK_HOURS: ${{ inputs.max_lookback_hours || '3' }}
           INCLUDE_ALLOWED: ${{ inputs.include_allowed && 'true' || '' }}
+          FORGET_DECLINED: ${{ inputs.forget_declined && 'true' || '' }}
         run: |
           set -euo pipefail
           mkdir -p ../state
           export AKS_AGENT_FIREWALL_WORKSPACE=$(az monitor log-analytics workspace show --subscription "$HUB_SUBSCRIPTION_ID" -g "$FIREWALL_WORKSPACE_GROUP" -n "$FIREWALL_WORKSPACE" --query customerId -o tsv)
           args=(--state ../state/egress.json --out ../state/new.json --max-lookback-minutes "$((MAX_LOOKBACK_HOURS * 60))")
           [ -z "$INCLUDE_ALLOWED" ] || args+=(--include-allowed)
+          [ -z "$FORGET_DECLINED" ] || args+=(--forget-declined)
           aks-agent egress new "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v7
