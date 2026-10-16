@@ -1182,6 +1182,78 @@ run "a_basic_registry_gets_no_private_endpoint" {
   }
 }
 
+run "the_registry_tier_follows_the_environment_basic_below_prd" {
+  command = plan
+
+  variables {
+    environment                   = "acc"
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    container_registry_name       = "acrtest"
+    private_endpoints = {
+      address_prefix             = "172.20.2.0/26"
+      dns_zone_resource_group_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns"
+      public_network_access      = false
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_container_registry.this[0].sku == "Basic" &&
+      azurerm_container_registry.this[0].public_network_access_enabled &&
+      !azurerm_container_registry.this[0].data_endpoint_enabled &&
+      !azurerm_container_registry.this[0].network_rule_bypass_for_tasks_enabled &&
+      !azurerm_container_registry.this[0].admin_enabled &&
+      !contains(keys(azurerm_private_endpoint.this), "acr")
+    )
+    error_message = "Below prd the registry is Basic on its public endpoint (D62), even where the other services are private; admin user off."
+  }
+}
+
+run "the_registry_tier_follows_the_environment_premium_in_prd" {
+  command = plan
+
+  variables {
+    environment                   = "prd"
+    virtual_network_create        = true
+    virtual_network_name          = "vnet-aks-test"
+    virtual_network_address_space = ["172.20.0.0/22"]
+    container_registry_name       = "acrtest"
+    private_endpoints = {
+      address_prefix             = "172.20.2.0/26"
+      dns_zone_resource_group_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-dns"
+      public_network_access      = false
+    }
+  }
+
+  assert {
+    condition = (
+      azurerm_container_registry.this[0].sku == "Premium" &&
+      !azurerm_container_registry.this[0].public_network_access_enabled &&
+      azurerm_container_registry.this[0].data_endpoint_enabled &&
+      azurerm_container_registry.this[0].network_rule_bypass_for_tasks_enabled &&
+      contains(keys(azurerm_private_endpoint.this), "acr")
+    )
+    error_message = "In prd the registry is Premium with its private endpoint and no public network access (D62)."
+  }
+}
+
+run "an_explicit_registry_sku_wins" {
+  command = plan
+
+  variables {
+    environment             = "prd"
+    container_registry_name = "acrtest"
+    container_registry_sku  = "Standard"
+  }
+
+  assert {
+    condition     = azurerm_container_registry.this[0].sku == "Standard" && azurerm_container_registry.this[0].public_network_access_enabled
+    error_message = "container_registry_sku overrides the environment's default."
+  }
+}
+
 run "no_claude_deployment_without_the_organisations_attestation" {
   command = plan
 

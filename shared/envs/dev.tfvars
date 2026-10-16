@@ -31,8 +31,8 @@ subnets = {
 
 # The environment's services on private endpoints in that network (snet-shared-pe, design section 8):
 # the platform vault and the zone vaults (Standard - a vault's endpoint needs no higher tier), the
-# registry (Premium, the only tier with private endpoints), the agents' Foundry resource and the
-# Terraform state account, registered in the hub's private link zones. The cells and the labfw VPN's
+# agents' Foundry resource and the Terraform state account, registered in the hub's private link
+# zones - not the registry: Basic in dev, public (design D62, below). The cells and the labfw VPN's
 # clients - the GitHub-hosted runners too (.github/actions/labfw-vpn) - resolve them to these addresses
 # through labfw's DNS proxy. public_network_access = false: none of them, nor the Log Analytics
 # workspace (the landing zone's Azure Monitor Private Link scope), answers on a public endpoint (the
@@ -113,8 +113,10 @@ log_analytics_workspace_name = "log-dev-platform"
 # The environment's container registry, which every cluster pulls from as its kubelet identity. Not
 # part of the landing zone. Registry names are global; pick another if this one is taken.
 container_registry_name = "acronek8sdev"
-# Premium: a private endpoint and no public network access (about 1.7 USD a day against Basic's 0.2)
-container_registry_sku = "Premium"
+# Basic, on its public endpoint with Entra ID only (the default below prd, design D62, 2026-10-16): a
+# private endpoint needs Premium, about 1.7 USD a day against Basic's 0.2 - prd's registry alone is
+# Premium and private. The hub firewall lets the cells reach the public endpoint and its storage
+# (azure-landing-zone `container_registry` of the exposure).
 
 # The images the registry builds itself, from the apps' public repositories at a pinned commit.
 # Releasing an image is adding its tag here.

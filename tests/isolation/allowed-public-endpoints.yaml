@@ -3,11 +3,18 @@
 # else public, or with local authentication on, fails the run. Fields are regular expressions
 # (case-insensitive, whole value); `check` is public-ip, public-endpoint or local-auth.
 #
-# Since 2026-10-15 (design D60, the user's ask: no public endpoints) the vaults, the registry, Foundry,
-# the Terraform state and the Log Analytics workspaces take no public network access - they are reached
-# through private endpoints, the GitHub-hosted runners over the labfw VPN - and the API servers are
-# private (D58). What remains is below.
+# Since 2026-10-15 (design D60, the user's ask: no public endpoints) the vaults, Foundry, the Terraform
+# state and the Log Analytics workspaces take no public network access - they are reached through
+# private endpoints, the GitHub-hosted runners over the labfw VPN - and the API servers are private
+# (D58). The registry is the exception since 2026-10-16 (D62): a non-production registry is Basic,
+# which Azure offers no private endpoint for. What remains is below.
 allowed:
+  # Design D62: a non-production registry is Basic on its public endpoint, Entra ID only (the local-auth
+  # check still fails on an admin user); prd's registry alone is Premium with a private endpoint
+  - check: public-endpoint
+    type: microsoft.containerregistry/registries
+    name: acronek8sdev
+    reason: "Non-production registry: Basic (D62), no private endpoint below Premium; Entra ID only"
   # Designed (design sections 8 and 13): the external zones' gateways are published on a public load
   # balancer in every cell; AKS creates its frontend IPs in the node resource group. The internal cells
   # (the lab) have none: their outbound goes through the hub (userDefinedRouting).
