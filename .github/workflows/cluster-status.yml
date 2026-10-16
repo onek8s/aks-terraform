@@ -37,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      cilium_drops:
+        description: "Record Cilium's policy drops on every node while the routes are tried (a cell without Hubble)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -280,9 +285,17 @@ jobs:
         continue-on-error: true
         env:
           ROUTE_PATH: ${{ inputs.route_path }}
+          CILIUM_DROPS: ${{ inputs.cilium_drops && 'true' || '' }}
         run: |
           set +e
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          # Cilium's own drop monitor on every node while the routes are tried: what Hubble would show
+          if [ -n "$CILIUM_DROPS" ]; then
+            for pod in $(kubectl -n kube-system get pods -l k8s-app=cilium -o name); do
+              kubectl -n kube-system exec "$pod" -c cilium-agent -- timeout 90 cilium-dbg monitor --type drop > "$RUNNER_TEMP/drops-${pod#pod/}.txt" 2>&1 &
+            done
+            sleep 5
+          fi
           [[ -z "$ROUTE_PATH" || "$ROUTE_PATH" =~ ^/[A-Za-z0-9/._-]*$ ]] || { echo "::error::route_path must be a plain path"; exit 1; }
           kubectl get httproutes -A -o json | jq -r '.items[] | .metadata.namespace as $ns | .spec.parentRefs[0] as $p | .spec.hostnames[]? as $h | "\($p.namespace // $ns) \($p.name) \($h)"' |
           while read -r gwns gw host; do
@@ -302,6 +315,10 @@ jobs:
             out=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$host:443:${lb:-0.0.0.0}" "https://$host/")
             echo "== https://$host/ as a VPN client: DNS $host -> ${lb:-nothing}, HTTP $out (certificate checked)"
           done
+          if [ -n "$CILIUM_DROPS" ]; then
+            wait
+            for f in "$RUNNER_TEMP"/drops-*.txt; do echo "== $(basename "$f" .txt)"; grep -v "^Listening\|^Press" "$f" | head -n 40; done
+          fi
 
       - name: Node iptables rules
         if: inputs.node_iptables
