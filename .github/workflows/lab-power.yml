@@ -2,38 +2,42 @@ name: Lab power
 
 # The lab's power switch, by hand: stops the dev cells for a pause (a weekend) and starts them again, with
 # labfw - the hub's firewall, which everything behind it needs - switched off last and on first. Nothing is
-# removed or changed in Git but one number: the clusters keep their state (Azure keeps a stopped cluster's
-# state for up to 12 months), and aks-hello's replicas in onek8s/aks-fluxcd-example (lab/scale) go to 0
-# before a stop and back to 2 after a start.
+# removed and Git is not changed: the clusters keep their state (Azure keeps a stopped cluster's state for up
+# to 12 months), and what the stop changes in the clusters, Flux puts back from Git on the start.
 #
-#   stop:  1. aks-hello's replicas to 0 (`scale`) - so NAP removes the zones' application nodes, which
-#             `az aks stop` does not manage (they are standalone VMs, not the cluster's scale sets);
-#          2. `az aks stop` of every cluster in `clusters`, waited for (the control plane and the system
-#             pool are deallocated; the cluster keeps every object);
-#          3. labfw's VM deallocated (`firewall`) - last, since the cells' egress, the runners' VPN and the
-#             private names all go through it. Its public address is static, so the VPN configs stay valid.
-#   start: 1. labfw's VM started and running, with a minute for its services (`firewall`);
-#          2. `az aks start` of every cluster, waited for (AKS recreates the API server's private endpoint
-#             in snet-system; the public FQDN follows it);
-#          3. aks-hello's replicas back to 2 (`scale`).
+# A cluster with node autoprovisioning (NAP) cannot be stopped as it is ("You can't stop clusters which use the
+# NAP feature", learn.microsoft.com/azure/aks/start-stop-cluster; its nodes are standalone VMs the stop does not
+# manage), so the stop first takes NAP out of the way, the way the docs disable it - and the start brings it back:
 #
-# Verified 2026-10-16 (the docs: "You can't stop clusters which use the Node Autoprovisioning (NAP)
-# feature", learn.microsoft.com/azure/aks/start-stop-cluster): the step says what Azure answered. If it is
-# refused, the run stops there with labfw and the clusters as they were (the replicas stay 0 - the zones'
-# nodes are gone; the alternative for a long pause is Deploy `destroy` and `apply` with allow_empty_state).
+#   stop, per cluster:  1. every Flux configuration suspended (nothing fights the steps below);
+#                       2. every Deployment and StatefulSet of the zones' application namespaces (label
+#                          platform/zone) scaled to 0, and their pods waited for;
+#                       3. NAP off: every NodePool's cpu limit set to 0 (no new node), NAP's nodes deleted
+#                          (Karpenter removes their VMs) and waited for, then node provisioning mode Manual;
+#                       4. `az aks stop`, waited for (control plane and system pool deallocated).
+#         then:         5. labfw's VM deallocated (`firewall`) - last: the cells' egress, the runners' VPN
+#                          and the private names all go through it. Its public address is static, so the
+#                          VPN configs stay valid.
+#   start:              1. labfw's VM started and running, with a minute for its services (`firewall`);
+#         per cluster:  2. `az aks start`, waited for (AKS recreates the API server's private endpoint in
+#                          snet-system; the public FQDN follows it);
+#                       3. node provisioning mode Auto (NAP back);
+#                       4. every Flux configuration resumed: Flux re-applies the NodePools' limits and the
+#                          Deployments' replicas from Git within a minute, and NAP adds the zones' nodes.
 #
-# A failed cluster step leaves labfw on: a cluster that cannot be stopped keeps its firewall. `clusters`
-# empty with `firewall` off is a scale-only run (0 for stop, 2 for start).
+# A failed cluster step leaves labfw on (a cluster that is not stopped keeps its firewall) and the cluster
+# where it stopped: re-run after fixing - every step is idempotent. `clusters` empty with `firewall` on
+# switches labfw alone.
 #
-# Credentials: Deploy's identity (GitHub environment `dev`; `az aks stop|start` as Owner of sub-aks-dev,
+# Credentials: Deploy's identity (GitHub environment `dev`: Owner and AKS RBAC Cluster Admin of sub-aks-dev;
 # labfw's VM through the landing zone's custom role "OneK8s labfw Power" on its resource group) and the
-# organisation's GH_OWNER to commit the one-line replica change to onek8s/aks-fluxcd-example (its own
-# Actions do not run). Nothing here needs the VPN: ARM is public.
+# labfw VPN (peer github-runners, concurrency group labfw-vpn) for kubectl against the private API servers.
+# ARM (az aks, az vm, az k8s-configuration) is public: no VPN needed for it.
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "stop (scale down, stop the clusters, then labfw) or start (labfw, the clusters, then scale up)"
+        description: "stop (Flux paused, apps scaled down, NAP off, clusters stopped, then labfw) or start (labfw, clusters, NAP on, Flux resumed)"
         required: true
         type: choice
         options: [stop, start]
@@ -46,36 +50,31 @@ on:
         required: false
         default: true
         type: boolean
-      scale:
-        description: "Also aks-hello's replicas in aks-fluxcd-example (lab/scale): 0 before a stop, 2 after a start"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
   id-token: write # GitHub OIDC, when there is no client secret
 
+# The labfw VPN's one runner peer (.github/actions/labfw-vpn): one such run at a time
 concurrency:
-  group: lab-power
+  group: labfw-vpn
+  cancel-in-progress: false
 
 jobs:
   power:
     name: ${{ inputs.action }}
     runs-on: ubuntu-latest
     environment: dev
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       ACTION: ${{ inputs.action }}
       CLUSTERS: ${{ inputs.clusters }}
-      FIREWALL: ${{ inputs.firewall }}
-      SCALE: ${{ inputs.scale }}
       RESOURCE_GROUP: rg-aks-dev
       FIREWALL_VM: labfw-fw
-      EXAMPLE_REPO: onek8s/aks-fluxcd-example
-      EXAMPLE_FILE: lab/scale/kustomization.yaml
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Sign in to Azure (service principal)
         if: env.AZURE_CLIENT_SECRET != ''
         env:
@@ -93,6 +92,47 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Tools
+        run: |
+          set -euo pipefail
+          sudo az aks install-cli --only-show-errors >/dev/null
+          az config set extension.use_dynamic_install=yes_without_prompt extension.dynamic_install_allow_preview=false --only-show-errors
+          az extension add --name k8s-configuration --only-show-errors --upgrade
+          mkdir -p "$RUNNER_TEMP/kube"
+          cat > "$RUNNER_TEMP/lib.sh" <<'LIB'
+          # The helpers of every cluster step. Sourced; needs RESOURCE_GROUP.
+          power_state() { az aks show -g "$RESOURCE_GROUP" -n "$1" --query '[powerState.code, provisioningState, nodeProvisioningProfile.mode]' -o tsv | tr '\n' ' '; }
+          wait_cluster() { # <cluster> <power> : until powerState and provisioningState Succeeded, 20 min
+            local cluster=$1 want=$2 power state i
+            for i in $(seq 1 80); do
+              read -r power state _ <<<"$(power_state "$cluster")"
+              echo "$cluster: $power ($state)"
+              [ "$power" = "$want" ] && [ "$state" = "Succeeded" ] && return 0
+              [ "$state" = "Failed" ] && { echo "::error::$cluster: $state"; return 1; }
+              sleep 15
+            done
+            echo "::error::$cluster is $power ($state), wanted $want"; return 1
+          }
+          wait_provisioned() { # <cluster> : until provisioningState Succeeded, 20 min
+            local cluster=$1 state i
+            for i in $(seq 1 80); do
+              state="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query provisioningState -o tsv)"
+              echo "$cluster: $state"
+              [ "$state" = "Succeeded" ] && return 0
+              [ "$state" = "Failed" ] && { echo "::error::$cluster: $state"; return 1; }
+              sleep 15
+            done
+            echo "::error::$cluster is still $state"; return 1
+          }
+          kubeconfig() { # <cluster> : kubectl against it (over the VPN) as the signed-in identity
+            export KUBECONFIG="$RUNNER_TEMP/kube/$1"
+            [ -s "$KUBECONFIG" ] && return 0
+            az aks get-credentials -g "$RESOURCE_GROUP" -n "$1" --file "$KUBECONFIG" --only-show-errors
+            kubelogin convert-kubeconfig -l azurecli
+          }
+          flux_configurations() { az k8s-configuration flux list -g "$RESOURCE_GROUP" -c "$1" -t managedClusters --query '[].name' -o tsv; }
+          LIB
 
       - name: Find labfw's VM
         if: inputs.firewall
@@ -121,63 +161,96 @@ jobs:
           [ "$state" = "PowerState/running" ] || { echo "::error::labfw is $state"; exit 1; }
           echo "running; a minute for labfw's services (DNS proxy, VPN, firewall) before the clusters need them"
           sleep 60
+          echo "labfw: running" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Scale aks-hello to 0 (before the stop)
-        if: inputs.action == 'stop' && inputs.scale
-        env:
-          GH_TOKEN: ${{ secrets.GH_OWNER }}
-          REPLICAS: "0"
+      - name: Start the clusters
+        if: inputs.action == 'start' && inputs.clusters != ''
         run: |
           set -euo pipefail
-          [ -n "$GH_TOKEN" ] || { echo "::error::The GH_OWNER secret is not available to this repository"; exit 1; }
-          current="$(gh api "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE?ref=main")"
-          sha="$(jq -r .sha <<<"$current")"
-          jq -r .content <<<"$current" | base64 -d > before.yaml
-          sed -E "s/^(    count: )[0-9]+$/\1${REPLICAS}/" before.yaml > after.yaml
-          grep -q "^    count: ${REPLICAS}$" after.yaml
-          if cmp -s before.yaml after.yaml; then echo "already $REPLICAS"; exit 0; fi
-          gh api -X PUT "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE" -f branch=main -f sha="$sha" \
-            -f message="Lab scale: aks-hello replicas $REPLICAS in every cell (Lab power $ACTION)" \
-            -f content="$(base64 -w0 after.yaml)" --jq '.commit.html_url'
-          echo "aks-hello replicas $REPLICAS in $EXAMPLE_REPO main; Flux applies it within a minute" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Wait for the zones' nodes to go
-        if: inputs.action == 'stop' && inputs.scale && inputs.clusters != ''
-        run: |
-          set -euo pipefail
-          # NAP's nodes are standalone VMs in the node resource group (the system pool is a scale set). One
-          # may stay: AKS's cilium-operator keeps a second replica on a small zone node (see CLAUDE.md).
+          source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
-            node_rg="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeResourceGroup -o tsv)"
+            echo "== $cluster: $(power_state "$cluster")"
+            az aks start -g "$RESOURCE_GROUP" -n "$cluster" --no-wait
+          done
+          for cluster in $CLUSTERS; do wait_cluster "$cluster" Running; done
+
+      - name: Join the labfw VPN
+        if: inputs.clusters != ''
+        uses: ./.github/actions/labfw-vpn
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
+
+      - name: Pause Flux and scale the applications down
+        if: inputs.action == 'stop' && inputs.clusters != ''
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          for cluster in $CLUSTERS; do
+            echo "== $cluster: $(power_state "$cluster")"
+            for config in $(flux_configurations "$cluster"); do
+              az k8s-configuration flux update -g "$RESOURCE_GROUP" -c "$cluster" -t managedClusters -n "$config" --suspend true --no-wait --only-show-errors -o none
+              echo "$cluster: Flux configuration $config suspended"
+            done
+            kubeconfig "$cluster"
+            namespaces="$(kubectl get namespaces -l platform/zone -o jsonpath='{.items[*].metadata.name}')"
+            for ns in $namespaces; do
+              kubectl -n "$ns" scale deployments,statefulsets --all --replicas=0
+            done
             for i in $(seq 1 40); do
-              names="$(az vm list -g "$node_rg" --query '[].name' -o tsv | tr '\n' ' ')"
-              count="$(wc -w <<<"$names")"
-              echo "$cluster: $count NAP node(s): $names"
-              [ "$count" -le 1 ] && break
+              left=0
+              for ns in $namespaces; do left=$((left + $(kubectl -n "$ns" get pods --no-headers 2>/dev/null | wc -l))); done
+              echo "$cluster: $left application pod(s) left in: $namespaces"
+              [ "$left" -eq 0 ] && break
               sleep 15
             done
+            [ "$left" -eq 0 ] || { echo "::error::$cluster: application pods still running"; exit 1; }
+          done
+
+      - name: NAP off
+        if: inputs.action == 'stop' && inputs.clusters != ''
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          for cluster in $CLUSTERS; do
+            kubeconfig "$cluster"
+            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" = "Manual" ]; then
+              echo "$cluster: NAP already off"; continue
+            fi
+            # The way the docs disable NAP: no new nodes (every NodePool's cpu limit 0 - Flux restores the
+            # limits of Git on the start), NAP's nodes deleted (Karpenter's finalizer removes their VMs), then Manual.
+            for pool in $(kubectl get nodepools.karpenter.sh -o jsonpath='{.items[*].metadata.name}'); do
+              kubectl patch nodepools.karpenter.sh "$pool" --type merge -p '{"spec":{"limits":{"cpu":"0"}}}'
+            done
+            nodes="$(kubectl get nodes -l karpenter.sh/nodepool -o jsonpath='{.items[*].metadata.name}')"
+            [ -z "$nodes" ] || kubectl delete nodes $nodes --wait=false
+            node_rg="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeResourceGroup -o tsv)"
+            for i in $(seq 1 60); do
+              left="$(kubectl get nodes -l karpenter.sh/nodepool -o jsonpath='{.items[*].metadata.name}')"
+              vms="$(az vm list -g "$node_rg" --query '[].name' -o tsv | tr '\n' ' ')"
+              echo "$cluster: NAP nodes: ${left:-none}; standalone VMs: ${vms:-none}"
+              [ -z "$left" ] && [ -z "$vms" ] && break
+              sleep 15
+            done
+            [ -z "$left" ] && [ -z "$vms" ] || { echo "::error::$cluster: NAP nodes or VMs left"; exit 1; }
+            az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Manual --no-wait --only-show-errors -o none
+          done
+          for cluster in $CLUSTERS; do
+            wait_provisioned "$cluster"
+            echo "$cluster: node provisioning $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)"
           done
 
       - name: Stop the clusters
         if: inputs.action == 'stop' && inputs.clusters != ''
         run: |
           set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
-            echo "== $cluster: $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState, nodeProvisioningProfile.mode]' -o tsv | tr '\n' ' ')"
-            if ! az aks stop -g "$RESOURCE_GROUP" -n "$cluster" --no-wait; then
-              echo "::error::az aks stop refused $cluster (see above: a NAP cluster cannot be stopped, per the AKS docs)"; exit 1
-            fi
+            echo "== $cluster: $(power_state "$cluster")"
+            az aks stop -g "$RESOURCE_GROUP" -n "$cluster" --no-wait
           done
           for cluster in $CLUSTERS; do
-            for i in $(seq 1 60); do
-              read -r power state <<<"$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
-              echo "$cluster: $power ($state)"
-              [ "$power" = "Stopped" ] && [ "$state" = "Succeeded" ] && break
-              [ "$state" = "Failed" ] && { echo "::error::$cluster: stop failed"; exit 1; }
-              sleep 15
-            done
-            [ "$power" = "Stopped" ] || { echo "::error::$cluster is still $power"; exit 1; }
-            echo "$cluster: Stopped" >> "$GITHUB_STEP_SUMMARY"
+            wait_cluster "$cluster" Stopped
+            echo "$cluster: Stopped (Flux paused, applications at 0, NAP off)" >> "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Deallocate labfw (last)
@@ -188,41 +261,33 @@ jobs:
           az vm get-instance-view --ids "$FIREWALL_VM_ID" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv
           echo "labfw: deallocated (the VPN and the cells' egress are off until the next start)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Start the clusters
+      - name: NAP on and Flux resumed
         if: inputs.action == 'start' && inputs.clusters != ''
         run: |
           set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
-            echo "== $cluster: $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
-            az aks start -g "$RESOURCE_GROUP" -n "$cluster" --no-wait
+            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" != "Auto" ]; then
+              az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Auto --no-wait --only-show-errors -o none
+            fi
           done
           for cluster in $CLUSTERS; do
-            for i in $(seq 1 80); do
-              read -r power state <<<"$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
-              echo "$cluster: $power ($state)"
-              [ "$power" = "Running" ] && [ "$state" = "Succeeded" ] && break
-              [ "$state" = "Failed" ] && { echo "::error::$cluster: start failed"; exit 1; }
-              sleep 15
+            wait_provisioned "$cluster"
+            echo "$cluster: node provisioning $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)"
+            for config in $(flux_configurations "$cluster"); do
+              az k8s-configuration flux update -g "$RESOURCE_GROUP" -c "$cluster" -t managedClusters -n "$config" --suspend false --no-wait --only-show-errors -o none
+              echo "$cluster: Flux configuration $config resumed"
             done
-            [ "$power" = "Running" ] && [ "$state" = "Succeeded" ] || { echo "::error::$cluster is $power ($state)"; exit 1; }
-            echo "$cluster: Running" >> "$GITHUB_STEP_SUMMARY"
           done
-
-      - name: Scale aks-hello to 2 (after the start)
-        if: inputs.action == 'start' && inputs.scale
-        env:
-          GH_TOKEN: ${{ secrets.GH_OWNER }}
-          REPLICAS: "2"
-        run: |
-          set -euo pipefail
-          [ -n "$GH_TOKEN" ] || { echo "::error::The GH_OWNER secret is not available to this repository"; exit 1; }
-          current="$(gh api "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE?ref=main")"
-          sha="$(jq -r .sha <<<"$current")"
-          jq -r .content <<<"$current" | base64 -d > before.yaml
-          sed -E "s/^(    count: )[0-9]+$/\1${REPLICAS}/" before.yaml > after.yaml
-          grep -q "^    count: ${REPLICAS}$" after.yaml
-          if cmp -s before.yaml after.yaml; then echo "already $REPLICAS"; exit 0; fi
-          gh api -X PUT "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE" -f branch=main -f sha="$sha" \
-            -f message="Lab scale: aks-hello replicas $REPLICAS in every cell (Lab power $ACTION)" \
-            -f content="$(base64 -w0 after.yaml)" --jq '.commit.html_url'
-          echo "aks-hello replicas $REPLICAS in $EXAMPLE_REPO main; Flux applies it within a minute, NAP adds the zones' nodes in a few" >> "$GITHUB_STEP_SUMMARY"
+          # What came back: Flux's first reconcile puts the limits and replicas of Git back; NAP's nodes follow.
+          sleep 120
+          for cluster in $CLUSTERS; do
+            kubeconfig "$cluster"
+            echo "== $cluster: $(power_state "$cluster")"
+            kubectl get nodepools.karpenter.sh -o custom-columns='NAME:.metadata.name,CPU_LIMIT:.spec.limits.cpu' || true
+            for ns in $(kubectl get namespaces -l platform/zone -o jsonpath='{.items[*].metadata.name}'); do
+              kubectl -n "$ns" get deployments,statefulsets 2>/dev/null || true
+            done
+            kubectl get nodes -o wide
+            echo "$cluster: Running (NAP on, Flux resumed - the applications and the zones' nodes follow within minutes)" >> "$GITHUB_STEP_SUMMARY"
+          done
