@@ -36,6 +36,7 @@ reads; job logs via `get_job_logs`).
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-gwc-platform` (over the VPN) without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
+| `lab-power.yml` (Lab power) | Manual: `action` stop / start of the dev cells for a pause (`clusters`, default az2 az3; `firewall`). stop, per cluster: every Flux configuration suspended, Deployments/StatefulSets of the `platform/zone` namespaces scaled to 0 and waited for, NAP off (NodePool cpu limits 0, NAP nodes deleted, mode Manual - a NAP cluster cannot be stopped), `az aks stop`; then labfw's VM deallocated (custom role `OneK8s labfw Power`, azure-landing-zone). start: labfw first (+1 min), `az aks start`, mode Auto, Flux resumed (Git puts the limits and replicas back). Git unchanged. VPN for kubectl (concurrency `labfw-vpn`). |
 | `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` and `roles` input, groups `grp-onek8s-dev-<ns>-<role>` (default view edit admin; `platform` + `viewers` for the platform viewers) and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
 | `vpn-clients.yml` (VPN clients) | The runners' labfw VPN configs as `dev` environment secrets (GH_OWNER): `copy-runners` (vault -> `LABFW_VPN_GITHUB_RUNNERS`), `new-peer` (key pair -> `LABFW_VPN_<PEER>`, prints the public key for azure-landing-zone `labfw.vpn.peers`). |
 | `lab-admin.yml` (Lab admin) | Manual, **last resort**: runs ONE `az` (as `AZURE_OWNER`, on the dev subscription) or `gh` (with `GH_OWNER`) command; `args` split like a shell, no pipes (use `--query`/`--jq`). For special changes nothing else covers (Entra ID, Graph, org/repo settings). The run log is readable by anyone who can read the repo: never print a secret. |
@@ -59,6 +60,16 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Weekend pause (2026-10-16, the user's ask: minimal lab cost, nothing removed)**: the `Lab power` workflow
+  (`lab-power.yml`, the user's sequence): `stop` = Flux paused, the zone namespaces' apps scaled to 0 in the cluster, NAP
+  off (every NodePool's cpu limit 0, NAP nodes deleted, `--node-provisioning-mode Manual` - **a NAP cluster cannot be
+  stopped**: "You can't stop clusters which use the NAP feature", learn.microsoft.com/azure/aks/start-stop-cluster; the
+  system pool cannot scale to 0 either), `az aks stop` of az2 and az3, labfw deallocated last; `start` = labfw first,
+  `az aks start`, NAP Auto, Flux resumed - Flux re-applies the Git state (NodePool limits, replicas 2). aks-fluxcd-example
+  `lab/scale/kustomization.yaml` (a kustomize component every cell directory includes) is an independent Git-only
+  switch for aks-hello's replicas (0 = off, 2 = running; the rollout guardrails allow 0): **it must say 2 for a Lab
+  power start to bring the app back**. The first stop run's result is below in the notes of 2026-10-16 (look for
+  "Lab power run"). A stopped cluster: Flux suspended, apps 0, NAP Manual - run `start`, never fix those by hand.
 - **The registry is Basic and public again (2026-10-16, design D62, the user's ask: Premium is too much for a lab)**:
   shared/ `container_registry_sku` defaults by environment - Premium (private endpoint, data endpoint, no public access)
   in `prd` only, Basic on its public endpoint (Entra ID only, admin off) below it. dev's `acronek8sdev` was downgraded in
