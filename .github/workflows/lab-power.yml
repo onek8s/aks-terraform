@@ -1,0 +1,228 @@
+name: Lab power
+
+# The lab's power switch, by hand: stops the dev cells for a pause (a weekend) and starts them again, with
+# labfw - the hub's firewall, which everything behind it needs - switched off last and on first. Nothing is
+# removed or changed in Git but one number: the clusters keep their state (Azure keeps a stopped cluster's
+# state for up to 12 months), and aks-hello's replicas in onek8s/aks-fluxcd-example (lab/scale) go to 0
+# before a stop and back to 2 after a start.
+#
+#   stop:  1. aks-hello's replicas to 0 (`scale`) - so NAP removes the zones' application nodes, which
+#             `az aks stop` does not manage (they are standalone VMs, not the cluster's scale sets);
+#          2. `az aks stop` of every cluster in `clusters`, waited for (the control plane and the system
+#             pool are deallocated; the cluster keeps every object);
+#          3. labfw's VM deallocated (`firewall`) - last, since the cells' egress, the runners' VPN and the
+#             private names all go through it. Its public address is static, so the VPN configs stay valid.
+#   start: 1. labfw's VM started and running, with a minute for its services (`firewall`);
+#          2. `az aks start` of every cluster, waited for (AKS recreates the API server's private endpoint
+#             in snet-system; the public FQDN follows it);
+#          3. aks-hello's replicas back to 2 (`scale`).
+#
+# Verified 2026-10-16 (the docs: "You can't stop clusters which use the Node Autoprovisioning (NAP)
+# feature", learn.microsoft.com/azure/aks/start-stop-cluster): the step says what Azure answered. If it is
+# refused, the run stops there with labfw and the clusters as they were (the replicas stay 0 - the zones'
+# nodes are gone; the alternative for a long pause is Deploy `destroy` and `apply` with allow_empty_state).
+#
+# A failed cluster step leaves labfw on: a cluster that cannot be stopped keeps its firewall. `clusters`
+# empty with `firewall` off is a scale-only run (0 for stop, 2 for start).
+#
+# Credentials: Deploy's identity (GitHub environment `dev`; `az aks stop|start` as Owner of sub-aks-dev,
+# labfw's VM through the landing zone's custom role "OneK8s labfw Power" on its resource group) and the
+# organisation's GH_OWNER to commit the one-line replica change to onek8s/aks-fluxcd-example (its own
+# Actions do not run). Nothing here needs the VPN: ARM is public.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "stop (scale down, stop the clusters, then labfw) or start (labfw, the clusters, then scale up)"
+        required: true
+        type: choice
+        options: [stop, start]
+      clusters:
+        description: "The clusters, space-separated (empty: none)"
+        required: false
+        default: "aks-dev-int-stateless-az2 aks-dev-int-stateless-az3"
+      firewall:
+        description: "Also labfw's VM: deallocated last on stop, started first on start"
+        required: false
+        default: true
+        type: boolean
+      scale:
+        description: "Also aks-hello's replicas in aks-fluxcd-example (lab/scale): 0 before a stop, 2 after a start"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC, when there is no client secret
+
+concurrency:
+  group: lab-power
+
+jobs:
+  power:
+    name: ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 90
+    env:
+      ACTION: ${{ inputs.action }}
+      CLUSTERS: ${{ inputs.clusters }}
+      FIREWALL: ${{ inputs.firewall }}
+      SCALE: ${{ inputs.scale }}
+      RESOURCE_GROUP: rg-aks-dev
+      FIREWALL_VM: labfw-fw
+      EXAMPLE_REPO: onek8s/aks-fluxcd-example
+      EXAMPLE_FILE: lab/scale/kustomization.yaml
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - name: Sign in to Azure (service principal)
+        if: env.AZURE_CLIENT_SECRET != ''
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          az login --service-principal --username "$AZURE_CLIENT_ID" --password "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" --output none
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+
+      - name: Sign in to Azure (GitHub OIDC)
+        if: env.AZURE_CLIENT_SECRET == ''
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Find labfw's VM
+        if: inputs.firewall
+        run: |
+          set -euo pipefail
+          id=""
+          for sub in $(az account list --query '[].id' -o tsv); do
+            id="$(az vm list --subscription "$sub" --query "[?name=='$FIREWALL_VM'].id | [0]" -o tsv)"
+            [ -z "$id" ] || break
+          done
+          [ -n "$id" ] || { echo "::error::no VM $FIREWALL_VM in any subscription the identity reads"; exit 1; }
+          echo "FIREWALL_VM_ID=$id" >> "$GITHUB_ENV"
+          az vm get-instance-view --ids "$id" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv
+
+      - name: Start labfw (first)
+        if: inputs.action == 'start' && inputs.firewall
+        run: |
+          set -euo pipefail
+          az vm start --ids "$FIREWALL_VM_ID" --output none
+          for i in $(seq 1 30); do
+            state="$(az vm get-instance-view --ids "$FIREWALL_VM_ID" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv)"
+            echo "$state"
+            [ "$state" = "PowerState/running" ] && break
+            sleep 10
+          done
+          [ "$state" = "PowerState/running" ] || { echo "::error::labfw is $state"; exit 1; }
+          echo "running; a minute for labfw's services (DNS proxy, VPN, firewall) before the clusters need them"
+          sleep 60
+
+      - name: Scale aks-hello to 0 (before the stop)
+        if: inputs.action == 'stop' && inputs.scale
+        env:
+          GH_TOKEN: ${{ secrets.GH_OWNER }}
+          REPLICAS: "0"
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::The GH_OWNER secret is not available to this repository"; exit 1; }
+          current="$(gh api "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE?ref=main")"
+          sha="$(jq -r .sha <<<"$current")"
+          jq -r .content <<<"$current" | base64 -d > before.yaml
+          sed -E "s/^(    count: )[0-9]+$/\1${REPLICAS}/" before.yaml > after.yaml
+          grep -q "^    count: ${REPLICAS}$" after.yaml
+          if cmp -s before.yaml after.yaml; then echo "already $REPLICAS"; exit 0; fi
+          gh api -X PUT "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE" -f branch=main -f sha="$sha" \
+            -f message="Lab scale: aks-hello replicas $REPLICAS in every cell (Lab power $ACTION)" \
+            -f content="$(base64 -w0 after.yaml)" --jq '.commit.html_url'
+          echo "aks-hello replicas $REPLICAS in $EXAMPLE_REPO main; Flux applies it within a minute" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for the zones' nodes to go
+        if: inputs.action == 'stop' && inputs.scale && inputs.clusters != ''
+        run: |
+          set -euo pipefail
+          # NAP's nodes are standalone VMs in the node resource group (the system pool is a scale set). One
+          # may stay: AKS's cilium-operator keeps a second replica on a small zone node (see CLAUDE.md).
+          for cluster in $CLUSTERS; do
+            node_rg="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeResourceGroup -o tsv)"
+            for i in $(seq 1 40); do
+              names="$(az vm list -g "$node_rg" --query '[].name' -o tsv | tr '\n' ' ')"
+              count="$(wc -w <<<"$names")"
+              echo "$cluster: $count NAP node(s): $names"
+              [ "$count" -le 1 ] && break
+              sleep 15
+            done
+          done
+
+      - name: Stop the clusters
+        if: inputs.action == 'stop' && inputs.clusters != ''
+        run: |
+          set -euo pipefail
+          for cluster in $CLUSTERS; do
+            echo "== $cluster: $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState, nodeProvisioningProfile.mode]' -o tsv | tr '\n' ' ')"
+            if ! az aks stop -g "$RESOURCE_GROUP" -n "$cluster" --no-wait; then
+              echo "::error::az aks stop refused $cluster (see above: a NAP cluster cannot be stopped, per the AKS docs)"; exit 1
+            fi
+          done
+          for cluster in $CLUSTERS; do
+            for i in $(seq 1 60); do
+              read -r power state <<<"$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
+              echo "$cluster: $power ($state)"
+              [ "$power" = "Stopped" ] && [ "$state" = "Succeeded" ] && break
+              [ "$state" = "Failed" ] && { echo "::error::$cluster: stop failed"; exit 1; }
+              sleep 15
+            done
+            [ "$power" = "Stopped" ] || { echo "::error::$cluster is still $power"; exit 1; }
+            echo "$cluster: Stopped" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Deallocate labfw (last)
+        if: inputs.action == 'stop' && inputs.firewall
+        run: |
+          set -euo pipefail
+          az vm deallocate --ids "$FIREWALL_VM_ID" --output none
+          az vm get-instance-view --ids "$FIREWALL_VM_ID" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv
+          echo "labfw: deallocated (the VPN and the cells' egress are off until the next start)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Start the clusters
+        if: inputs.action == 'start' && inputs.clusters != ''
+        run: |
+          set -euo pipefail
+          for cluster in $CLUSTERS; do
+            echo "== $cluster: $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
+            az aks start -g "$RESOURCE_GROUP" -n "$cluster" --no-wait
+          done
+          for cluster in $CLUSTERS; do
+            for i in $(seq 1 80); do
+              read -r power state <<<"$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' ')"
+              echo "$cluster: $power ($state)"
+              [ "$power" = "Running" ] && [ "$state" = "Succeeded" ] && break
+              [ "$state" = "Failed" ] && { echo "::error::$cluster: start failed"; exit 1; }
+              sleep 15
+            done
+            [ "$power" = "Running" ] && [ "$state" = "Succeeded" ] || { echo "::error::$cluster is $power ($state)"; exit 1; }
+            echo "$cluster: Running" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Scale aks-hello to 2 (after the start)
+        if: inputs.action == 'start' && inputs.scale
+        env:
+          GH_TOKEN: ${{ secrets.GH_OWNER }}
+          REPLICAS: "2"
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::The GH_OWNER secret is not available to this repository"; exit 1; }
+          current="$(gh api "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE?ref=main")"
+          sha="$(jq -r .sha <<<"$current")"
+          jq -r .content <<<"$current" | base64 -d > before.yaml
+          sed -E "s/^(    count: )[0-9]+$/\1${REPLICAS}/" before.yaml > after.yaml
+          grep -q "^    count: ${REPLICAS}$" after.yaml
+          if cmp -s before.yaml after.yaml; then echo "already $REPLICAS"; exit 0; fi
+          gh api -X PUT "repos/$EXAMPLE_REPO/contents/$EXAMPLE_FILE" -f branch=main -f sha="$sha" \
+            -f message="Lab scale: aks-hello replicas $REPLICAS in every cell (Lab power $ACTION)" \
+            -f content="$(base64 -w0 after.yaml)" --jq '.commit.html_url'
+          echo "aks-hello replicas $REPLICAS in $EXAMPLE_REPO main; Flux applies it within a minute, NAP adds the zones' nodes in a few" >> "$GITHUB_STEP_SUMMARY"
