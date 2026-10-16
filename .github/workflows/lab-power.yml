@@ -22,7 +22,7 @@ name: Lab power
 #         per cluster:  2. `az aks start`, waited for (AKS recreates the API server's private endpoint in
 #                          snet-system; the public FQDN follows it);
 #                       3. node provisioning mode Auto (NAP back);
-#                       4. every Flux configuration resumed: Flux re-applies the NodePools' limits and the
+#                       4. every Flux configuration and Kustomization resumed: Flux re-applies the NodePools' limits and the
 #                          Deployments' replicas from Git within a minute, and NAP adds the zones' nodes.
 #
 # A failed cluster step leaves labfw on (a cluster that is not stopped keeps its firewall) and the cluster
@@ -139,7 +139,16 @@ jobs:
               --url "https://management.azure.com${id}/providers/Microsoft.KubernetesConfiguration/fluxConfigurations/$2?api-version=2023-05-01" \
               --body "{\"properties\":{\"suspend\":$3}}"
           }
-          wait_flux_suspended() { # <cluster> true|false : until every Flux Kustomization in the cluster says so (the extension's agent copies it), 5 min
+          flux_suspend_children() { # <cluster> true|false : every Flux Kustomization in the cluster. The extension's agent copies the
+            # configuration's suspend to its own Kustomization only; the ones the fleet's `platform` Kustomization creates from Git
+            # (zones, node pools, tenants...) keep reconciling - and would put the NodePools' limits back - unless suspended here.
+            # On the start they are set back the same way: a parent's apply does not own the field a patch set.
+            local ks
+            for ks in $(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq -r --argjson want "$2" '.items[] | select((.spec.suspend // false) != $want) | .metadata.namespace + "/" + .metadata.name'); do
+              kubectl -n "${ks%%/*}" patch kustomizations.kustomize.toolkit.fluxcd.io "${ks##*/}" --type merge -p "{\"spec\":{\"suspend\":$2}}" -o name
+            done
+          }
+          wait_flux_suspended() { # <cluster> true|false : until every Flux Kustomization in the cluster says so, 5 min
             local i other
             for i in $(seq 1 20); do
               other="$(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq -r --argjson want "$2" '[.items[] | select((.spec.suspend // false) != $want) | .metadata.namespace + "/" + .metadata.name] | join(" ")')"
@@ -209,6 +218,7 @@ jobs:
               echo "$cluster: Flux configuration $config suspended"
             done
             kubeconfig "$cluster"
+            flux_suspend_children "$cluster" true
             wait_flux_suspended "$cluster" true
             namespaces="$(kubectl get namespaces -l platform/zone -o jsonpath='{.items[*].metadata.name}')"
             for ns in $namespaces; do
@@ -298,6 +308,7 @@ jobs:
               echo "$cluster: Flux configuration $config resumed"
             done
             kubeconfig "$cluster"
+            flux_suspend_children "$cluster" false
             wait_flux_suspended "$cluster" false
           done
           # What came back: Flux's first reconcile puts the limits and replicas of Git back; NAP's nodes follow.
