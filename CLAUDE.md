@@ -70,8 +70,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   switch for aks-hello's replicas (0 = off, 2 = running; the rollout guardrails allow 0): **it must say 2 for a Lab
   power start to bring the app back**. The first stop run's result is below in the notes of 2026-10-16 (look for
   "Lab power run"). A stopped cluster: Flux suspended, apps 0, NAP Manual - run `start`, never fix those by hand.
+- **The registry is Basic and public again (2026-10-16, design D62, the user's ask: Premium is too much for a lab)**:
+  shared/ `container_registry_sku` defaults by environment - Premium (private endpoint, data endpoint, no public access)
+  in `prd` only, Basic on its public endpoint (Entra ID only, admin off) below it. dev's `acronek8sdev` was downgraded in
+  place from Premium (its private endpoint removed); the labfw VPN action no longer pins its names, the isolation tests'
+  `allowed-public-endpoints.yaml` lists it, the hub firewall's `container-registry` rule (azure-landing-zone, `*.blob.core.windows.net`
+  for the layers) was already written for a public Basic registry.
 - **No public endpoints (2026-10-16, design D60, the user's ask)**: vaults (firewall Deny + trusted bypass), ACR
-  (**Premium**, private endpoint incl. data endpoint, ACR Tasks as trusted service), Foundry, the state account
+  (was Premium with a private endpoint incl. data endpoint until D62 above), Foundry, the state account
   `stonek8sdevtfstate` (Entra ID only: backend `use_azuread_auth`; apply identity has Storage Blob Data Contributor) and
   `log-dev-platform` take **no public network access** (shared/ `private_endpoints.public_network_access = false`; endpoints
   in snet-shared-pe 172.20.2.0/26, hub zones incl. Foundry/blob). Log Analytics + DCE through the landing zone's hub

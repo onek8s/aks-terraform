@@ -1,5 +1,5 @@
 # Private endpoints of the environment's services (OneK8s design sections 5 and 8; backlog item 3): the
-# platform vault, every zone vault, the container registry (Premium only, which Azure requires for it), the
+# platform vault, every zone vault, the container registry (Premium only, which Azure requires for it: prd's, D62), the
 # agents' Foundry resource and the Terraform state account, in the environment network's shared private endpoint
 # subnet (the design's snet-shared-pe of the backend spoke), registered in the landing zone's private link DNS
 # zones in the hub. The cells and the management network - the labfw VPN's clients among them, the GitHub-hosted
@@ -33,7 +33,7 @@ locals {
   private_endpoint_targets = !local.private_endpoints ? {} : merge(
     { "kv-platform" = { id = azurerm_key_vault.this.id, name = azurerm_key_vault.this.name, subresource = "vault" } },
     { for zone, vault in azurerm_key_vault.zone : "kv-${zone}" => { id = vault.id, name = vault.name, subresource = "vault" } },
-    var.container_registry_name == null || var.container_registry_sku != "Premium" ? {} : {
+    var.container_registry_name == null || !local.container_registry_premium ? {} : {
       acr = { id = azurerm_container_registry.this[0].id, name = azurerm_container_registry.this[0].name, subresource = "registry" }
     },
     var.ai_foundry == null ? {} : {
