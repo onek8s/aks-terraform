@@ -39,6 +39,7 @@ reads; job logs via `get_job_logs`).
 | `lab-power.yml` (Lab power) | Manual: `action` stop / start of the dev cells for a pause (`clusters`, default az2 az3; `firewall`). stop, per cluster: every Flux configuration suspended, Deployments/StatefulSets of the `platform/zone` namespaces scaled to 0 and waited for, NAP off (NodePool cpu limits 0, NAP nodes deleted, mode Manual - a NAP cluster cannot be stopped), `az aks stop`; then labfw's VM deallocated (custom role `OneK8s labfw Power`, azure-landing-zone). start: labfw first (+1 min), `az aks start`, mode Auto, Flux resumed (Git puts the limits and replicas back). Git unchanged. VPN for kubectl (concurrency `labfw-vpn`). |
 | `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` and `roles` input, groups `grp-onek8s-dev-<ns>-<role>` (default view edit admin; `platform` + `viewers` for the platform viewers) and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
 | `vpn-clients.yml` (VPN clients) | The runners' labfw VPN configs as `dev` environment secrets (GH_OWNER): `copy-runners` (vault -> `LABFW_VPN_GITHUB_RUNNERS`), `new-peer` (key pair -> `LABFW_VPN_<PEER>`, prints the public key for azure-landing-zone `labfw.vpn.peers`). |
+| `traffic-flow-docs.yml` (Traffic flow docs) | Manual (design section 23, D63): `aks-agent docs traffic` of aks-ai-agents generates the traffic flow pages of a `spoke` (default `dev-int`) - a Mermaid picture + page per application namespace and per zone - from Git alone (azure-landing-zone `firewall-applications/`, this repo's cell tfvars, aks-fluxcd-example's Flux path, the fleet's `policy/egress-allow-lists.yaml`; no Azure, no VPN, no cluster) into a checkout of azure-landing-zone `docs/traffic-flows/`, uploads them as an artifact and prints the findings (rules no configuration names, named destinations without a rule). When a page changed and `dry_run` is off, the documentation agent (model on Foundry: azure/login + labfw VPN, so the lab must be running) explains the findings and opens ONE PR to azure-landing-zone with GH_OWNER. `aks-agent docs traffic ... --check` fails when the pages are stale. |
 | `lab-admin.yml` (Lab admin) | Manual, **last resort**: runs ONE `az` (as `AZURE_OWNER`, on the dev subscription) or `gh` (with `GH_OWNER`) command; `args` split like a shell, no pipes (use `--query`/`--jq`). For special changes nothing else covers (Entra ID, Graph, org/repo settings). The run log is readable by anyone who can read the repo: never print a secret. |
 
 **Owner credentials (lab only, last option, allowed whenever needed):** `AZURE_OWNER` - org secret, `az ad sp
@@ -60,6 +61,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Traffic flow documentation (2026-10-17, design section 23, D63 proposed)**: the first pages of `dev-int` are committed in
+  azure-landing-zone `docs/traffic-flows/` (generated with `aks-agent docs traffic`, see the workflow row above). First finding:
+  `stats.grafana.org` is allowed for both int-fi-example and int-se-example but nothing in aks-hello's configuration names it
+  (the egress agent proposed it as "a plausible public API for metrics", a human merged azure-landing-zone's PRs) - either a
+  hidden dependency of the image or a flow of something else on the node (az2 attributes node addresses to the application pods
+  on it); left for the user to settle. Regenerate after a rule or application change (the workflow, or the CLI locally with the
+  four repos checked out side by side); the pages have no timestamp, so an unchanged world changes nothing.
 - **The lab is STOPPED for the weekend (2026-10-16, Lab power run 38904999392, the user's ask: minimal cost, nothing
   removed)**: az2 and az3 `powerState Stopped`, labfw `deallocated` (no VPN: every data-plane workflow fails until the
   start), every Flux configuration and Kustomization suspended, the zone namespaces' Deployments at 0 (apps, and the
@@ -342,6 +350,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   the system node too, so dev runs no zone node for applications (only the cilium-operator one above). The
   Isolation tests' probe pod still uses the ext-fi zone, so a test run briefly creates a zone node
   (NAP removes it ~5 min after). Remove the patch to put the app back on zone nodes.
+
 
 ## Decisions already made (do not re-litigate)
 
