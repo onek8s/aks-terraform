@@ -260,3 +260,13 @@ flux_git_repository = {
 
 # No Flux webhook: no platform gateway for GitHub to reach (platform_gateway_enabled above).
 flux_github_webhook = false
+
+# A TRIAL, not the platform (design D65, 2026-10-17): the AKS Dapr extension, to measure what it costs
+# and how it fits the zones before anything names it (D64). Its control plane runs on the one system
+# node without HA (one replica each; the scheduler still runs three), placement and the scheduler in
+# memory (no StorageClass here). Needs `dapr-system` among the landing zone's platform namespaces
+# (azure-landing-zone, stacks/aks-policy) before the apply - namespace-ownership and the rollout
+# guardrails refuse it otherwise. Remove the block to uninstall (Dapr's CRDs stay in the cluster).
+dapr = {
+  high_availability = false
+}
