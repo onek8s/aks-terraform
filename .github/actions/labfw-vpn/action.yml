@@ -1,6 +1,6 @@
 # Joins a GitHub-hosted runner to the hub firewall's (labfw's) WireGuard VPN, so that it reaches what has no
 # public endpoint: the dev cells' private API servers (Private Link endpoints in their system subnets, OneK8s
-# design section 4, D58) and the private endpoints of the environment's services - the vaults, the registry,
+# design section 2.2, D58) and the private endpoints of the environment's services - the vaults, the registry,
 # Foundry and the Terraform state (shared/ snet-shared-pe) and Azure Monitor (the hub's Private Link scope in the
 # management network's snet-pe).
 #

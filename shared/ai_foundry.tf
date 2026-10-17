@@ -1,4 +1,4 @@
-# The AI agents' model endpoint (OneK8s design section 20, onek8s/aks-ai-agents `model.provider: foundry`): a
+# The AI agents' model endpoint (OneK8s design section 6.1, onek8s/aks-ai-agents `model.provider: foundry`): a
 # Microsoft Foundry resource with one Claude deployment, signed in to with Entra ID only - no API key exists. The
 # agents run as the environment's GitHub deployment identity (aks-terraform's agent workflows), which gets
 # `Cognitive Services User` on it: the model's data plane and nothing else. See ai_foundry.

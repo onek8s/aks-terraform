@@ -163,8 +163,8 @@ jobs:
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
-          # The managed Gateway API CRDs, encryption at host on the nodes (design section 16), Image
-          # Integrity (section 9), and AKS's managed GPU stack on the zones' GPU nodes (section 5).
+          # The managed Gateway API CRDs, encryption at host on the nodes (design section 4.2), Image
+          # Integrity (section 2.7), and AKS's managed GPU stack on the zones' GPU nodes (section 2.3).
           for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost \
             Microsoft.ContainerService/EnableImageIntegrityPreview Microsoft.ContainerService/ManagedGPUExperiencePreview; do
             namespace="${pair%/*}"; feature="${pair#*/}"
@@ -326,7 +326,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The registry builds new images when dev-shared changes their entries: sign whatever is unsigned
-  # (design section 9) before a cluster runs it.
+  # (design section 2.7) before a cluster runs it.
   sign-images:
     name: sign images
     needs: deploy

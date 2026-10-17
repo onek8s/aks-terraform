@@ -1,4 +1,4 @@
-# Traefik Proxy for the Gateway ${gateway_name} (design section 15), on the system pool, serving that
+# Traefik Proxy for the Gateway ${gateway_name} (design section 4.1), on the system pool, serving that
 # one Gateway and nothing else: its own GatewayClass `traefik-${gateway_name}`, picked out by label,
 # which the Gateway names. Only the Gateway API provider: no Ingress, no IngressRoute (Kubernetes CRD)
 # provider, no CRDs of the chart's own - the Gateway API CRDs are AKS's.

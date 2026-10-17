@@ -1,5 +1,5 @@
 # AKS Image Integrity (preview), with image_integrity_enabled: Ratify checks each image's Notation
-# signature for the Azure Policy add-on (OneK8s design section 9). It reads the signatures in the
+# signature for the Azure Policy add-on (OneK8s design section 2.7). It reads the signatures in the
 # environment's registry and the signing certificate in the platform vault as the environment's shared
 # identity (shared/: image_signing), through this cluster's federated credential for Ratify's service
 # account. Flux applies Ratify's configuration - which certificate, which registry, as which identity -
