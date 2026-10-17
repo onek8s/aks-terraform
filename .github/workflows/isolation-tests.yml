@@ -1,6 +1,6 @@
 name: Isolation tests
 
-# The automated negative tests of OneK8s design section 23 ("Requirement and isolation tests"), run
+# The automated negative tests of OneK8s design section 7.1 ("Requirement and isolation tests"), run
 # against one dev cell. **By hand only** (the user's choice, 2026-10-14: a run takes 10-30 minutes and
 # held up the work as an automatic stage): no Deploy stage, no schedule - run it when the user asks for
 # it. Each check names the requirement it covers; the run's summary is the table of them.

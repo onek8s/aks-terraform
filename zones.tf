@@ -2,7 +2,7 @@
 # the internal zones' DNS - what a stateless cell of the OneK8s design needs beyond a plain cluster.
 
 locals {
-  # The network profile as sent: the variable's, with ACNS (design section 17) where it is asked for.
+  # The network profile as sent: the variable's, with ACNS (design section 5.1) where it is asked for.
   # Without an overlay (network_plugin_mode "none", Azure CNI node subnet) no mode and no pod range.
   network_profile = merge(var.network_profile, {
     network_plugin_mode = local.pod_overlay ? var.network_profile.network_plugin_mode : null
@@ -19,7 +19,7 @@ locals {
       }
       # eBPF host routing. Sent with the cluster's create request: AKS refuses to turn it on for a
       # running cluster ("User-installed iptables rules found"), even one whose only iptables rules
-      # are its own - so changing it means building the cell again (section 17: drain, rebuild).
+      # are its own - so changing it means building the cell again (section 5.1: drain, rebuild).
       performance = {
         acceleration_mode = var.advanced_networking.ebpf_host_routing ? "BpfVeth" : "None"
       }

@@ -1,4 +1,4 @@
-# The environment's Log Analytics workspace, log-<env>-platform (OneK8s design section 21, "Azure
+# The environment's Log Analytics workspace, log-<env>-platform (OneK8s design section 6.2, "Azure
 # Monitor data, read in place"): the data Azure produces rather than the clusters - first the clusters'
 # Kubernetes audit logs, which each cluster sends here through a diagnostic setting (its
 # log_analytics_workspace_name). CIS AKS Benchmark 2.1.1. See log_analytics_workspace_name.

@@ -1,4 +1,4 @@
-# Private endpoints of the environment's services (OneK8s design sections 6 and 10; backlog item 3): the
+# Private endpoints of the environment's services (OneK8s design sections 2.4 and 3.1; backlog item 3): the
 # platform vault, every zone vault, the container registry (Premium only, which Azure requires for it: prd's, D62), the
 # agents' Foundry resource and the Terraform state account, in the environment network's shared private endpoint
 # subnet (the design's snet-shared-pe of the backend spoke), registered in the landing zone's private link DNS

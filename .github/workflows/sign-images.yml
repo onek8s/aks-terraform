@@ -1,7 +1,7 @@
 name: Sign images
 
 # Signs every image in the environment's container registry with the platform's signing certificate
-# (OneK8s design section 9): a Notation signature, stored next to the image in the registry as an
+# (OneK8s design section 2.7): a Notation signature, stored next to the image in the registry as an
 # OCI referrer, made with the key in the platform vault (shared/: image_signing) through Notation's
 # Azure Key Vault plugin - the key never leaves the vault. The clusters' AKS Image Integrity (Ratify)
 # checks these signatures at admission.

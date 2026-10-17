@@ -228,7 +228,7 @@ locals {
 
   # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
   # manages its share of the vault as well. Keyed like the grants they come from.
-  # The groups of `groups` get the same as their Kubernetes role (design section 8): `admin` manages
+  # The groups of `groups` get the same as their Kubernetes role (design section 2.6): `admin` manages
   # the namespace's secrets, by name; `edit` writes and updates them without reading a value (the
   # Secrets Editor role, D51) unless it is also the admin group or a writer; `view` gets nothing, as
   # Kubernetes' `view` sees no Secret.

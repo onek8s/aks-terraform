@@ -1,4 +1,4 @@
-# Image signing (OneK8s design section 9), with image_signing: the platform signs every image the
+# Image signing (OneK8s design section 2.7), with image_signing: the platform signs every image the
 # registry builds with a Notation signature, stored next to the image in the registry, and every
 # cluster's AKS Image Integrity (Ratify on the Azure Policy add-on's Gatekeeper) checks that signature
 # at admission - in audit, the only effect Image Integrity has while it is in preview.

@@ -97,7 +97,7 @@ condition. Object IDs, not names.
 
 `groups` are the namespace's Entra ID groups of the clusters' `managed_namespaces.<ns>.groups` - the
 same object IDs - granted on the share what their Kubernetes role grants on Secrets (OneK8s design
-section 8): `admin` manages the namespace's secrets like `writers` (`Key Vault Secrets Officer`
+section 2.6): `admin` manages the namespace's secrets like `writers` (`Key Vault Secrets Officer`
 under the namespace's condition: its own secrets, by name); `edit` writes and updates them and reads
 their attributes, never a value (the custom role `OneK8s Key Vault Secrets Editor (<resource
 group>)`, same condition); `view` gets nothing. Nobody
@@ -263,7 +263,7 @@ variable "image_signing" {
   })
   default     = null
   description = <<DESCRIPTION
-Signing of the registry's images (OneK8s design section 9): a self-signed code signing certificate
+Signing of the registry's images (OneK8s design section 2.7): a self-signed code signing certificate
 in the platform vault, `image-signing`, with this `subject` - Notation wants it to name a country
 (`C`), a state (`ST`) and an organisation (`O`) - valid for `validity_in_months`, and the identity the
 clusters' image signature verifier (Ratify, AKS Image Integrity) reads the registry and the
@@ -321,7 +321,7 @@ variable "zone_key_vault_names" {
   type        = map(string)
   default     = {}
   description = <<DESCRIPTION
-One Key Vault per isolation zone - OneK8s design section 7 - keyed by the zone (`int-fi`): the
+One Key Vault per isolation zone - OneK8s design section 2.5 - keyed by the zone (`int-fi`): the
 secrets of the zone's applications. A namespace's share is in its zone's vault (key_vault_namespaces,
 `zone`). Key Vault names are global.
 DESCRIPTION
@@ -407,9 +407,9 @@ building its network: no VNet, subnets, NSGs, route table, hub peering or DNS li
 cannot be deployed while it is disabled.
 
 `api_server_subnet = true` adds `snet-apiserver`, delegated to AKS for API Server VNet Integration
-(design section 4). Azure refuses that integration on an encrypted network with v4 and newer VM sizes
+(design section 2.2). Azure refuses that integration on an encrypted network with v4 and newer VM sizes
 (`VNetEncryptionNotCompatibleWithAPIServerVNetIntegration`), and every cell network here is encrypted
-(section 15), so it stays off until that changes; a private cluster then uses Private Link instead.
+(section 4.1), so it stays off until that changes; a private cluster then uses Private Link instead.
 
 `pod_network` is where the cell's cluster gives its pods their addresses: `overlay` (Azure CNI Overlay,
 the default - the pods' range is `cell_pod_cidr`, translated to the node's address when it leaves the
@@ -460,7 +460,7 @@ variable "log_analytics_workspace_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the environment's Log Analytics workspace, created here (OneK8s design section 21,
+Name of the environment's Log Analytics workspace, created here (OneK8s design section 6.2,
 `log-<env>-platform`): the Kubernetes audit logs of every cluster of the environment, which each
 cluster sends to it by naming it in its own log_analytics_workspace_name. Null for none.
 DESCRIPTION
@@ -512,7 +512,7 @@ variable "platform_viewer_group_object_ids" {
   default     = []
   description = <<DESCRIPTION
 Entra ID groups that list the namespaces of the environment's clusters and the secrets of its Key
-Vaults - names and attributes, no workload and no secret value (OneK8s design section 8, "Soft
+Vaults - names and attributes, no workload and no secret value (OneK8s design section 2.6, "Soft
 multi-tenancy"). The namespaces' own groups see only their namespace and their own secrets, so this
 is what the Azure portal's Kubernetes views need to offer a namespace to pick. Granted a custom role
 defined and assigned at the resource group - see platform_viewers.tf.
@@ -545,7 +545,7 @@ variable "hub" {
   })
   default     = null
   description = <<DESCRIPTION
-The landing zone's hub, for cells routed through its firewall (OneK8s design sections 6 and 10;
+The landing zone's hub, for cells routed through its firewall (OneK8s design sections 2.4 and 3.1;
 azure-landing-zone network modes `firewall` and `labfw`): every cell's network is peered with the hub
 VNet `virtual_network_id` (in the connectivity subscription - the deploying identity needs the
 landing zone's `AKS spoke peering` role on it), every node subnet sends 0.0.0.0/0 to `next_hop_ip` (the

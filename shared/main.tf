@@ -104,7 +104,7 @@ locals {
 
 # The vault, on the Azure RBAC permission model - access policies know no conditions - and reached
 # over its private endpoint (private_endpoints.tf), authenticated with Entra ID. With isolation zones it is the environment's
-# platform vault (OneK8s design sections 15 and 16): the gateways' certificates, the clusters'
+# platform vault (OneK8s design sections 4.1 and 4.2): the gateways' certificates, the clusters'
 # customer-managed keys and the platform's own secrets, while the applications' secrets live in their
 # zone's vault below.
 resource "azurerm_key_vault" "this" {
@@ -127,7 +127,7 @@ resource "azurerm_key_vault" "this" {
   }
 }
 
-# One vault per isolation zone (design section 7): the secrets of the zone's applications, each
+# One vault per isolation zone (design section 2.5): the secrets of the zone's applications, each
 # application reading only its own under an ABAC condition, as below. Nothing of one zone is in
 # another zone's vault.
 resource "azurerm_key_vault" "zone" {
@@ -203,7 +203,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   condition            = module.conventions.key_vault_write_conditions[each.value.namespace]
 }
 
-# The `edit` groups' role (OneK8s design section 8, D51): write and update a secret and read its
+# The `edit` groups' role (OneK8s design section 2.6, D51): write and update a secret and read its
 # attributes, never its value - see modules/conventions. Defined and assignable at the environment's
 # resource group, like the platform viewers' role; custom role names are unique in the tenant, hence
 # the resource group in the name.

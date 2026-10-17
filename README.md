@@ -4,7 +4,7 @@ The clusters of [OneK8s](https://onek8s.github.io/) - one Kubernetes platform fo
 Terraform for deploying AKS clusters with [Azure Verified Modules][avm], and the environment's
 container registry. Azure is the first cloud implemented; the applications and their deployment
 (Flux, the Gateway API, open standards - see the design's
-[open standards and portability](https://onek8s.github.io/docs/02-open-standards-and-portability.html))
+[open standards and portability](https://onek8s.github.io/docs/1.3-open-standards-and-portability.html))
 are meant to move to another cloud unchanged.
 
 | Repository | Role |
@@ -670,7 +670,7 @@ namespace keeps its secrets in it, and reads only its own: the namespaces are ke
 in `key_vault_namespaces`, by default the platform's own `ingress-gateway` (listener certificates);
 the `dev` cells name each zone's gateway and the platform gateway instead.
 
-With isolation zones (OneK8s design section 7) there is more than one vault: `shared/` creates the
+With isolation zones (OneK8s design section 2.5) there is more than one vault: `shared/` creates the
 environment's **platform vault** (`key_vault_name`) - the gateways' certificates, the clusters'
 customer-managed keys, the Flux webhook token - and **one vault per zone** (`zone_key_vault_names`)
 for the secrets of the zone's applications. An application namespace's share is in its zone's
@@ -787,7 +787,7 @@ defaults to true - with its namespaces' identities named after it
 
 `node_auto_provisioning_enabled = true` turns on [node auto provisioning][nap] (NAP) - Karpenter,
 run by AKS - for the nodes of the isolation zones (the design's
-[node pools](https://onek8s.github.io/docs/05-node-pools.html)). The `dev` stateless clusters turn it
+[node pools](https://onek8s.github.io/docs/2.3-node-pools.html)). The `dev` stateless clusters turn it
 on. What it sends, and what it leaves to others:
 
 - `nodeProvisioningProfile` `mode = Auto`, `defaultNodePools = None`. AKS installs Karpenter and the
@@ -816,16 +816,16 @@ The `dev` stateless clusters are the design's cells. Beyond node auto provisioni
 
 | Variable | What it does | Design |
 | --- | --- | --- |
-| `exposure` | `int` or `ext`: internal and external workloads never share a cluster (decision D52), so every zone and every managed namespace's `platform/zone` is of the cluster's exposure, and only an internal cluster writes the internal zones' private DNS - validated at plan. The Flux repository is told it as `cluster_exposure`. The `dev` cells are external | sections 10, 11 |
-| `isolation_zones` | Each zone's node subnet in the cell's network; the Flux repository is told its ID as `nap_subnet_id_<zone>` for the zone's `AKSNodeClass`, so a zone's nodes are in the zone's subnet behind the zone's NSG | sections 3, 5, 6 |
-| `advanced_networking` | Advanced Container Networking Services: Hubble (`observability`, off in the dev cells - D56), FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The last is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 17 |
-| `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 16 |
-| `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 4, 5, 16 |
-| `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 14 |
-| `internal_dns_zone_names` | The internal zones' private DNS, which an internal cell's external-dns writes | section 15 |
+| `exposure` | `int` or `ext`: internal and external workloads never share a cluster (decision D52), so every zone and every managed namespace's `platform/zone` is of the cluster's exposure, and only an internal cluster writes the internal zones' private DNS - validated at plan. The Flux repository is told it as `cluster_exposure`. The `dev` cells are external | sections 3.1, 3.2 |
+| `isolation_zones` | Each zone's node subnet in the cell's network; the Flux repository is told its ID as `nap_subnet_id_<zone>` for the zone's `AKSNodeClass`, so a zone's nodes are in the zone's subnet behind the zone's NSG | sections 2.1, 2.3, 2.4 |
+| `advanced_networking` | Advanced Container Networking Services: Hubble (`observability`, off in the dev cells - D56), FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`). The last is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 5.1 |
+| `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 4.2 |
+| `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 2.2, 2.3, 4.2 |
+| `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 3.5 |
+| `internal_dns_zone_names` | The internal zones' private DNS, which an internal cell's external-dns writes | section 4.1 |
 
 Always, on every cluster: the Secrets Store CSI driver add-on is off - secrets reach pods only as
-Kubernetes Secrets from External Secrets Operator (design section 7).
+Kubernetes Secrets from External Secrets Operator (design section 2.5).
 
 The one difference from the design that the lab keeps on purpose: **the API server is public**
 (`private_cluster_enabled = false`), with Entra ID and Azure RBAC on every call and local accounts
@@ -843,8 +843,8 @@ turns on, by name, the cost savings below; the dev lab's tfvars keep them togeth
 | --- | --- | --- | --- |
 | `sku_tier` | `Standard` - uptime SLA, API server scaled for load (D31) | `Free` | The control plane SLA; cost analysis. |
 | `gateway_implementation` | `approuting-istio` - App Routing's Gateway API, the Azure standard offering, upgraded by AKS (D55) | `traefik` | A gateway Azure upgrades and supports; istiod's 1 CPU / 4 GiB of requests ([Azure/AKS#5939][aks5939]) is what is saved. |
-| `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 5) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
-| `advanced_networking` | `{}` - Hubble, FQDN policies, eBPF host routing (section 17) | `{ observability = false }` (D56) | Hubble flow logs and metrics. FQDN policies and eBPF host routing are never a saving: the zones' egress needs them. |
+| `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 2.3) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
+| `advanced_networking` | `{}` - Hubble, FQDN policies, eBPF host routing (section 5.1) | `{ observability = false }` (D56) | Hubble flow logs and metrics. FQDN policies and eBPF host routing are never a saving: the zones' egress needs them. |
 | `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | A second node during upgrades and failures; room for istiod and the VPA add-on. Fits only together with `traefik` and the VPA add-on off. With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
 
 The savings depend on each other - the one 8 GiB system node holds the platform only with Traefik and

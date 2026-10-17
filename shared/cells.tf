@@ -1,12 +1,12 @@
-# The stateless cells' networks - OneK8s design pictures 3 and 10, section 5. Every cell (a stateless
+# The stateless cells' networks - OneK8s design pictures 2.1 and 3.1, section 5. Every cell (a stateless
 # cluster in one availability zone) has a virtual network of its own, `vnet-<cell>`, and in it one
 # address range per isolation zone: the zone's own node subnet, where node auto provisioning puts the
 # zone's nodes, and the subnet of the zone's internal load balancer. The system node pool has a subnet
 # of its own beside them. Azure Virtual Network encryption encrypts the traffic between the nodes
-# (section 15).
+# (section 4.1).
 #
 # Every subnet has its own network security group, which denies every inbound flow the design does
-# not list (section 6): the kubelet from the system pool, Cilium's health checks and ICMP between the
+# not list (section 2.4): the kubelet from the system pool, Cilium's health checks and ICMP between the
 # nodes, the pods of the cluster's overlay, the load balancers' health probes, and HTTPS from the
 # internet (external zones and the platform gateway, through their public load balancers) or from
 # the virtual network (internal zones). Pod-to-pod traffic between zones is the third layer's to
@@ -22,7 +22,7 @@
 # A cell with `pod_network = "subnet"` (design D59) has no overlay: its pods take addresses of their
 # nodes' subnets, so it is a /16 of 100.64.0.0/10 and a zone's node subnet a /21. With `api_server_subnet`, the last /24
 # (slot 15) starts with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design
-# section 4) - which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
+# section 2.2) - which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
   isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
@@ -116,7 +116,7 @@ locals {
     ]...),
     # HTTPS to the entry points: an external zone's and the platform gateway's public load balancer
     # from the internet, an internal zone's load balancer from the virtual network. Port 443 only -
-    # no plain HTTP anywhere (section 15). Every zone's gateway runs on the system pool (so that a
+    # no plain HTTP anywhere (section 4.1). Every zone's gateway runs on the system pool (so that a
     # zone without applications has no nodes), which therefore takes both.
     merge([
       for key, subnet in local.cell_subnets : {

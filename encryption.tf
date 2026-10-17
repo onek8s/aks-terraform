@@ -1,4 +1,4 @@
-# Encryption at rest with customer-managed keys - OneK8s design section 16 - for a cluster that names
+# Encryption at rest with customer-managed keys - OneK8s design section 4.2 - for a cluster that names
 # a vault in customer_managed_keys: the environment's platform vault, with purge protection. Two keys
 # of the cluster's own, created before the cluster, since neither can be added to a running one:
 #
