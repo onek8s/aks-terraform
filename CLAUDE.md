@@ -66,7 +66,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `stats.grafana.org` is allowed for both int-fi-example and int-se-example but nothing in aks-hello's configuration names it
   (the egress agent proposed it as "a plausible public API for metrics", a human merged azure-landing-zone's PRs) - either a
   hidden dependency of the image or a flow of something else on the node (az2 attributes node addresses to the application pods
-  on it); left for the user to settle. Regenerate after a rule or application change (the workflow, or the CLI locally with the
+  on it). **Settled 2026-10-17 (the user)**: it is Grafana's anonymous usage statistics (Alloy, Beyla, k8s-monitoring on every
+  node) - a platform flow, now in azure-landing-zone `firewall_exposures.int.environments.dev.observability_fqdns` (rule
+  `observability`, every cell) and removed from both application files. Regenerate after a rule or application change (the workflow, or the CLI locally with the
   four repos checked out side by side); the pages have no timestamp, so an unchanged world changes nothing.
 - **The lab is STOPPED for the weekend (2026-10-16, Lab power run 38904999392, the user's ask: minimal cost, nothing
   removed)**: az2 and az3 `powerState Stopped`, labfw `deallocated` (no VPN: every data-plane workflow fails until the
