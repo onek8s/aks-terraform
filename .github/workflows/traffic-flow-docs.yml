@@ -1,6 +1,6 @@
 name: Traffic flow docs
 
-# The documentation agent of onek8s/aks-ai-agents (design section 23): one page with a Mermaid picture per application
+# The documentation agent of onek8s/aks-ai-agents (design section 19): one page with a Mermaid picture per application
 # namespace and one per isolation zone - who reaches the application, what it runs, every destination it reaches
 # outside the landing zone through the hub firewall, and who asked for each rule. The firewall's rules name zones, not
 # applications; the egress agent's per-application rule files (azure-landing-zone firewall-applications/) do, so the

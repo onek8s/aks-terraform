@@ -371,7 +371,7 @@ run "cluster_operations_are_given_longer_than_the_provider_default" {
   }
 }
 
-# Pod right-sizing (OneK8s design section 4): the VPA add-on is on unless a cluster says otherwise,
+# Pod right-sizing (OneK8s design section 5): the VPA add-on is on unless a cluster says otherwise,
 # so the applications' VerticalPodAutoscalers in InPlaceOrRecreate mode have something to act on.
 run "the_vpa_add_on_is_on_by_default" {
   command = plan
@@ -4056,7 +4056,7 @@ run "rejects_an_unknown_log_category" {
   expect_failures = [var.audit_log_categories]
 }
 
-# Who owns a namespace and pays for it (design section 7): the team and cost centre as labels, the
+# Who owns a namespace and pays for it (design section 8): the team and cost centre as labels, the
 # contact and the repository as annotations - what Azure Policy's namespace-ownership rule expects.
 run "a_namespace_names_its_owner_in_labels_and_annotations" {
   command = plan

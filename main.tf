@@ -186,7 +186,7 @@ module "aks" {
       enabled = false
     }
     # The Secrets Store CSI driver is never used: secrets reach pods only as Kubernetes Secrets
-    # written by External Secrets Operator (OneK8s design section 6). Stated, so that the add-on
+    # written by External Secrets Operator (OneK8s design section 7). Stated, so that the add-on
     # cannot be switched on beside Terraform without showing up in the plan.
     azureKeyvaultSecretsProvider = {
       enabled = false

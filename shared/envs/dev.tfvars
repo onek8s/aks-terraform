@@ -29,7 +29,7 @@ subnets = {
   snet-aks-nodes = "172.20.0.0/23"
 }
 
-# The environment's services on private endpoints in that network (snet-shared-pe, design section 8):
+# The environment's services on private endpoints in that network (snet-shared-pe, design section 10):
 # the platform vault and the zone vaults (Standard - a vault's endpoint needs no higher tier), the
 # agents' Foundry resource and the Terraform state account, registered in the hub's private link
 # zones - not the registry: Basic in dev, public (design D62, below). The cells and the labfw VPN's
@@ -91,7 +91,7 @@ hub = {
 internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
 
-# The environment's platform Key Vault (OneK8s design sections 13 and 18), which the clusters name
+# The environment's platform Key Vault (OneK8s design sections 15 and 16), which the clusters name
 # in key_vault_name with key_vault_create = false: the gateways' certificates, the clusters'
 # customer-managed keys (so purge protection - a disk encryption set needs it) and the Flux webhook
 # token. Key Vault names are global; pick another if this one is taken. kv-onek8s-gwc-* since the
@@ -100,13 +100,13 @@ internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 key_vault_name                     = "kv-onek8s-gwc-platform"
 key_vault_purge_protection_enabled = true
 
-# One vault per isolation zone, for the secrets of the zone's applications (design section 6).
+# One vault per isolation zone, for the secrets of the zone's applications (design section 7).
 zone_key_vault_names = {
   int-fi = "kv-onek8s-gwc-int-fi"
   int-se = "kv-onek8s-gwc-int-se"
 }
 
-# The environment's Log Analytics workspace (design section 19): every cluster's Kubernetes audit log
+# The environment's Log Analytics workspace (design section 21): every cluster's Kubernetes audit log
 # (CIS AKS Benchmark 2.1.1), 30 days, at most 1 GB a day.
 log_analytics_workspace_name = "log-dev-platform"
 
@@ -172,7 +172,7 @@ key_vault_namespaces = {
   flux-system    = {}
   int-fi-gateway = {}
   int-se-gateway = {}
-  # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 6, D49):
+  # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 7, D49):
   # the same object IDs as managed_namespaces.int-fi-example.groups in the cells' tfvars - the lab
   # groups created for ext-fi-example (grp-onek8s-dev-ext-fi-example-<role>), reused.
   int-fi-example = {
@@ -189,7 +189,7 @@ key_vault_namespaces = {
   }
 }
 
-# The platform viewers (design section 7, soft multi-tenancy): list the namespaces of the cells and the
+# The platform viewers (design section 8, soft multi-tenancy): list the namespaces of the cells and the
 # secrets of the vaults - names only - through a custom role at rg-aks-dev, so the Azure portal's
 # Kubernetes views can offer a namespace to pick. Lab group grp-onek8s-dev-platform-viewers, with a
 # tester application the isolation tests sign in as.
@@ -211,7 +211,7 @@ dns_zone_create              = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
 # hello.ext-fi.dev.onek8s.lol would be served by the ext-fi zone of every external cell at once through
-# Azure Traffic Manager (design section 8). Kept for an external subscription; no profile is created
+# Azure Traffic Manager (design section 10). Kept for an external subscription; no profile is created
 # here, because ext-fi is not a zone of this (internal) environment - see global_hostnames.
 global_hostnames = {
   "hello.ext-fi.dev" = {
@@ -233,7 +233,7 @@ monthly_budget = {
   start_date = "2026-10-01T00:00:00Z"
 }
 
-# The AI agents' model (onek8s/aks-ai-agents, model.provider foundry; design section 15): Claude Sonnet 5.5 on
+# The AI agents' model (onek8s/aks-ai-agents, model.provider foundry; design section 20): Claude Sonnet 5.5 on
 # Microsoft Foundry in swedencentral - germanywestcentral does not offer Anthropic's models - Entra ID only. First
 # user: the egress agent (design D59), which proposes the firewall rules of the applications from labfw's denials.
 # The deployment signs Anthropic's Azure Marketplace offer in OneK8s's name, billed to sub-aks-dev; the organisation,

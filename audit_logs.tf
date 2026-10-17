@@ -1,5 +1,5 @@
 # The cluster's Kubernetes audit log, in the environment's Log Analytics workspace (OneK8s design
-# section 19, CIS AKS Benchmark 2.1.1) - created by shared/ and looked up here. See
+# section 21, CIS AKS Benchmark 2.1.1) - created by shared/ and looked up here. See
 # log_analytics_workspace_name.
 data "azurerm_log_analytics_workspace" "platform" {
   count = var.log_analytics_workspace_name == null ? 0 : 1

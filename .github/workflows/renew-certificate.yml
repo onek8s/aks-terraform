@@ -1,7 +1,7 @@
 name: Renew Certificate
 
 # Issuance and renewal of the gateways' listener certificates - one wildcard per isolation zone and
-# one for the platform gateway (OneK8s design section 13) - on the schedule and whenever this file
+# one for the platform gateway (OneK8s design section 15) - on the schedule and whenever this file
 # changes on main, or the one given when run by hand:
 #
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> platform Key Vault --> External Secrets --> Gateway

@@ -15,7 +15,7 @@ allowed:
     type: microsoft.containerregistry/registries
     name: acronek8sdev
     reason: "Non-production registry: Basic (D62), no private endpoint below Premium; Entra ID only"
-  # Designed (design sections 8 and 13): the external zones' gateways are published on a public load
+  # Designed (design sections 10 and 15): the external zones' gateways are published on a public load
   # balancer in every cell; AKS creates its frontend IPs in the node resource group. The internal cells
   # (the lab) have none: their outbound goes through the hub (userDefinedRouting).
   - check: public-ip

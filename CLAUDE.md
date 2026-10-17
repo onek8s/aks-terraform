@@ -9,7 +9,7 @@ something here changes.
 
 | Repo | Role |
 |---|---|
-| `onek8s.github.io` | The design (docs/01-21, requirements.md, open-questions.md). Code follows it; change it when a decision changes it. |
+| `onek8s.github.io` | The design (docs/01-23, requirements.md, decisions.md, open-questions.md). Code follows it; change it when a decision changes it. **Its sections were renumbered into reading order on 2026-10-17** (onek8s.github.io #58; the old-to-new mapping is in that repo's CLAUDE.md) - notes and commits before that date cite the old numbers. |
 | `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5) and what an environment's clusters share (`shared/`: cell VNets + NSGs, platform and zone Key Vaults, private DNS, Traffic Manager, ACR). All deployment and status workflows live here. |
 | `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Gateway, ESO, Cilium), NAP NodePools, external-dns, tenants. `clusters/<cluster>/` per cluster. |
 | `aks-fluxcd-example` | An application team's repo (namespace `ext-fi-example`, app aks-hello). |
@@ -28,7 +28,7 @@ reads; job logs via `get_job_logs`).
 |---|---|
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-ext-stateless-az1` / `dev-ext-stateless-az2` / `dev-ext-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota, every policy constraint's violations per object, and who wrote each Secret of the zone namespaces (managed fields). `node_iptables` option for eBPF debugging. Read it before promoting a policy to deny. |
-| `isolation-tests.yml` | The negative requirement and isolation tests of design section 17 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`: RoleBindings match the tfvars' `groups`, each role's rights by impersonating a group member and signed in as a tester app from `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete, R2 one exposure per cluster and subscription. **Only when the user asks for it** (2026-10-14: runs take 10-30 min and slowed progress) - no Deploy stage, no schedule; do not dispatch it on your own after a change. |
+| `isolation-tests.yml` | The negative requirement and isolation tests of design section 23 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`: RoleBindings match the tfvars' `groups`, each role's rights by impersonating a group member and signed in as a tester app from `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete, R2 one exposure per cluster and subscription. **Only when the user asks for it** (2026-10-14: runs take 10-30 min and slowed progress) - no Deploy stage, no schedule; do not dispatch it on your own after a change. |
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only** (2026-10-14, the user's choice to speed up testing: no schedule, no Deploy stage). |
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
@@ -39,7 +39,7 @@ reads; job logs via `get_job_logs`).
 | `lab-power.yml` (Lab power) | Manual: `action` stop / start of the dev cells for a pause (`clusters`, default az2 az3; `firewall`). stop, per cluster: every Flux configuration suspended, Deployments/StatefulSets of the `platform/zone` namespaces scaled to 0 and waited for, NAP off (NodePool cpu limits 0, NAP nodes deleted, mode Manual - a NAP cluster cannot be stopped), `az aks stop`; then labfw's VM deallocated (custom role `OneK8s labfw Power`, azure-landing-zone). start: labfw first (+1 min), `az aks start`, mode Auto, Flux resumed (Git puts the limits and replicas back). Git unchanged. VPN for kubectl (concurrency `labfw-vpn`). |
 | `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` and `roles` input, groups `grp-onek8s-dev-<ns>-<role>` (default view edit admin; `platform` + `viewers` for the platform viewers) and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
 | `vpn-clients.yml` (VPN clients) | The runners' labfw VPN configs as `dev` environment secrets (GH_OWNER): `copy-runners` (vault -> `LABFW_VPN_GITHUB_RUNNERS`), `new-peer` (key pair -> `LABFW_VPN_<PEER>`, prints the public key for azure-landing-zone `labfw.vpn.peers`). |
-| `traffic-flow-docs.yml` (Traffic flow docs) | Manual (design section 23, D63): `aks-agent docs traffic` of aks-ai-agents generates the traffic flow pages of a `spoke` (default `dev-int`) - a Mermaid picture + page per application namespace and per zone - from Git alone (azure-landing-zone `firewall-applications/`, this repo's cell tfvars, aks-fluxcd-example's Flux path, the fleet's `policy/egress-allow-lists.yaml`; no Azure, no VPN, no cluster) into a checkout of azure-landing-zone `docs/traffic-flows/`, uploads them as an artifact and prints the findings (rules no configuration names, named destinations without a rule). When a page changed and `dry_run` is off, the documentation agent (model on Foundry: azure/login + labfw VPN, so the lab must be running) explains the findings and opens ONE PR to azure-landing-zone with GH_OWNER. `aks-agent docs traffic ... --check` fails when the pages are stale. |
+| `traffic-flow-docs.yml` (Traffic flow docs) | Manual (design section 19, D63): `aks-agent docs traffic` of aks-ai-agents generates the traffic flow pages of a `spoke` (default `dev-int`) - a Mermaid picture + page per application namespace and per zone - from Git alone (azure-landing-zone `firewall-applications/`, this repo's cell tfvars, aks-fluxcd-example's Flux path, the fleet's `policy/egress-allow-lists.yaml`; no Azure, no VPN, no cluster) into a checkout of azure-landing-zone `docs/traffic-flows/`, uploads them as an artifact and prints the findings (rules no configuration names, named destinations without a rule). When a page changed and `dry_run` is off, the documentation agent (model on Foundry: azure/login + labfw VPN, so the lab must be running) explains the findings and opens ONE PR to azure-landing-zone with GH_OWNER. `aks-agent docs traffic ... --check` fails when the pages are stale. |
 | `lab-admin.yml` (Lab admin) | Manual, **last resort**: runs ONE `az` (as `AZURE_OWNER`, on the dev subscription) or `gh` (with `GH_OWNER`) command; `args` split like a shell, no pipes (use `--query`/`--jq`). For special changes nothing else covers (Entra ID, Graph, org/repo settings). The run log is readable by anyone who can read the repo: never print a secret. |
 
 **Owner credentials (lab only, last option, allowed whenever needed):** `AZURE_OWNER` - org secret, `az ad sp
@@ -61,7 +61,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
-- **Traffic flow documentation (2026-10-17, design section 23, D63 proposed)**: the first pages of `dev-int` are committed in
+- **Traffic flow documentation (2026-10-17, design section 19, D63 proposed)**: the first pages of `dev-int` are committed in
   azure-landing-zone `docs/traffic-flows/` (generated with `aks-agent docs traffic`, see the workflow row above). First finding:
   `stats.grafana.org` is allowed for both int-fi-example and int-se-example but nothing in aks-hello's configuration names it
   (the egress agent proposed it as "a plausible public API for metrics", a human merged azure-landing-zone's PRs) - either a
@@ -187,7 +187,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **labfw VPN** (WireGuard, UDP 51820 on 4.184.103.12): peer `olli-1` 10.0.12.10 (public key in azure-landing-zone
   terraform.tfvars, private key in `kv-onek8s-gwc-platform` as `labfw-vpn--olli-1-private-key`). The pool counts as
   management: API server private endpoints, jump host, the cells' 443 (int-fi gateway); DNS 10.0.12.1.
-- **Internal app names by home cell** (2026-10-15, design section 8): `hello.int-fi.dev.onek8s.lol` (aks-fluxcd-example
+- **Internal app names by home cell** (2026-10-15, design section 10): `hello.int-fi.dev.onek8s.lol` (aks-fluxcd-example
   `apps/aks-hello-home`) next to the per-cell `hello-<cluster>...`. Every route carries `platform/home-cell: <cluster>`;
   external-dns-int publishes only routes naming its own cluster (`--annotation-filter=platform/home-cell=${cluster_name}`).
   The tfvars' `managed_namespaces.<ns>.flux.substitute.home_cell` (the same in every cell) stands in for the placement
@@ -211,7 +211,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   the endpoint as down. To bring it back: Deploy `dev-ext-stateless-az2` apply with `allow_empty_state`,
   then Flux webhooks and Cluster status on it (Isolation tests only if the user asks). Do not rebuild it unless asked.
 - **VPA add-on off in the dev cells** (2026-10-14, lab cost exception, the user's choice): `vertical_pod_autoscaler_enabled
-  = false` in the stateless tfvars (default stays true, design section 4) - its ~2.4 GiB of requests (2 recommenders,
+  = false` in the stateless tfvars (default stays true, design section 5) - its ~2.4 GiB of requests (2 recommenders,
   2 updaters, 2 admission controllers) kept a cell off one 8 GiB system node. aks-hello's `VerticalPodAutoscaler`
   (`InPlaceOrRecreate`, RequestsOnly, CPU 3m-20m, memory 64Mi-128Mi) stays in aks-fluxcd-example `apps/` but
   `stateless/` deletes it with a patch (no CRD without the add-on). Isolation tests: R11 VPA follows the tfvars,
@@ -254,7 +254,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `kube-audit-admin` + `guard` per cluster, 1 GB/day cap), Cilium policies and token-less default
   service accounts in the platform's namespaces (fleet). Accepted with reasons in `tests/cis/accepted.yaml`:
   the dev lab exceptions (public API server, Defender off), AKS's and Flux's own RBAC, ESO's Secret access,
-  gateway namespaces on baseline PSS. Follow-ups in the design (section 17, "CIS benchmark").
+  gateway namespaces on baseline PSS. Follow-ups in the design (section 23, "CIS benchmark").
 - **GPU nodes on request** (2026-10-13, decision D42 built): per zone a NAP AKSNodeClass + NodePool
   `<zone>gpu` in the fleet - NVIDIA H100 v5 only (`NCads_v5`; the only GPU VMs with VNet encryption),
   on-demand, amd64, taint `platform/accelerator=nvidia-gpu`, AKS managed GPU stack (AKSNodeClass tag
@@ -294,7 +294,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `<ns>--` ABAC write condition, `view` nothing - granted by shared/
   (`key_vault_namespaces.<ns>.groups`, same IDs; the isolation test checks they agree) or by the root module
   for a cluster's own vault.
-- **Soft multi-tenancy** (2026-10-14, design section 6/7, D50): the ABAC conditions gate `readMetadata` too, so
+- **Soft multi-tenancy** (2026-10-14, design section 7/8, D50): the ABAC conditions gate `readMetadata` too, so
   **no namespace identity or group can list a vault** (Key Vault evaluates a list against the whole collection,
   which has no name): everyone reads/writes only their own `<ns>--*` by name, and nobody creates a secret outside
   the naming. **Platform viewers** (shared/ `platform_viewer_group_object_ids`, lab group
@@ -315,13 +315,14 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Plan review 2026-10-14** (design PR: Firewall per exposure D53, no IPv6 D54, V13/V22): the design's
   network picture now has a hub and Firewall per exposure; no code changed anywhere. Open follow-ups when the user
   asks: azure-landing-zone `firewall` mode with the external hub (V22) and the firewall rules rewrite. IPv6: dropped.
-- **Backlog**: 17 items in priority order in design section 17 ("Backlog, in priority order", 2026-10-14), four
-  tiers: A now (1 promote the remaining policies to deny, 2 external hub Firewall in `firewall` mode, 3 private
-  endpoints for vaults and ACR, 4 private API server), B before acceptance (5 version pipeline, 6 agents on the build
-  tenant, 7 internal exposure, 8 second cell + cross-cell tests, 9 CIS follow-ups, 10 observability completion,
-  11 backups, 12 manifest CI checks), C phase 3 (13 open verifications and acceptance tests, 14 pentest / review),
-  D on trigger (15 stateful cluster, 16 WAF, 17 image promotion tests). Pick from the top unless the user says otherwise;
-  update the list there when an item is done.
+- **Backlog**: 17 items in priority order in design section 23 ("Backlog, in priority order", 2026-10-17), four
+  tiers: A now (1 promote the remaining policies to deny, 2 a real Azure Firewall and the external hub in `firewall`
+  mode, 3 what the private API server and private endpoints left open), B before acceptance (4 version pipeline,
+  5 agents on the build tenant, 6 the rest of the internal exposure, 7 the external exposure back with two cells for
+  the cross-cell tests, 8 CIS follow-ups, 9 observability completion, 10 backups, 11 manifest CI checks, 17 traffic
+  flow documentation follow-ups), C phase 3 (12 open verifications and acceptance tests, 13 pentest / review),
+  D on trigger (14 stateful cluster, 15 WAF, 16 image promotion tests). Pick from the top unless the user says
+  otherwise; update the list there when an item is done.
 - **Platform Kubernetes policies in Azure Policy** (azure-landing-zone `stacks/aks-policy/kubernetes.tf`,
   templates + gator tests in `kubernetes/`): mutations **on** - 5 + 2 per zone, so 9 in the ext subscription (zone placement from the namespace,
   `platform/arch` -> arch selector, `platform/capacity: spot` -> toleration + preference,

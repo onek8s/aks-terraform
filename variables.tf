@@ -190,7 +190,7 @@ variable "gateway_implementation" {
   default     = "approuting-istio"
   description = <<DESCRIPTION
 The Gateway API implementation that serves the cluster's Gateways - one per isolation zone and the
-platform's, which the Flux repository deploys (OneK8s design section 13). Defaults to
+platform's, which the Flux repository deploys (OneK8s design section 15). Defaults to
 `approuting-istio`, the production setting (D55: the Azure standard offering, upgraded by AKS);
 `traefik` is a non-production cost saving. Null for a cluster without Gateways: the stateful
 cluster has no Gateway API implementation (R9a).
@@ -257,7 +257,7 @@ variable "image_integrity_enabled" {
   description = <<DESCRIPTION
 Whether AKS runs [Image Integrity][ii] (preview): Ratify, which checks each image's Notation
 signature for the Azure Policy add-on, so that the assignment "Kubernetes cluster containers should
-only use images that are signed with Notation" reports unsigned images (OneK8s design section 14;
+only use images that are signed with Notation" reports unsigned images (OneK8s design section 9;
 audit only while in preview). Ratify reads the signatures in `container_registry_name` and the
 signing certificate in the environment's shared platform vault as the shared identity shared/ creates
 with its image_signing, through a federated credential added here for Ratify's service account; Flux
@@ -376,7 +376,7 @@ variable "default_node_pool" {
 System node pool of the cluster. **Ignored for AKS Automatic apart from `name`**, which sizes,
 scales and rolls its own node pools - see the README for what that SKU drops.
 
-The defaults are the production setting (OneK8s design section 4): two `Standard_D4ds_v5` nodes
+The defaults are the production setting (OneK8s design section 5): two `Standard_D4ds_v5` nodes
 (4 vCPU, 16 GiB), room for App Routing's istiod, the VPA add-on and the platform's controllers, and
 a second node while one is upgraded or lost. One smaller node (the dev lab's single 8 GiB
 `Standard_D4als_v6`) is a non-production cost saving that only fits with `gateway_implementation =
@@ -1033,7 +1033,7 @@ visible rather than silent, and Terraform warns when an exception turns that off
 `labels` must not carry `pod-security.kubernetes.io/*` keys of its own; `pod_security` is the one
 place those are set.
 
-`owner` says who owns what runs in the namespace and who pays for it (OneK8s design section 7):
+`owner` says who owns what runs in the namespace and who pays for it (OneK8s design section 8):
 
 ```hcl
 managed_namespaces = {
@@ -1096,7 +1096,7 @@ a control plane role and works either way. Nothing is granted at all while
 `create_role_assignments = false`.
 
 `groups` binds an Entra ID security group to each of Kubernetes' built-in user-facing roles in the
-namespace (OneK8s design section 7: Kubernetes RBAC is namespace-scoped, Entra ID groups per
+namespace (OneK8s design section 8: Kubernetes RBAC is namespace-scoped, Entra ID groups per
 application team). Each role is optional; a role without a group gets no binding at all:
 
 ```hcl
@@ -1471,7 +1471,7 @@ variable "node_auto_provisioning_enabled" {
   default     = false
   description = <<DESCRIPTION
 Whether the cluster runs [node auto provisioning][nap] (NAP, the AKS-managed Karpenter) for the
-nodes of its isolation zones (OneK8s design section 4). AKS installs Karpenter and its `NodePool`
+nodes of its isolation zones (OneK8s design section 5). AKS installs Karpenter and its `NodePool`
 and `AKSNodeClass` CRDs; the `NodePool`s themselves - two per zone, on-demand and spot, amd64 and
 arm64 - are the Flux repository's, so AKS's own default `NodePool`s are turned off
 (`defaultNodePools = None`) and no node is created until a `NodePool` there asks for one. The
@@ -1701,7 +1701,7 @@ variable "vertical_pod_autoscaler_enabled" {
   description = <<DESCRIPTION
 Whether AKS runs the [Vertical Pod Autoscaler][vpa] add-on (`--enable-vpa`): its recommender,
 updater and admission controller, and the `VerticalPodAutoscaler` CRD. On in every cluster (OneK8s
-design section 4, pod right-sizing): each application's `VerticalPodAutoscaler` in its own
+design section 5, pod right-sizing): each application's `VerticalPodAutoscaler` in its own
 repository resizes its pods in place (`updateMode: InPlaceOrRecreate`, Kubernetes 1.35+), within
 the bounds stated there. Turning it off removes the add-on and with it every resize; the
 `VerticalPodAutoscaler` objects then do nothing. Ignored for AKS Automatic, which runs it anyway.
@@ -1814,7 +1814,7 @@ variable "isolation_zones" {
   }))
   default     = {}
   description = <<DESCRIPTION
-The isolation zones of a stateless cell - OneK8s design section 4 - keyed by zone (`ext-fi`): the
+The isolation zones of a stateless cell - OneK8s design section 5 - keyed by zone (`ext-fi`): the
 subnet of virtual_network_name each zone's NAP nodes are put in. The Flux repository is told its ID
 as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's AKSNodeClass. Needs node auto
 provisioning, which is granted the whole virtual network. All of one exposure (`exposure`).
@@ -1854,7 +1854,7 @@ variable "log_analytics_workspace_name" {
   description = <<DESCRIPTION
 Name of the environment's Log Analytics workspace (created by shared/, `log-<env>-platform`), where the
 cluster sends its Kubernetes audit log through a diagnostic setting - the categories in
-audit_log_categories (OneK8s design section 19, CIS AKS Benchmark 2.1.1). Null for none.
+audit_log_categories (OneK8s design section 21, CIS AKS Benchmark 2.1.1). Null for none.
 DESCRIPTION
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cells-in-sync check of OneK8s design section 17 ("Requirement and isolation tests"), R13: every
+"""Cells-in-sync check of OneK8s design section 23 ("Requirement and isolation tests"), R13: every
 stateless cell of an environment is built from the same IaC and the same fleet configuration -
 only its name and its availability zone differ.
 
