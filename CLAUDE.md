@@ -61,6 +61,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Dapr trial on az3 (2026-10-17, design D65 proposed: Dapr is NOT a platform feature)**: `dapr = { high_availability = false }`
+  in `envs/dev-int-stateless-az3.tfvars` (dapr.tf: AKS extension `microsoft.dapr` into `dapr-system` on the system pool, placement
+  and scheduler in memory, sidecars PSS restricted). **Not deployed** (the user's ask): when the lab is back, first merge
+  azure-landing-zone's `dapr-system` platform-namespace PR (its aks-policy workflow applies on merge), then Deploy
+  `dev-int-stateless-az3` apply, then Cluster status (system node requests). Fleet `infrastructure/dapr` (az3 only) lets zone
+  sidecars reach dapr-system. Unverified until the apply: the extension takes `global.tolerations[0].*` and the in-memory
+  settings, the scheduler's real footprint (3 replicas even without HA). An app opts in with `dapr.io/enabled` annotations.
 - **Traffic flow documentation (2026-10-17, design section 5.3, D63 proposed)**: the first pages of `dev-int` are committed in
   azure-landing-zone `docs/traffic-flows/` (generated with `aks-agent docs traffic`, see the workflow row above). First finding:
   `stats.grafana.org` is allowed for both int-fi-example and int-se-example but nothing in aks-hello's configuration names it
