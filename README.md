@@ -94,6 +94,10 @@ az feature register --namespace Microsoft.ContainerService --name EnableImageInt
 az provider register --namespace Microsoft.ContainerService
 ```
 
+A cluster with `dapr` runs the AKS Dapr extension - a lab trial on `dev-int-stateless-az3`, not a platform
+feature (design D65). Its control plane goes into `dapr-system` on the system pool, which the landing zone's
+policies must count as a platform namespace (azure-landing-zone, `stacks/aks-policy`) before the apply.
+
 The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
 both SKUs run the Azure Policy add-on and AKS Automatic installs it whether or not you ask:
 

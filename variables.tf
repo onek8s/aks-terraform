@@ -251,6 +251,34 @@ DESCRIPTION
   }
 }
 
+variable "dapr" {
+  type = object({
+    version           = optional(string)
+    high_availability = optional(bool, true)
+    settings          = optional(map(string), {})
+  })
+  default     = null
+  description = <<DESCRIPTION
+The AKS [Dapr extension][dapr] (`microsoft.dapr`) - NOT part of the OneK8s platform (design D65: no
+requirement names it, so per D64 it is an option kept open, section 7.4); set only on a lab cell to try
+it. Null (the default) installs nothing. Its control plane - operator, sidecar injector, sentry,
+placement and scheduler - goes into `dapr-system` on the system pool, like every platform controller,
+never onto an isolation zone's nodes. A stateless cell has no StorageClass, so placement and the
+scheduler keep their state in memory: actor placement and scheduled jobs and reminders do not survive
+a restart of their pods.
+
+- `version` - The extension version (e.g. `1.16.4-msft.1`), pinned without minor upgrades. Null takes
+  the newest of the stable release train and lets AKS upgrade its minor version. A change re-creates
+  the extension.
+- `high_availability` - Three replicas of each control plane component (the extension's default). It
+  cannot change on an installed extension; a lab cell on one system node needs false.
+- `settings` - More Helm values of the Dapr chart, as configuration settings (strings), merged over
+  the ones this module sets.
+
+[dapr]: https://learn.microsoft.com/azure/aks/dapr
+DESCRIPTION
+}
+
 variable "image_integrity_enabled" {
   type        = bool
   default     = false

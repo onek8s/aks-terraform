@@ -4630,3 +4630,75 @@ run "the_flux_webhook_needs_the_platform_gateway" {
 
   expect_failures = [check.flux_webhook_needs_the_platform_gateway]
 }
+
+run "no_dapr_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(azapi_resource.dapr_extension) == 0
+    error_message = "Dapr is not part of the platform: nothing should install it unless dapr is set."
+  }
+}
+
+run "a_dapr_trial_runs_on_the_system_pool_without_storage" {
+  command = plan
+
+  variables {
+    dapr = {
+      high_availability = false
+      settings          = { "dapr_monitoring.logLevel" = "debug" }
+    }
+    default_node_pool = {
+      vm_size     = "Standard_D4alds_v6"
+      node_taints = ["CriticalAddonsOnly=true:NoSchedule"]
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.dapr_extension[0].body.properties.extensionType == "microsoft.dapr"
+    error_message = "The extension should be Dapr."
+  }
+  assert {
+    condition     = azapi_resource.dapr_extension[0].body.properties.scope.cluster.releaseNamespace == "dapr-system"
+    error_message = "Dapr's control plane should go into dapr-system."
+  }
+  assert {
+    condition     = azapi_resource.dapr_extension[0].body.properties.autoUpgradeMinorVersion && !can(azapi_resource.dapr_extension[0].body.properties.version)
+    error_message = "Without a version, the newest of the stable train with minor upgrades."
+  }
+  assert {
+    condition     = local.dapr_settings["global.ha.enabled"] == "false"
+    error_message = "high_availability = false should turn HA off."
+  }
+  assert {
+    condition     = local.dapr_settings["dapr_placement.cluster.forceInMemoryLog"] == "true" && local.dapr_settings["dapr_scheduler.cluster.inMemoryStorage"] == "true"
+    error_message = "A stateless cell has no StorageClass: placement and the scheduler should keep their state in memory."
+  }
+  assert {
+    condition     = local.dapr_settings["global.nodeSelector.kubernetes\\.azure\\.com/mode"] == "system" && local.dapr_settings["global.tolerations[0].key"] == "CriticalAddonsOnly"
+    error_message = "The control plane should run on the tainted system pool."
+  }
+  assert {
+    condition     = local.dapr_settings["dapr_monitoring.logLevel"] == "debug"
+    error_message = "settings should be passed on."
+  }
+}
+
+run "a_pinned_dapr_version_is_not_upgraded" {
+  command = plan
+
+  variables {
+    dapr = {
+      version = "1.16.4-msft.1"
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.dapr_extension[0].body.properties.version == "1.16.4-msft.1" && !azapi_resource.dapr_extension[0].body.properties.autoUpgradeMinorVersion
+    error_message = "A pinned version should be installed without minor upgrades."
+  }
+  assert {
+    condition     = local.dapr_settings["global.ha.enabled"] == "true"
+    error_message = "HA is the default, as the extension's."
+  }
+}
