@@ -1,0 +1,143 @@
+name: Traffic flow docs
+
+# The documentation agent of onek8s/aks-ai-agents (design section 23): one page with a Mermaid picture per application
+# namespace and one per isolation zone - who reaches the application, what it runs, every destination it reaches
+# outside the landing zone through the hub firewall, and who asked for each rule. The firewall's rules name zones, not
+# applications; the egress agent's per-application rule files (azure-landing-zone firewall-applications/) do, so the
+# pages are generated from Git alone: the rule files, the applications' Flux configuration (aks-fluxcd-example), the
+# fleet's zone allow-lists and this repository's cell tfvars. No cluster, no Azure, no VPN for that step.
+#
+#   generate  `aks-agent docs traffic` writes the pages into a checkout of azure-landing-zone (docs/traffic-flows/<spoke>/)
+#             and prints the findings: rules no configuration names, named destinations without a rule. Nothing changed:
+#             the run ends here.
+#   agent     only when a page changed and dry_run is off: the documentation agent (its tool writes the same pages into
+#             its workspace) explains the findings and opens ONE pull request to onek8s/azure-landing-zone with GH_OWNER.
+#             The model is on Foundry (no public network access, D60), so this step signs in to Azure and joins the labfw
+#             VPN - it needs the lab running (Lab power start). The generate step does not.
+#
+# By hand only, like the Egress agent (an owner credential opens the pull request). The pages carry no timestamp, so a
+# run after nothing changed opens nothing; the generated pages are an artifact of every run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      spoke:
+        description: "The exposure to document: <env>-<exposure>"
+        default: "dev-int"
+      dry_run:
+        description: "Generate the pages and print the findings only; no model, no pull request"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: labfw-vpn
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    name: traffic flow docs
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 30
+    steps:
+      - name: Check the inputs
+        env:
+          SPOKE: ${{ inputs.spoke || 'dev-int' }}
+        run: |
+          [[ "$SPOKE" =~ ^[a-z0-9]+-[a-z0-9]+$ ]] || { echo "::error::spoke must be <env>-<exposure>, e.g. dev-int"; exit 1; }
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/aks-ai-agents
+          path: aks-ai-agents
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/azure-landing-zone
+          path: azure-landing-zone
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/aks-fluxcd-platform
+          path: aks-fluxcd-platform
+
+      - uses: actions/checkout@v7
+        with:
+          repository: onek8s/aks-fluxcd-example
+          path: aks-fluxcd-example
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the agents
+        run: pip install --quiet ./aks-ai-agents
+
+      - name: Generate the pages
+        id: generate
+        env:
+          AKS_AGENT_PLATFORM: aks-ai-agents/config/onek8s-dev.yaml
+          AKS_AGENT_ENV: dev
+          AKS_AGENT_GITHUB_TOKEN: ${{ secrets.GH_OWNER }}
+          SPOKE: ${{ inputs.spoke || 'dev-int' }}
+        run: |
+          set -euo pipefail
+          aks-agent docs traffic --spoke "$SPOKE" --github \
+            --landing-zone azure-landing-zone --fleet aks-fluxcd-platform --iac . \
+            --app-repo onek8s/aks-fluxcd-example=aks-fluxcd-example | tee "$RUNNER_TEMP/generate.txt"
+          { echo '### Traffic flow docs'; echo '```'; cat "$RUNNER_TEMP/generate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          (cd azure-landing-zone && git status --short docs/traffic-flows && git diff --stat docs/traffic-flows) || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: traffic-flow-docs
+          path: azure-landing-zone/docs/traffic-flows
+          retention-days: 30
+
+      - uses: actions/checkout@v7
+        if: steps.generate.outputs.changed != '0' && !inputs.dry_run
+        with:
+          repository: onek8s/onek8s.github.io
+          path: onek8s.github.io
+
+      - name: Sign in to Azure (GitHub OIDC)
+        if: steps.generate.outputs.changed != '0' && !inputs.dry_run
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Foundry has no public network access: the model is reached through the hub firewall's VPN
+      - uses: ./.github/actions/labfw-vpn
+        if: steps.generate.outputs.changed != '0' && !inputs.dry_run
+        with:
+          config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
+
+      - name: Documentation agent
+        if: steps.generate.outputs.changed != '0' && !inputs.dry_run
+        working-directory: aks-ai-agents
+        env:
+          AKS_AGENT_PLATFORM: config/onek8s-dev.yaml
+          AKS_AGENT_ENV: dev
+          AKS_AGENT_DESIGN: ${{ github.workspace }}/onek8s.github.io
+          AKS_AGENT_GITHUB_TOKEN: ${{ secrets.GH_OWNER }}
+          SPOKE: ${{ inputs.spoke || 'dev-int' }}
+        run: |
+          set -euo pipefail
+          aks-agent run documentation-agent --task "Update the traffic flow documentation of the spoke $SPOKE: call traffic_flow_docs with spoke $SPOKE, explain its findings and open the pull request as your instructions say. The platform's own run already found $(sed -n 's/^\(.*\)applications of.*/\1/p' "$RUNNER_TEMP/generate.txt" | head -1)applications and ${{ steps.generate.outputs.findings }} findings." | tee "$RUNNER_TEMP/result.txt"
+          { echo '### Documentation agent'; echo '```'; cat "$RUNNER_TEMP/result.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.generate.outputs.changed != '0' && !inputs.dry_run
+        with:
+          name: documentation-agent-run
+          path: aks-ai-agents/runs
+          retention-days: 30
+          if-no-files-found: ignore
