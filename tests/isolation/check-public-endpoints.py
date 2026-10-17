@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Azure Resource Graph check of OneK8s design section 17 ("Requirement and isolation tests"):
+"""Azure Resource Graph check of OneK8s design section 23 ("Requirement and isolation tests"):
 public IPs, public endpoints of PaaS / Key Vault / ACR / API servers, and local authentication
 left on - none but the designed ones and the recorded lab exceptions.
 

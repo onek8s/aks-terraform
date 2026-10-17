@@ -1,4 +1,4 @@
-# The environment's monthly budget (cost management, OneK8s design section 9): what the whole
+# The environment's monthly budget (cost management, OneK8s design section 11): what the whole
 # subscription may cost in a month - the clusters, their node resource groups, everything shared -
 # in the billing account's currency. Azure Cost Management mails the subscription's owners when the
 # month's actual cost passes 80 % and 100 % of it, and when the forecast for the month passes 100 %,

@@ -1,4 +1,4 @@
-# The platform viewers (OneK8s design section 7, "Soft multi-tenancy"): Entra ID groups that see
+# The platform viewers (OneK8s design section 8, "Soft multi-tenancy"): Entra ID groups that see
 # what the namespaces' own groups may not - the names of every namespace in the environment's
 # clusters and of every secret in its vaults - and no content of either. The Azure portal's
 # Kubernetes views pick a namespace from the cluster's list of them, which a namespace's own groups

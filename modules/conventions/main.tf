@@ -44,7 +44,7 @@ locals {
   # Reading a secret - `Key Vault Secrets User`: its value and its metadata (attributes, versions).
   # Listing the vault is refused: Key Vault evaluates a condition on a list call against the whole
   # collection, which has no name, so a name condition on `readMetadata` refuses every list - and that
-  # is the point (soft multi-tenancy, OneK8s design section 6): no namespace learns the names of
+  # is the point (soft multi-tenancy, OneK8s design section 7): no namespace learns the names of
   # another namespace's secrets. Its own it reads by name, which is all External Secrets Operator
   # does. Listing the names is the platform viewers' (shared/, platform_viewer_group_object_ids).
   key_vault_read_conditions = {
@@ -63,7 +63,7 @@ locals {
     CONDITION
   }
 
-  # What a namespace's `edit` group may do to the namespace's secrets (OneK8s design section 7, D51):
+  # What a namespace's `edit` group may do to the namespace's secrets (OneK8s design section 8, D51):
   # write and update them, and read their attributes, never their value - Kubernetes' `edit` writes a
   # Secret, and a person who may write a secret need not read the one already there. No delete,
   # purge, backup or restore: those stay with `admin` (`Key Vault Secrets Officer`). A custom role -

@@ -48,7 +48,7 @@ node_subnet_name     = "snet-aks-nodes"
 # This cluster adds a federated credential of its own to each; every grant on the vaults is shared/'s.
 #
 # Defined, not deployed: the stateful cluster of the design lives in the backend network with no
-# gateway of its own (sections 8 and 13), which clusters/dev-int-stateful of the platform repository does
+# gateway of its own (sections 10 and 15), which clusters/dev-int-stateful of the platform repository does
 # not follow yet.
 key_vault_name       = "kv-onek8s-gwc-platform"
 key_vault_create     = false
@@ -76,7 +76,7 @@ portable_disks_enabled = true
 container_registry_name = "acronek8sdev"
 
 # SHARED. The environment's Log Analytics workspace, created by shared/: this cluster's Kubernetes
-# audit log (kube-audit-admin and guard) - design section 19, CIS AKS Benchmark 2.1.1.
+# audit log (kube-audit-admin and guard) - design section 21, CIS AKS Benchmark 2.1.1.
 log_analytics_workspace_name = "log-dev-platform"
 
 # A public API server, open to every address: a lab with no network path into the VNet. Entra ID
@@ -95,14 +95,14 @@ gateway_implementation = null
 entra_admin_group_object_ids  = []
 entra_reader_group_object_ids = []
 
-# The Azure Policy add-on (OneK8s design section 14): Gatekeeper evaluates the policies that
+# The Azure Policy add-on (OneK8s design section 9): Gatekeeper evaluates the policies that
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy) and reports the
 # cluster's compliance to Azure Policy. Its pods ask for about 360m CPU and 868Mi of memory.
 azure_policy_enabled = true
 
 # Non-production cost saving: ONE Standard_D4alds_v6 system node on an ephemeral OS disk (its local
 # NVMe disk: no Premium SSD). Production: node_count = 2 on the default Standard_D4ds_v5 (design
-# section 4).
+# section 5).
 #
 # Standard_D4alds_v6: one amd64 node, 4 vCPU and 8 GiB, with availability zones 1 and 2. Two vCPU
 # are not enough: the platform's pods ask for about 1600m of the 1900m a 2-vCPU node has, and the
@@ -126,7 +126,7 @@ default_node_pool = {
 managed_namespaces = {
   int-fi-example = {
     # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
-    # annotation platform/contact (design section 7; Azure Policy namespace-ownership).
+    # annotation platform/contact (design section 8; Azure Policy namespace-ownership).
     owner = {
       team        = "example"
       cost_center = "example"

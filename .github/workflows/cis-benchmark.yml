@@ -1,7 +1,7 @@
 name: CIS benchmark
 
 # The CIS Azure Kubernetes Service (AKS) Benchmark on one cluster of the dev environment (OneK8s design
-# sections 14 and 17): continuous evidence that the platform's hardening has not drifted, and the
+# sections 9 and 23): continuous evidence that the platform's hardening has not drifted, and the
 # Cloud configuration review's CIS input. By hand only: the weekly run and the run after every Deploy
 # apply were turned off to keep the deploy-and-test loop short (2026-10-14); run it after a change that
 # can move the score.
@@ -20,7 +20,7 @@ name: CIS benchmark
 # tests/cis/report.py merges them into one row per CIS recommendation and a score (the share of
 # automated recommendations that pass). A failure not listed with its reason in
 # tests/cis/accepted.yaml fails the run; the score and the per-recommendation results are in the
-# summary and in the `cis-<cluster>` artifact, for the trend that design section 14 watches.
+# summary and in the `cis-<cluster>` artifact, for the trend that design section 9 watches.
 #
 # Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
 # role that may create Jobs in kube-system and read every object (Azure Kubernetes Service RBAC

@@ -118,7 +118,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_writer" {
   condition            = local.key_vault_write_conditions[each.value.namespace]
 }
 
-# The `edit` groups' role (design section 7, D51): write and update a secret and read its attributes,
+# The `edit` groups' role (design section 8, D51): write and update a secret and read its attributes,
 # never its value - see modules/conventions. On the cluster's own vault only, like the writers; defined
 # at the resource group, named after the cluster (custom role names are unique in the tenant).
 resource "azurerm_role_definition" "key_vault_secrets_editor" {
