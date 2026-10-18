@@ -1,11 +1,13 @@
 # Internal cell `int-stateless-az3` of the OneK8s dev environment - a stateless cluster in availability zone 3
 # (OneK8s design section 3.1), on a lab budget - see "Non-production cost savings" below - and the lab's
-# FIREWALL-EGRESS cell (design D59, 2026-10-15): no overlay network. Its pods take addresses of their
-# zone's node subnet in 100.64.0.0/16 (shared/: pod_network = "subnet") and keep them up to the hub's
-# firewall (labfw), which decides every flow that leaves the cluster - by zone (the subnet) and by
-# application (the pod's address, which the egress agent of onek8s/aks-ai-agents maps to its namespace).
-# Cilium keeps only the policies inside the cluster. It runs Sweden's zone, int-se, only; az2 runs
-# Finland's. shared/envs/dev.tfvars is applied first.
+# POD-SUBNET cell (design D59, D74; rebuilt 2026-10-18): no overlay network. Azure CNI Pod Subnet with dynamic
+# IP allocation: its pods take addresses of their pool's pod subnet in 100.64.0.0/16 (shared/: pod_network =
+# "pod-subnet") and keep them up to the hub's firewall (labfw), which decides every flow that leaves the
+# cluster - by zone (the subnet) and by application (the pod's address, which the egress agent of
+# onek8s/aks-ai-agents maps to its namespace). Nodes and load balancers are in /24 slots of 10.100.0.0/16.
+# Node auto provisioning does not support a pod subnet, so the zone's nodes come from classic node pools with
+# the cluster autoscaler (zone_node_pools). Cilium keeps only the policies inside the cluster. It runs
+# Sweden's zone, int-se, only; az2 runs Finland's. shared/envs/dev.tfvars is applied first.
 #
 #   terraform workspace select -or-create dev-int-stateless-az3
 #   terraform apply -var-file=envs/dev-int-stateless-az3.tfvars
@@ -73,10 +75,11 @@ default_node_pool = {
   encryption_at_host  = true
   ssh_access          = "Disabled"
   node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
-  # No overlay (network_profile below): every pod takes an address of snet-system, reserved up front per node, and
-  # Azure CNI node subnet defaults to 30 pods a node - fewer than the platform runs on its one system node. 110 is
-  # the overlay cells' default; snet-system is a /20.
-  max_pods = 110
+  # No overlay (network_profile below): the system pool's pods take addresses of snet-system-pods (100.64.0.0/20),
+  # handed to the node in batches of 16 as it needs them (dynamic IP allocation). 110 pods a node, as in the
+  # overlay cells.
+  pod_subnet_name = "snet-system-pods"
+  max_pods        = 110
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -94,8 +97,9 @@ auto_upgrade = {
 # the environment and what they share.
 resource_group_name = "rg-aks-dev"
 
-# The cell's own network, created by shared/ (cells): the system pool in snet-system, each isolation
-# zone's NAP nodes in its own snet-<zone>-nodes and its internal load balancer in snet-<zone>-ilb,
+# The cell's own network, created by shared/ (cells): the system pool in snet-system (10.100.0.0/24), each
+# isolation zone's nodes in its own snet-<zone>-nodes and its internal load balancer in snet-<zone>-ilb (the
+# zone's /24 of 10.100.0.0/16), and the pods in snet-system-pods and snet-<zone>-pods (/20s of 100.64.0.0/16),
 # every subnet behind its own NSG, VNet encryption on.
 virtual_network_name = "vnet-dev-int-stateless-az3"
 node_subnet_name     = "snet-system"
@@ -107,18 +111,18 @@ node_subnet_name     = "snet-system"
 exposure = "int"
 
 isolation_zones = {
-  int-se = { node_subnet_name = "snet-int-se-nodes" }
+  int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
 }
 
 # Egress through the landing zone's hub firewall (labfw): the cell's subnets send 0.0.0.0/0 there
 # (shared/: hub), so AKS creates no outbound load balancer rule. Cannot change on a running cluster.
 #
-# No overlay (design D59): Azure CNI node subnet with the Cilium dataplane - the one non-overlay mode node
-# auto provisioning supports (not a pod subnet with dynamic IP allocation). Every pod takes an address of
-# its node's subnet - the system pool's snet-system, a zone's snet-<zone>-nodes, /21s of 100.64.0.0/16 -
-# and keeps it to labfw: the firewall's log names the pod, its rules the zone, and labfw translates every
-# flow that leaves the landing zone (the internet; the corporate network, outside its private ranges).
-# Cannot change on a running cluster.
+# No overlay (design D59, D74): Azure CNI Pod Subnet with dynamic IP allocation and the Cilium dataplane - the
+# pools name their pod subnets (default_node_pool, isolation_zones). Every pod takes an address of its pool's
+# pod subnet - snet-system-pods, a zone's snet-<zone>-pods, /20s of 100.64.0.0/16 - and keeps it to labfw:
+# the firewall's log names the pod, its rules the zone, and labfw translates every flow that leaves the
+# landing zone (the internet; the corporate network, outside its private ranges). Cannot change on a
+# running cluster.
 network_profile = {
   outbound_type       = "userDefinedRouting"
   network_plugin_mode = "none"
@@ -203,10 +207,17 @@ entra_reader_group_object_ids = []
 # onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy).
 azure_policy_enabled = true
 
-# Node auto provisioning (NAP, the AKS-managed Karpenter) for the isolation zones' nodes - design
-# section 4. The platform repository's node-pools define two NodePools per zone, on-demand and spot,
-# each in its zone's subnet (isolation_zones) and in this cell's availability zone.
-node_auto_provisioning_enabled = true
+# No node auto provisioning: AKS refuses it with a pod subnet (design D74; Azure/karpenter-provider-azure
+# issue 1351). The zone's nodes come from classic node pools instead - intse, intsespot, intsearm,
+# intsearmspot, from zero nodes in availability zone 3 - scaled by the cluster autoscaler, whose priority
+# expander takes the spot pools first (aks-fluxcd-platform, clusters/dev-int-stateless-az3). Sized for the
+# lab's quotas in germanywestcentral: Daldv6 8 vCPUs (the system node takes 4, so two 2-vCPU amd64 nodes),
+# low-priority (spot) 3 vCPUs (one spot node).
+node_auto_provisioning_enabled = false
+zone_node_pools = {
+  max_count      = 2
+  spot_max_count = 1
+}
 
 # The `example` team's application, in the int-se zone (design section 2.6: one namespace per
 # application and zone, `<zone>-<app>`). Its own Flux configuration deploys firewall-egress/ of
@@ -260,13 +271,3 @@ flux_git_repository = {
 
 # No Flux webhook: no platform gateway for GitHub to reach (platform_gateway_enabled above).
 flux_github_webhook = false
-
-# A TRIAL, not the platform (design D65, 2026-10-17): the AKS Dapr extension, to measure what it costs
-# and how it fits the zones before anything names it (D64). Its control plane runs on the one system
-# node without HA (one replica each; the scheduler still runs three), placement and the scheduler in
-# memory (no StorageClass here). Needs `dapr-system` among the landing zone's platform namespaces
-# (azure-landing-zone, stacks/aks-policy) before the apply - namespace-ownership and the rollout
-# guardrails refuse it otherwise. Remove the block to uninstall (Dapr's CRDs stay in the cluster).
-dapr = {
-  high_availability = false
-}

@@ -409,13 +409,14 @@ variable "cells" {
     enabled           = optional(bool, true)
     api_server_subnet = optional(bool, false)
     pod_network       = optional(string, "overlay")
+    pod_address_space = optional(string)
   }))
   default     = {}
   description = <<DESCRIPTION
 The stateless cells' networks, keyed by the cell (`dev-int-stateless-az2`, the cluster's name without
-`aks-`): `vnet-<cell>` with `address_space`, a /16 to /20, laid out as cells.tf describes - `snet-system`
-for the system pool, and per isolation zone `snet-<zone>-nodes` and `snet-<zone>-ilb`, each sized from
-the address space (a /20 gives a zone a /25 of nodes, a /16 a /21).
+`aks-`): `vnet-<cell>` with `address_space`, a /16 to /20, laid out as cells.tf describes - a /24 slot
+each for `snet-system` (the system pool) and per isolation zone `snet-<zone>-nodes` (the slot's first
+half, a /25) and `snet-<zone>-ilb` (its fifth eighth, a /27).
 
 `enabled = false` keeps a cell in the specification - its address space stays reserved - without
 building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
@@ -428,11 +429,12 @@ cannot be deployed while it is disabled.
 
 `pod_network` is where the cell's cluster gives its pods their addresses: `overlay` (Azure CNI Overlay,
 the default - the pods' range is `cell_pod_cidr`, translated to the node's address when it leaves the
-node) or `subnet` (Azure CNI node subnet, no overlay - every pod has an address of its node's subnet,
-which it keeps up to the hub's firewall: the firewall sees which zone, and which pod, a flow comes from,
-design D59). A `subnet` cell needs room for the pods, so its address space is a /16 of the shared
-address space 100.64.0.0/10 (RFC 6598), never routed outside the landing zone - the firewall translates
-every flow that leaves it. The cell's cluster says the same in its network_profile.
+node) or `pod-subnet` (Azure CNI Pod Subnet with dynamic IP allocation, no overlay, design D74 - every
+pod has an address of its pool's pod subnet, which it keeps up to the hub's firewall: the firewall sees
+which zone, and which pod, a flow comes from). A `pod-subnet` cell names `pod_address_space`, a /16 of
+the shared address space 100.64.0.0/10 (RFC 6598), never routed outside the landing zone - the firewall
+translates every flow that leaves it: `snet-system-pods` and each zone's `snet-<zone>-pods` are the /20
+of their slot's index there. The cell's cluster says the same in its network_profile and node pools.
 DESCRIPTION
   nullable    = false
 
@@ -441,16 +443,17 @@ DESCRIPTION
     error_message = "A cell's address_space must be a /16 to /20."
   }
   validation {
-    condition     = alltrue([for cell in values(var.cells) : contains(["overlay", "subnet"], cell.pod_network)])
-    error_message = "A cell's pod_network must be \"overlay\" or \"subnet\"."
+    condition     = alltrue([for cell in values(var.cells) : contains(["overlay", "pod-subnet"], cell.pod_network)])
+    error_message = "A cell's pod_network must be \"overlay\" or \"pod-subnet\"."
   }
   validation {
     condition = alltrue([
-      for cell in values(var.cells) : cell.pod_network == "overlay" || (
-        cidrsubnet("${cidrhost(cell.address_space, 0)}/10", 0, 0) == "100.64.0.0/10" && tonumber(split("/", cell.address_space)[1]) == 16
+      for cell in values(var.cells) : cell.pod_network == "overlay" ? cell.pod_address_space == null : try(
+        cidrsubnet("${cidrhost(cell.pod_address_space, 0)}/10", 0, 0) == "100.64.0.0/10" && tonumber(split("/", cell.pod_address_space)[1]) == 16,
+        false
       )
     ])
-    error_message = "A cell with pod_network = \"subnet\" takes a /16 of 100.64.0.0/10 (RFC 6598), for example 100.64.0.0/16."
+    error_message = "A cell with pod_network = \"pod-subnet\" takes a pod_address_space, a /16 of 100.64.0.0/10 (RFC 6598) such as 100.64.0.0/16; an overlay cell takes none."
   }
 }
 

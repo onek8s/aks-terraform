@@ -69,30 +69,29 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   HTTP/1.1 only on a plain port, so 0.5.1 behind `appProtocol: kubernetes.io/h2c` answered 500 on every route. **V30 holds**
   (TLS 1.2 refused, TLS 1.3 negotiated). **V29 fails**: `curl --http1.1` gets HTTP/1.1 200 - Go's crypto/tls lets an
   `http/1.1` client connect to an `h2`-only server without ALPN (golang/go#46310), so `alpnProtocols: [h2]` cannot refuse it;
-  D70 needs option (c) (426 at the HTTP layer) or another proxy - **the user's decision, not taken**. **Dapr on az3: still
-  not installed** - the fleet now creates `dapr-system` (aks-fluxcd-platform #62; the extension's config agent needs it),
-  but az3's Gatekeeper constraints have not picked up `dapr-system` in their exclusions (az2's have, ~1 h after
-  azure-landing-zone #85), so `rollout-guardrails` refuses Dapr's 1-replica control plane; re-run Deploy az3 apply once
-  Cluster status on az3 shows `dapr-system` under `excluded`. Firewall policy (azure-landing-zone #89): `rcg-build-tenant`
+  D70 needs option (c) (426 at the HTTP layer) or another proxy - **the user's decision, not taken**. Dapr on az3 was never
+  installed and the trial is off since (see the az3 bullet below). Firewall policy (azure-landing-zone #89): `rcg-build-tenant`
   network rules before application rules ("Invalid rule priority"), `management-vpn` 443 to every cell's snet-system (API
   servers) + the management API PE subnet + jump host, SSH only to the jump host (`management-vpn-ssh`).
-- **The non-overlay cell becomes a pod-subnet cell (design D74, the user, 2026-10-18): NOT implemented - next session's work.**
-  NAP does not support Azure CNI Pod Subnet with dynamic IP allocation (karpenter-provider-azure issue 1351, open, the work on
-  the AKS machine API side, no date) and node subnet is Microsoft's legacy mode, so the design replaces az3's node-subnet
-  model with: Azure CNI Pod Subnet (dynamic IP allocation) + Cilium, `snet-<zone>-pods` as the FIRST HALF of the zone's slot
-  (a /21 of the /20 slot), nodes the SIXTH eighth (/23), ILB the fifth eighth as everywhere; classic node pools per zone x
-  capacity x arch (`<zone>`, `<zone>spot`, `<zone>arm`, `<zone>armspot`; `--vnet-subnet-id snet-<zone>-nodes --pod-subnet-id
-  snet-<zone>-pods`, the zone's label/taint, the cell's AZ, VNet-encryption-capable sizes) with the cluster autoscaler (min 0,
-  priority expander spot first); no NAP on that cell at all (refused on a pod-subnet cluster); node image channel + surge
-  upgrades. To build: shared/ `cells.<cell>.pod_network` gets a value `pod-subnet` (creates `snet-<zone>-pods` with its NSG;
-  the NSG `pods` rule then lists the pod subnets, not the node prefixes; D73's slot routes cover it unchanged), the root
-  module gets classic zone node pools + autoscaler profile for such a cell (reuse the stateful cluster's per-zone pool
-  pattern) and skips NAP (`node_auto_provisioning_enabled = false`, no `isolation_zones` NAP classes), the fleet drops az3's
-  `node-pools-int-se` NodePools and `pod-addresses-to-firewall` stays (pods must keep their addresses to labfw), az3 is
-  rebuilt (its address space 100.64.0.0/16 can stay; the slot layout changes). Verify = design V32 (spot fallback with the
-  3 low-priority vCPU quota, labfw's log naming the pod, isolation tests). Design pages: 2.1, 2.3 (the pod-subnet cell's
-  table), 3.1 (address plan row), 5.2 C, 7.2 D74/V32, 7.4 watch list "NAP with Azure CNI Pod Subnet" (the trigger to move
-  the pools back to NAP).
+- **az3 is a pod-subnet cell (design D74, rebuilt 2026-10-18, the user's ask)**: Azure CNI Pod Subnet with dynamic IP
+  allocation + Cilium (ACNS as before: FQDN + eBPF host routing, Hubble off), **no NAP** (refused with a pod subnet,
+  karpenter-provider-azure issue 1351). Layout (the user's): nodes and ILBs in /24 slots of `address_space`
+  10.100.0.0/16 like any cell (snet-system 10.100.0.0/24 - also the API server's private endpoint -, int-fi 10.100.1.0/24,
+  int-se 10.100.2.0/24, ILB 10.100.2.128/27), pods in `pod_address_space` 100.64.0.0/16, a /20 per slot (`snet-system-pods`
+  100.64.0.0/20, `snet-int-fi-pods` 100.64.16.0/20, `snet-int-se-pods` 100.64.32.0/20). shared/ `cells.<cell>` =
+  `{ pod_network = "pod-subnet", pod_address_space = ... }` (the old `"subnet"` mode is gone): pod subnets get their
+  pool's NSG rules, the `pods` rule lists the pod subnets, zone tables `rt-<cell>-<zone>` sit on the zone's node and pod
+  subnets and route the other zones' node and pod slots to labfw. Root: `default_node_pool.pod_subnet_name`,
+  `isolation_zones.<zone>.pod_subnet_name`, `zone_node_pools` (per zone `<zone>`, `<zone>spot`, `<zone>arm`,
+  `<zone>armspot`, 0..max, labels/taints `platform/zone` + `platform/capacity=spot` like the NodePools; cluster autoscaler
+  with the `priority` expander; Network Contributor on the VNet). Fleet: no `node-pools-int-se`, `autoscaler-priority`
+  (ConfigMap `cluster-autoscaler-priority-expander`, spot first), `pod-addresses-to-firewall` stays. Landing zone: the zone
+  IP groups list 10.100.x/24 too, SNAT private ranges include 10.100.0.0/16, the spot mutations also tolerate/prefer
+  AKS's `kubernetes.azure.com/scalesetpriority=spot`. Lab Power's start skips NAP for a cluster with autoscaled pools.
+  Quotas: Daldv6 8 (system node 4 + two D2alds_v6), low-priority 3 (one spot D2alds_v6). V32 (spot fallback, labfw's log
+  naming the pod) still to verify.
+- **Dapr trial: off (2026-10-18, the user's ask)** - removed from az3's tfvars and the fleet's az3 directory; `dapr.tf`,
+  the fleet's unused `infrastructure/dapr` and the landing zone's `dapr-system` platform namespace stay for a later trial.
 - **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): applied 2026-10-18** (#193; traffic verified, V31 cross-zone denial not tested yet).
   Until now `rt-<cell>` (0.0.0.0/0 -> firewall) sat on the system and every zone's node subnet, and traffic between
   the slots of one cell took the VNet's own system route (more specific than /0), so the firewall never saw it and
@@ -107,7 +106,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   while the lab is quiet). Expected after apply: `int-fi` nodes/pods -> another zone's slot (az2 has only int-fi, so
   test with az3's int-se slot inside az3, or a second zone) denied and logged by labfw; cilium-health between zones
   fails (optional flow, design 2.4 ⑦). Overlay pods (100.201.0.0/16) are routed by Azure's overlay domain, not by UDRs:
-  cross-zone pod-to-pod in an overlay cell stays Cilium's alone; in az3 (`pod_network = "subnet"`) the pods carry the
+  cross-zone pod-to-pod in an overlay cell stays Cilium's alone; in az3 (`pod_network = "pod-subnet"`) the pods carry the
   zone's addresses and the firewall sees them. Verify = design V31; azure-landing-zone needs no rule (default deny), but
   labfw must forward hairpinned traffic back into the same spoke - check its forward chain.
 - **Naming policy (2026-10-18, design D72, the user's ask): built and verified** - Deploy plans of dev-shared, az2 and az3
@@ -149,13 +148,6 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   or report it; a 503 means the pod did not speak h2c. (4) azure-landing-zone: write the `h2c-upstream` policy (every Service
   port an HTTPRoute references declares `appProtocol: kubernetes.io/h2c`; audit first - boot-log's busybox httpd is the known
   finding) and the fleet's CI check. The kubelet's httpGet probes stay HTTP/1.1 until 1.38 (`protocol: HTTP2`, KEP-5999).
-- **Dapr trial on az3 (2026-10-17, design D65 proposed: Dapr is NOT a platform feature)**: `dapr = { high_availability = false }`
-  in `envs/dev-int-stateless-az3.tfvars` (dapr.tf: AKS extension `microsoft.dapr` into `dapr-system` on the system pool, placement
-  and scheduler in memory, sidecars PSS restricted). **Not deployed** (the user's ask): when the lab is back, first merge
-  azure-landing-zone's `dapr-system` platform-namespace PR (its aks-policy workflow applies on merge), then Deploy
-  `dev-int-stateless-az3` apply, then Cluster status (system node requests). Fleet `infrastructure/dapr` (az3 only) lets zone
-  sidecars reach dapr-system. Unverified until the apply: the extension takes `global.tolerations[0].*` and the in-memory
-  settings, the scheduler's real footprint (3 replicas even without HA). An app opts in with `dapr.io/enabled` annotations.
 - **Traffic flow documentation (2026-10-17, design section 5.3, D63 proposed)**: the first pages of `dev-int` are committed in
   azure-landing-zone `docs/traffic-flows/` (generated with `aks-agent docs traffic`, see the workflow row above). First finding:
   `stats.grafana.org` is allowed for both int-fi-example and int-se-example but nothing in aks-hello's configuration names it
@@ -223,12 +215,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   longer declines its flows, and `forget_declined` retries ones the model passed on (declined for a day otherwise).
 - **az3, the firewall-egress cell (2026-10-15, design D59 - NOT decided, both models under test, H15)**:
   `aks-dev-int-stateless-az3`, zone 3, **Sweden's int-se only** (int-se enabled in shared/; az2 keeps int-fi). No overlay:
-  `network_profile.network_plugin_mode = "none"` (Azure CNI node subnet + Cilium; NAP has no pod-subnet mode), shared/
-  `cells.<cell>.pod_network = "subnet"` with a /16 of 100.64.0.0/10 (az3 = 100.64.0.0/16: snet-system /20, zone nodes /21),
-  system pool `max_pods = 110`. Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
+  `network_profile.network_plugin_mode = "none"` - since 2026-10-18 Azure CNI Pod Subnet (D74, see the pod-subnet bullet
+  above; it was Azure CNI node subnet with NAP until then), system pool `max_pods = 110`. Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
   `azure-ip-masq-agent-config` to translate nothing; `infrastructure/zones/firewall-egress` lets int-se's apps out to `world`.
   labfw decides from azure-landing-zone `firewall-applications/<env>-<exposure>/<namespace>.yaml` (zone IP group as source),
-  SNATs everything leaving 10.0.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.5.0 in int-se-example
+  SNATs everything leaving 10.0.0.0/16, 10.100.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.5.0 in int-se-example
   (aks-fluxcd-example `firewall-egress/`) fetches a Stockholm forecast from api.open-meteo.com every minute: denied by labfw
   from 100.64.32.x (verified 2026-10-15; `/weather` says "Connection reset by peer"); 0.5.0 also asks api.ipify.org once at start
   for the node's public IP (`/public-ip`), a second dependency for the same rule. labfw's denials go to Log Analytics
@@ -253,8 +244,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (`k8s_cluster_name`, no `cluster`). Workflow `fleet-management.yml` `match-clusters` fixes the matcher
   (`aks-dev-int-stateless-.*`) once the vault secret `flux-system--grafana-cloud` has `fleet-management-write-token`; the
   collectors' token gets 401 on UpdatePipeline. Not changed yet.
-- **VPN clients reach az3's int-se gateway**: labfw's client routes include 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20;
-  `hello.int-se.dev.onek8s.lol` -> 100.64.40.4 via labfw DNS, HTTP 200 over the VPN (Cluster status "as a VPN client").
+- **VPN clients reach az3's int-se gateway**: labfw's client routes include 10.100.0.0/24, 10.100.2.0/24 (since D74) and the pod /20s;
+  `hello.int-se.dev.onek8s.lol` -> the int-se ILB (100.64.40.4 before the rebuild, now in 10.100.2.128/27) via labfw DNS, HTTP 200 over the VPN (Cluster status "as a VPN client").
 - Cluster status has `route_path` (e.g. `/weather`): every route through its gateway pod over the VPN.
 - **The lab moved (2026-10-15, design D57)**: after the Lab reset (azure-landing-zone, `skip_policies` off) the build
   tenant runs in **germanywestcentral** (the ALZ bootstrap stays in swedencentral) as the **internal exposure**:

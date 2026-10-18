@@ -344,6 +344,8 @@ locals {
     }
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = one(data.azurerm_subnet.node[*].id)
+    # A pod-subnet cell (design D74): the system pool's pods in their own subnet
+    pod_subnet_id = one(data.azurerm_subnet.system_pods[*].id)
 
     os_sku                    = var.default_node_pool.os_sku
     enable_encryption_at_host = var.default_node_pool.encryption_at_host
@@ -635,7 +637,9 @@ locals {
   # subnets the cluster was handed is not enough, because the pools it creates are not limited to
   # them. So does a Base cluster with node auto provisioning turned on. Any other Base cluster joins
   # only the subnets named here, so it keeps the narrower grant.
-  network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic || local.node_auto_provisioning ? "virtual_network" : "subnet")
+  # The zones' classic node pools (zone_node_pools) join the zones' node, pod and load balancer subnets
+  # alike, so they get the same.
+  network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic || local.node_auto_provisioning || var.zone_node_pools != null ? "virtual_network" : "subnet")
 
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.

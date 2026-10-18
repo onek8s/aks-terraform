@@ -424,6 +424,7 @@ variable "default_node_pool" {
     os_disk_size_gb     = optional(number)
     os_disk_type        = optional(string)
     availability_zones  = optional(list(string))
+    pod_subnet_name     = optional(string)
 
     max_surge                  = optional(string, "10%")
     drain_timeout_minutes      = optional(number)
@@ -454,6 +455,10 @@ a second node while one is upgraded or lost. One smaller node (the dev lab's sin
 - `encryption_at_host` - Encrypts the node's temporary disk and caches with the disk encryption set's
   key too. The subscription needs the `Microsoft.Compute/EncryptionAtHost` feature registered.
 - `ssh_access` - `Disabled` turns off SSH to the nodes; null leaves the AKS default (`LocalUser`).
+- `pod_subnet_name` - A pod-subnet cell (design D74): the subnet of virtual_network_name the system
+  pool's pods take their addresses from (Azure CNI Pod Subnet, dynamic IP allocation; shared/'s
+  `snet-system-pods`), with `network_profile.network_plugin_mode = "none"`. Every node pool of such a
+  cluster names one - the zones' in isolation_zones. Cannot change on a running pool.
 - `node_taints` - Taints on the system pool, such as `CriticalAddonsOnly=true:NoSchedule`, which
   keeps every pod off it that does not tolerate them - the platform's own controllers do; the
   isolation zones' workloads run on their zones' NAP nodes.
@@ -1447,9 +1452,11 @@ variable "network_profile" {
   description = <<DESCRIPTION
 Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal
 ranges and must not overlap with the address space of the existing virtual network.
-`network_plugin_mode = "none"` turns the overlay off - Azure CNI node subnet: every pod takes an address
-of its node's subnet (the zones' subnets for node auto provisioning), so a firewall outside the cluster
-sees the pod's own address (design D59) - and `pod_cidr` is not used. Use
+`network_plugin_mode = "none"` turns the overlay off, and `pod_cidr` is not used: every pod takes a VNet
+address, so a firewall outside the cluster sees the pod's own address (design D59) - of its pool's pod
+subnet (Azure CNI Pod Subnet with dynamic IP allocation, design D74: default_node_pool.pod_subnet_name
+and the zones' in isolation_zones), or of its node's subnet when no pool names one (Azure CNI node
+subnet, which Microsoft lists as legacy). Use
 `outbound_type = "userDefinedRouting"` when the existing subnet routes egress through a firewall,
 which also avoids creating a public load balancer.
 
@@ -1554,6 +1561,14 @@ DESCRIPTION
   validation {
     condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || !var.default_node_pool.enable_auto_scaling
     error_message = "node_auto_provisioning_enabled cannot be combined with default_node_pool.enable_auto_scaling: AKS refuses node auto provisioning on a cluster that runs the cluster autoscaler on any node pool."
+  }
+  validation {
+    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || var.zone_node_pools == null
+    error_message = "node_auto_provisioning_enabled cannot be combined with zone_node_pools: the zones' nodes come from NAP or from classic node pools with the cluster autoscaler, which AKS refuses beside NAP."
+  }
+  validation {
+    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || var.default_node_pool.pod_subnet_name == null
+    error_message = "node_auto_provisioning_enabled cannot be combined with a pod subnet (default_node_pool.pod_subnet_name): NAP does not support Azure CNI Pod Subnet (design D74) - use zone_node_pools."
   }
   validation {
     condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || (var.network_profile.network_plugin == "azure" && contains(["overlay", "none"], var.network_profile.network_plugin_mode) && var.network_profile.network_dataplane == "cilium")
@@ -1874,15 +1889,57 @@ DESCRIPTION
 variable "isolation_zones" {
   type = map(object({
     node_subnet_name = string
+    pod_subnet_name  = optional(string)
   }))
   default     = {}
   description = <<DESCRIPTION
 The isolation zones of a stateless cell - OneK8s design section 2.3 - keyed by zone (`ext-fi`): the
-subnet of virtual_network_name each zone's NAP nodes are put in. The Flux repository is told its ID
-as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's AKSNodeClass. Needs node auto
-provisioning, which is granted the whole virtual network. All of one exposure (`exposure`).
+subnet of virtual_network_name each zone's nodes are put in. With node auto provisioning the Flux
+repository is told its ID as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's
+AKSNodeClass; with zone_node_pools the zone's classic node pools join it, and their pods take
+addresses of `pod_subnet_name` (a pod-subnet cell, design D74: shared/'s `snet-<zone>-pods`). Either
+way the cluster is granted the whole virtual network. All of one exposure (`exposure`).
 DESCRIPTION
   nullable    = false
+}
+
+variable "zone_node_pools" {
+  type = object({
+    amd64_vm_size   = optional(string, "Standard_D2alds_v6")
+    arm64_vm_size   = optional(string, "Standard_D2pds_v6")
+    max_count       = optional(number, 3)
+    spot_max_count  = optional(number, 1)
+    max_pods        = optional(number, 110)
+    os_disk_type    = optional(string, "Ephemeral")
+    os_disk_size_gb = optional(number, 64)
+  })
+  default     = null
+  description = <<DESCRIPTION
+Classic node pools for the isolation zones, scaled by the cluster autoscaler - the nodes of a
+pod-subnet cell (design D74, section 2.3), where node auto provisioning is refused, until NAP supports
+Azure CNI Pod Subnet (Azure/karpenter-provider-azure issue 1351). Per zone four pools, one per
+capacity type and architecture: `<zone>` (on-demand amd64), `<zone>spot`, `<zone>arm`, `<zone>armspot`
+(the zone without its hyphen, `intse`, `intsespot`, ...), each from 0 to `max_count` (`spot_max_count`
+for the spot pools) nodes in the system pool's availability zone, in the zone's node subnet with its
+pods in the zone's pod subnet (isolation_zones), labelled and tainted `platform/zone=<zone>` - what
+the zone's NodePools say under NAP; the spot pools also `platform/capacity=spot` (and AKS's own
+`kubernetes.azure.com/scalesetpriority=spot`). Same OS, encryption at host and SSH setting as the
+system pool; the sizes support VNet encryption. The cluster autoscaler takes the priority expander:
+the Flux repository's `cluster-autoscaler-priority-expander` ConfigMap puts the spot pools first, so a
+pod that tolerates spot gets a spot node and an on-demand one when Azure has none.
+
+Null (the default) for no zone pools: a NAP cell (node_auto_provisioning_enabled) or a cluster without
+zones. Cannot be combined with node auto provisioning.
+DESCRIPTION
+
+  validation {
+    condition     = var.zone_node_pools == null || try(var.zone_node_pools.max_count >= 1 && var.zone_node_pools.spot_max_count >= 1, false)
+    error_message = "zone_node_pools.max_count and spot_max_count must be at least 1: a pool scales from 0 to them."
+  }
+  validation {
+    condition     = var.zone_node_pools == null || contains(["Ephemeral", "Managed"], try(var.zone_node_pools.os_disk_type, "-"))
+    error_message = "zone_node_pools.os_disk_type must be Ephemeral or Managed."
+  }
 }
 
 variable "key_vault_namespace_vaults" {

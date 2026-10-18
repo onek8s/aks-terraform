@@ -320,6 +320,11 @@ jobs:
           set -euo pipefail
           source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
+            # A pod-subnet cell (design D74) has no NAP: its zones run classic pools with the cluster autoscaler,
+            # which a stop leaves alone and a start brings back by itself.
+            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query 'length(agentPoolProfiles[?enableAutoScaling])' -o tsv)" != "0" ]; then
+              echo "$cluster: no NAP (classic zone pools with the cluster autoscaler)"; continue
+            fi
             if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" != "Auto" ]; then
               # As Terraform created it (main.tf node_provisioning_profile): no default NodePools, the fleet brings its own
               az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Auto --node-provisioning-default-pools None --no-wait --only-show-errors -o none
