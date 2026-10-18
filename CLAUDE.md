@@ -61,6 +61,21 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Lab results 2026-10-18 (all verified with Cluster status, which now checks the edge per route as a VPN client and lists
+  each constraint's excluded namespaces):** **D73 applied** (zone route tables `rt-<cell>-<zone>` + Network Contributor on
+  them in az2/az3): routes 200, `/weather` 200 through labfw on both cells, Flux all Ready - cross-zone denial (V31) not tested
+  yet. **V28 holds**: `/status` `"protocol":"HTTP/2"` through Traefik - but only since **aks-hello 0.5.2** (h2c on its own port
+  8081 `Http2`, HTTP/1.1 on 8080 for the probes; the Service targets port `h2c`): Kestrel's default `Http1AndHttp2` is
+  HTTP/1.1 only on a plain port, so 0.5.1 behind `appProtocol: kubernetes.io/h2c` answered 500 on every route. **V30 holds**
+  (TLS 1.2 refused, TLS 1.3 negotiated). **V29 fails**: `curl --http1.1` gets HTTP/1.1 200 - Go's crypto/tls lets an
+  `http/1.1` client connect to an `h2`-only server without ALPN (golang/go#46310), so `alpnProtocols: [h2]` cannot refuse it;
+  D70 needs option (c) (426 at the HTTP layer) or another proxy - **the user's decision, not taken**. **Dapr on az3: still
+  not installed** - the fleet now creates `dapr-system` (aks-fluxcd-platform #62; the extension's config agent needs it),
+  but az3's Gatekeeper constraints have not picked up `dapr-system` in their exclusions (az2's have, ~1 h after
+  azure-landing-zone #85), so `rollout-guardrails` refuses Dapr's 1-replica control plane; re-run Deploy az3 apply once
+  Cluster status on az3 shows `dapr-system` under `excluded`. Firewall policy (azure-landing-zone #89): `rcg-build-tenant`
+  network rules before application rules ("Invalid rule priority"), `management-vpn` 443 to every cell's snet-system (API
+  servers) + the management API PE subnet + jump host, SSH only to the jump host (`management-vpn-ssh`).
 - **The non-overlay cell becomes a pod-subnet cell (design D74, the user, 2026-10-18): NOT implemented - next session's work.**
   NAP does not support Azure CNI Pod Subnet with dynamic IP allocation (karpenter-provider-azure issue 1351, open, the work on
   the AKS machine API side, no date) and node subnet is Microsoft's legacy mode, so the design replaces az3's node-subnet
