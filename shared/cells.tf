@@ -412,6 +412,11 @@ resource "azurerm_virtual_network_peering" "hub_to_cell" {
   remote_virtual_network_id    = azurerm_virtual_network.cell[each.key].id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = true
+  # A cell's address space can change in place (a pod-subnet cell adds its pods' space): the hub's side then
+  # stays `RemoteNotInSync` and routes nothing to the new range until it is synced, which a changed trigger does.
+  triggers = {
+    remote_address_space = join(",", azurerm_virtual_network.cell[each.key].address_space)
+  }
 }
 
 # The internal zones' names - `<zone>.<environment>.<domain>` - resolve only inside the cells, from an

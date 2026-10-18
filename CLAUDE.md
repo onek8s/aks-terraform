@@ -515,6 +515,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Lessons learned (gotchas)
 
+- **Changing a cell VNet's address space leaves the hub's peering `RemoteNotInSync`** (2026-10-18, az3's 10.100.0.0/16
+  added): the hub routes nothing to the new range, so new nodes fail CSE with `VMExtensionError_OutboundConnFail`
+  (aka.ms unreachable). shared/ `hub_to_cell` now carries `triggers` on the cell's address space, which syncs it; by hand:
+  `az network vnet peering sync` on the hub side. Subnets moved and created in one apply can also race
+  (`NetcfgSubnetRangesOverlap`) - re-run the apply.
+
 - **Azure CNI node subnet gives 30 pods a node** unless `max_pods` says otherwise, and `maxPods` cannot change on a running
   pool (`PropertyChangeNotAllowed`): az3 was rebuilt for 110. **AKS's azure-ip-masq-agent** translates pod flows leaving the
   VNet to the node's address; its optional user ConfigMap `azure-ip-masq-agent-config` (kube-system) merges with the reconciled one.
