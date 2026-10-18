@@ -61,6 +61,12 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): not yet in the lab.** The same ConfigMap sets
+  `tls.options.default.minVersion: VersionTLS13`; `curl --tls-max 1.2 https://hello.int-fi.dev.onek8s.lol/` must fail in the
+  handshake, plain `curl -v` shows `TLSv1.3` and, with a curl built on a library that offers X25519MLKEM768, the hybrid
+  post-quantum key exchange (Go 1.25 default). Policy `gateway-tls` (azure-landing-zone, audit) reads the ConfigMap back:
+  ALPN exactly `[h2]`, `minVersion` `VersionTLS13`. Traffic Manager's probe TLS version is undocumented (V30 on the first
+  external cell; TCP monitoring is the fallback).
 - **HTTP/2 only at the edge too (2026-10-18, design D70, the user's decision): not yet in the lab.** `gateways/traefik/release.yaml`
   mounts a file-provider ConfigMap `traefik-dynamic` whose `tls.options.default.alpnProtocols` is `[h2]`: a client announcing
   `http/1.1` is refused in the handshake; a client without ALPN still gets HTTP/1.1 (V29 measures). Reaches az2/az3 through the
