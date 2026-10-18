@@ -3827,6 +3827,7 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
       local.zone_agent_pools["intsespot"].min_count == 0 &&
       local.zone_agent_pools["intsespot"].max_count == 1 &&
       local.zone_agent_pools["intse"].max_count == 2 &&
+      local.zone_agent_pools["intse"].max_pods == 250 &&
       local.zone_agent_pools["intse"].scale_set_priority == null &&
       local.zone_agent_pools["intsearm"].vm_size == "Standard_D2pds_v6" &&
       local.zone_agent_pools["intse"].availability_zones == tolist(["3"]) &&

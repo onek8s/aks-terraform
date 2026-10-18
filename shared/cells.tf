@@ -274,6 +274,19 @@ resource "azurerm_subnet" "cell" {
       }
     }
   }
+
+  # A pod subnet is delegated to AKS: dynamic IP allocation adds the delegation when the first pool joins it,
+  # and Azure refuses an update that takes it away (SubnetMissingRequiredDelegation), so it is stated here.
+  dynamic "delegation" {
+    for_each = contains(["system-pods", "pods"], each.value.kind) ? [1] : []
+    content {
+      name = "aks-delegation"
+      service_delegation {
+        name    = "Microsoft.ContainerService/managedClusters"
+        actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+      }
+    }
+  }
 }
 
 resource "azurerm_subnet_network_security_group_association" "cell" {
