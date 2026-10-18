@@ -61,7 +61,8 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
-- **Naming policy (2026-10-18, design D72, the user's ask): built, not applied yet.** `modules/conventions` `naming` (both
+- **Naming policy (2026-10-18, design D72, the user's ask): built and verified** - Deploy plans of dev-shared, az2 and az3
+  on 2026-10-18 changed no infrastructure (only the new `names` outputs; az3's one add is the pending Dapr trial). `modules/conventions` `naming` (both
   stacks' variable `naming`): a template per resource type (`resource_group`, `key_vault`, `container_registry`,
   `log_analytics_workspace`, `user_assigned_identity`, `virtual_network`, `network_security_group`, `route_table`,
   `private_endpoint`, `network_interface`, `disk_encryption_set`, `consumption_budget`, `traffic_manager_profile`,
@@ -74,8 +75,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `{"templates": ..., "location_codes": ...}`) - Deploy writes it to `naming.auto.tfvars.json` and masks the templates' fixed
   parts; Renew certificate / Flux webhooks resolve unstated names with `scripts/policy-name.sh`. Not on the policy: a
   cluster's own name, subnets, child resources, the landing zone's resources; the other lab workflows still hard-code the lab's
-  names. The cluster stack has `environment` for cluster names without it in the second segment. **The next Deploy plan of
-  dev-shared must show no change** (the names are the same) - if it shows a replacement, stop and compare the names.
+  names. The cluster stack has `environment` for cluster names without it in the second segment.
 - **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): not yet in the lab.** The same ConfigMap sets
   `tls.options.default.minVersion: VersionTLS13`; `curl --tls-max 1.2 https://hello.int-fi.dev.onek8s.lol/` must fail in the
   handshake, plain `curl -v` shows `TLSv1.3` and, with a curl built on a library that offers X25519MLKEM768, the hybrid
@@ -116,7 +116,11 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   node) - a platform flow, now in azure-landing-zone `firewall_exposures.int.environments.dev.observability_fqdns` (rule
   `observability`, every cell) and removed from both application files. Regenerate after a rule or application change (the workflow, or the CLI locally with the
   four repos checked out side by side); the pages have no timestamp, so an unchanged world changes nothing.
-- **The lab is STOPPED for the weekend (2026-10-16, Lab power run 38904999392, the user's ask: minimal cost, nothing
+- **The lab is RUNNING again since 2026-10-18** (Lab power start run 39107097559, the first full start: it needed #187, a second
+  sign-in before kubectl, and #188, start only a stopped cluster, so a start can be re-run). Left running for further tests.
+- **Run Deploy stacks one at a time**: every stack joins the labfw VPN as the one peer `github-deploy`, and parallel runs broke
+  each other's tunnel (2026-10-18: a truncated state read, "connection refused" to a vault's private endpoint).
+- (History) **The lab was stopped for the weekend (2026-10-16, Lab power run 38904999392, the user's ask: minimal cost, nothing
   removed)**: az2 and az3 `powerState Stopped`, labfw `deallocated` (no VPN: every data-plane workflow fails until the
   start), every Flux configuration and Kustomization suspended, the zone namespaces' Deployments at 0 (apps, and the
   zones' Traefik gateways and ESO - their namespaces carry `platform/zone` too), NAP `Manual` with every NodePool's cpu
