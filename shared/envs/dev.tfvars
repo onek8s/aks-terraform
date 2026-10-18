@@ -69,15 +69,17 @@ isolation_zones = {
 # (enabling it is a support request to Microsoft), so az2 runs. A disabled cell keeps its address space
 # and its tfvars (envs/dev-int-stateless-az1.tfvars) but has no network.
 #
-# az3 (2026-10-15, design D59) is the lab's firewall-egress cell: no overlay (`pod_network = "subnet"`),
-# so its pods take addresses of their zone's node subnet in 100.64.0.0/16 (RFC 6598 shared address
-# space, never routed outside the landing zone), keep them up to labfw, and labfw - not Cilium - decides
-# every flow that leaves the cluster, by zone and by the pod's address. Cilium keeps the policies inside
-# the cluster. Its layout: snet-system 100.64.0.0/20, int-fi 100.64.16.0/21, int-se 100.64.32.0/21.
+# az3 (design D59, D74; rebuilt 2026-10-18) is the lab's pod-subnet cell: no overlay (`pod_network = "pod-subnet"`,
+# Azure CNI Pod Subnet with dynamic IP allocation), so its pods take addresses of their pool's pod subnet in
+# 100.64.0.0/16 (RFC 6598 shared address space, never routed outside the landing zone), keep them up to labfw,
+# and labfw - not Cilium - decides every flow that leaves the cluster, by zone and by the pod's address. Cilium
+# keeps the policies inside the cluster. Nodes and load balancers have /24 slots of 10.100.0.0/16 like any cell:
+# snet-system 10.100.0.0/24, int-fi 10.100.1.0/24, int-se 10.100.2.0/24 (nodes the /25, ILB 10.100.<n>.128/27);
+# pods: snet-system-pods 100.64.0.0/20, snet-int-fi-pods 100.64.16.0/20, snet-int-se-pods 100.64.32.0/20.
 cells = {
   dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
   dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-  dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
+  dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
 }
 
 # The landing zone's hub (azure-landing-zone network mode labfw): every cell is peered with it, sends

@@ -95,8 +95,8 @@ az feature register --namespace Microsoft.ContainerService --name EnableImageInt
 az provider register --namespace Microsoft.ContainerService
 ```
 
-A cluster with `dapr` runs the AKS Dapr extension - a lab trial on `dev-int-stateless-az3`, not a platform
-feature (design D65). Its control plane goes into `dapr-system` on the system pool, which the landing zone's
+A cluster with `dapr` runs the AKS Dapr extension - a lab trial, not a platform feature (design D65), turned
+off again in `dev-int-stateless-az3` on 2026-10-18 (no cluster sets it now). Its control plane goes into `dapr-system` on the system pool, which the landing zone's
 policies must count as a platform namespace (azure-landing-zone, `stacks/aks-policy`) before the apply.
 
 The `Microsoft.PolicyInsights` resource provider should be **registered in the subscription**, since
@@ -875,6 +875,20 @@ Turning it on for an existing cluster is an update in place. To turn it off agai
 `NodePool`s first, so that their nodes are drained and removed, then set it back to `false`.
 
 [nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
+
+## Pod-subnet cells: classic zone pools
+
+A pod-subnet cell (design D74, `dev-int-stateless-az3`) runs Azure CNI Pod Subnet with dynamic IP
+allocation: `network_profile.network_plugin_mode = "none"`, `default_node_pool.pod_subnet_name` (shared/'s
+`snet-system-pods`) and every zone's `isolation_zones.<zone>.pod_subnet_name` (`snet-<zone>-pods`). AKS
+refuses node auto provisioning with a pod subnet (Azure/karpenter-provider-azure issue 1351), so
+`zone_node_pools` gives each zone four classic node pools instead - `<zone>`, `<zone>spot`, `<zone>arm`,
+`<zone>armspot` (`intse`, ...) - from 0 nodes in the cell's availability zone, labelled and tainted
+`platform/zone=<zone>` (and `platform/capacity=spot` on the spot pools) like the zone `NodePool`s, so the
+platform's placement mutations work unchanged. The cluster autoscaler takes the `priority` expander; the
+fleet's `infrastructure/autoscaler-priority` ConfigMap puts the spot pools first. The cluster identity gets
+Network Contributor on the virtual network, as with NAP. When NAP supports the pod subnet, the pools move
+back to the fleet's `NodePool`s with no network change.
 
 ## Cells of the OneK8s design
 

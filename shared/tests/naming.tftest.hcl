@@ -58,7 +58,7 @@ variables {
   cells = {
     dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
     dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-    dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
+    dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
   }
   hub = {
     virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"

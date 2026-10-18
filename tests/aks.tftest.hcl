@@ -3792,6 +3792,91 @@ run "isolation_zones_tell_flux_their_node_subnets" {
   }
 }
 
+run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
+  command = plan
+
+  variables {
+    network_profile = {
+      outbound_type       = "userDefinedRouting"
+      network_plugin_mode = "none"
+    }
+    default_node_pool = {
+      availability_zones = ["3"]
+      pod_subnet_name    = "snet-system-pods"
+      ssh_access         = "Disabled"
+      encryption_at_host = true
+    }
+    isolation_zones = {
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    zone_node_pools = {
+      max_count = 2
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition     = sort(keys(local.zone_agent_pools)) == tolist(["intse", "intsearm", "intsearmspot", "intsespot"])
+    error_message = "A zone gets four pools: on-demand and spot, amd64 and arm64."
+  }
+  assert {
+    condition = (
+      local.zone_agent_pools["intsespot"].scale_set_priority == "Spot" &&
+      local.zone_agent_pools["intsespot"].min_count == 0 &&
+      local.zone_agent_pools["intsespot"].max_count == 1 &&
+      local.zone_agent_pools["intse"].max_count == 2 &&
+      local.zone_agent_pools["intse"].scale_set_priority == null &&
+      local.zone_agent_pools["intsearm"].vm_size == "Standard_D2pds_v6" &&
+      local.zone_agent_pools["intse"].availability_zones == tolist(["3"]) &&
+      local.zone_agent_pools["intse"].pod_subnet_id != null &&
+      local.zone_agent_pools["intsespot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/capacity" = "spot" }) &&
+      local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule"]) &&
+      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
+    )
+    error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted like the zone's NodePools, their pods in the zone's pod subnet."
+  }
+  assert {
+    condition     = local.default_agent_pool.pod_subnet_id != null && local.auto_scaler_profile.expander == "priority"
+    error_message = "The system pool's pods take its pod subnet, and the autoscaler the priority expander."
+  }
+  assert {
+    condition = (
+      contains(keys(azurerm_role_assignment.network_contributor), "virtual_network") &&
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "nap_subnet_id_int_se")
+    )
+    error_message = "The zone pools' cluster gets the virtual network, and Flux is told no NAP subnet."
+  }
+}
+
+run "rejects_node_auto_provisioning_with_zone_pools" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    zone_node_pools                = {}
+  }
+
+  expect_failures = [var.node_auto_provisioning_enabled]
+}
+
+run "rejects_node_auto_provisioning_with_a_pod_subnet" {
+  command = plan
+
+  variables {
+    node_auto_provisioning_enabled = true
+    network_profile = {
+      network_plugin_mode = "none"
+    }
+    default_node_pool = {
+      pod_subnet_name = "snet-system-pods"
+    }
+  }
+
+  expect_failures = [var.node_auto_provisioning_enabled]
+}
+
 run "an_external_cluster_holds_external_zones_and_tells_flux_its_exposure" {
   command = plan
 
@@ -3881,7 +3966,7 @@ run "isolation_zones_without_node_auto_provisioning_are_warned_about" {
     }
   }
 
-  expect_failures = [check.isolation_zones_need_node_auto_provisioning]
+  expect_failures = [check.isolation_zones_need_nodes]
 }
 
 run "a_namespace_reads_its_zone_vault_on_a_shared_vault" {

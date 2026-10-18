@@ -714,7 +714,7 @@ run "an_external_exposure_with_its_zones_plans" {
   }
 }
 
-run "a_cell_without_an_overlay_is_a_slash_16_of_the_shared_address_space" {
+run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
   command = plan
 
   variables {
@@ -725,35 +725,79 @@ run "a_cell_without_an_overlay_is_a_slash_16_of_the_shared_address_space" {
     }
     cells = {
       dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-      dev-int-stateless-az3 = { address_space = "100.64.0.0/16", pod_network = "subnet" }
+      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
+    hub = {
+      virtual_network_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub"
+      next_hop_ip        = "10.0.1.4"
+      dns_servers        = ["10.0.1.4"]
+    }
   }
 
   assert {
     condition = (
-      azurerm_subnet.cell["dev-int-stateless-az3/snet-system"].address_prefixes == tolist(["100.64.0.0/20"]) &&
-      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-fi-nodes"].address_prefixes == tolist(["100.64.16.0/21"]) &&
-      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-nodes"].address_prefixes == tolist(["100.64.32.0/21"]) &&
-      azurerm_subnet.cell["dev-int-stateless-az2/snet-int-se-nodes"].address_prefixes == tolist(["172.22.18.0/25"])
+      toset(azurerm_virtual_network.cell["dev-int-stateless-az3"].address_space) == toset(["10.100.0.0/16", "100.64.0.0/16"]) &&
+      toset(azurerm_virtual_network.cell["dev-int-stateless-az2"].address_space) == toset(["172.22.16.0/20"])
     )
-    error_message = "A /16 cell has the /20 cell's layout, sixteen times as large: room for the pods in the node subnets."
+    error_message = "A pod-subnet cell's network has the pods' address space beside the nodes'."
   }
   assert {
     condition = (
-      toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-nodes/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/21", "100.64.32.0/21"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-system"].address_prefixes == tolist(["10.100.0.0/24"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-nodes"].address_prefixes == tolist(["10.100.2.0/25"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-ilb"].address_prefixes == tolist(["10.100.2.128/27"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-system-pods"].address_prefixes == tolist(["100.64.0.0/20"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-fi-pods"].address_prefixes == tolist(["100.64.16.0/20"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-pods"].address_prefixes == tolist(["100.64.32.0/20"]) &&
+      azurerm_subnet.cell["dev-int-stateless-az2/snet-int-se-nodes"].address_prefixes == tolist(["172.22.18.0/25"]) &&
+      !contains(keys(azurerm_subnet.cell), "dev-int-stateless-az2/snet-int-se-pods")
+    )
+    error_message = "Nodes and load balancers keep /24 slots in any address space; a pod-subnet cell's pods take the /20 of the same slot in the pod address space."
+  }
+  assert {
+    condition = (
+      toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-nodes/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/20", "100.64.32.0/20"]) &&
+      toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-pods/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/20", "100.64.32.0/20"]) &&
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-system-pods/https-from-network"].source_address_prefix == "VirtualNetwork" &&
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-pods/https"].source_address_prefix == "VirtualNetwork" &&
       azurerm_network_security_rule.cell_allow["dev-int-stateless-az2/snet-int-se-nodes/pods"].source_address_prefix == "100.201.0.0/16"
     )
-    error_message = "Without an overlay, the pods are let in from the cell's node subnets; with one, from the overlay range."
+    error_message = "In a pod-subnet cell the pods are let in from the cell's pod subnets, which take their pool's rules; with an overlay, from the overlay range."
+  }
+  assert {
+    condition = (
+      contains(keys(azurerm_subnet_route_table_association.cell), "dev-int-stateless-az3/snet-system-pods") &&
+      contains(keys(azurerm_subnet_route_table_association.cell), "dev-int-stateless-az3/snet-int-se-pods") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix}"], "int-fi-via-hub-firewall 10.100.1.0/24") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix}"], "int-fi-pods-via-hub-firewall 100.64.16.0/20") &&
+      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.32.0/20") &&
+      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.0.0/20") &&
+      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 1 + 13 + 13 &&
+      length(azurerm_route_table.zone["dev-int-stateless-az2/int-se"].route) == 1 + 13
+    )
+    error_message = "A pod subnet takes its pool's route table, and a pod-subnet cell's zone tables route the other zones' pod slots to the firewall too - never the zone's own or the system pool's."
   }
 }
 
-run "rejects_a_cell_without_an_overlay_outside_the_shared_address_space" {
+run "rejects_a_pod_subnet_cell_outside_the_shared_address_space" {
   command = plan
 
   variables {
     cells = {
-      dev-int-stateless-az3 = { address_space = "172.23.0.0/16", pod_network = "subnet" }
+      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "172.23.0.0/16" }
+    }
+  }
+
+  expect_failures = [var.cells]
+}
+
+run "rejects_a_pod_subnet_cell_without_a_pod_address_space" {
+  command = plan
+
+  variables {
+    cells = {
+      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet" }
     }
   }
 

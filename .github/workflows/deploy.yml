@@ -13,8 +13,9 @@ name: Deploy
 #                        external zones' Traffic Manager profiles. Applied first.
 #   dev-int-stateless-az2    the repository root with envs/dev-int-stateless-az2.tfvars: aks-dev-int-stateless-az2,
 #                        the lab's running cell (internal, int-fi, germanywestcentral, behind labfw).
-#   dev-int-stateless-az3    the same in availability zone 3 without an overlay (design D59): pods on their
-#                        zone's node subnet in 100.64.0.0/16, every egress decided by labfw; int-se.
+#   dev-int-stateless-az3    the same in availability zone 3 without an overlay (design D59, D74): Azure CNI Pod
+#                        Subnet, pods in 100.64.0.0/16, nodes in 10.100.0.0/16, classic zone pools with the
+#                        cluster autoscaler (no NAP), every egress decided by labfw; int-se.
 #   dev-int-stateless-az1    the same in availability zone 1: disabled in shared/ (zone 1 is not available
 #                        to sub-aks-dev in germanywestcentral).
 #   dev-int-stateful         the repository root with envs/dev-int-stateful.tfvars: aks-dev-int-stateful (defined,

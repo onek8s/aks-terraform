@@ -19,18 +19,28 @@
 # the nodes reach the internet through the cluster's load balancer and the NSGs and Cilium are the
 # boundaries.
 #
-# Each cell's layout follows from its address space and the zones' indexes: a sixteenth of it per slot
-# (a /24 of a /20, a /20 of a /16) - the system pool's first, then one per zone (index 1, 2, ...) - split
-# into the zone's nodes (the first half) and its internal load balancer (the fifth eighth, a /27 of a /24).
-# A cell with `pod_network = "subnet"` (design D59) has no overlay: its pods take addresses of their
-# nodes' subnets, so it is a /16 of 100.64.0.0/10 and a zone's node subnet a /21. With `api_server_subnet`, the last /24
-# (slot 15) starts with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design
-# section 2.2) - which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
+# Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the system
+# pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first half) and its
+# internal load balancer (the fifth eighth, a /27). A cell with `pod_network = "pod-subnet"` (design D74)
+# has no overlay: its pods take addresses of a pod subnet of their own, laid out the same way in a second
+# address space of the VNet, `pod_address_space` - a /16 of 100.64.0.0/10 with a /20 per slot:
+# `snet-system-pods` in slot 0, `snet-<zone>-pods` in the zone's. With `api_server_subnet`, slot 15 starts
+# with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design section 2.2) -
+# which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
   isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
   # The enabled cells: a disabled cell keeps its address space but gets no network.
   cells = { for cell, c in var.cells : cell => c if c.enabled }
+
+  # A cell's slot: the /24 with that index in its address space - and in a pod-subnet cell the /20 with
+  # the same index in its pod address space.
+  cell_slots = {
+    for cell, settings in local.cells : cell => [for index in range(16) : cidrsubnet(settings.address_space, 24 - tonumber(split("/", settings.address_space)[1]), index)]
+  }
+  cell_pod_slots = {
+    for cell, settings in local.cells : cell => [for index in range(16) : cidrsubnet(settings.pod_address_space, 4, index)] if settings.pod_network == "pod-subnet"
+  }
 
   cell_subnets = merge([
     for cell, settings in local.cells : merge(
@@ -40,7 +50,16 @@ locals {
           name   = "snet-system"
           zone   = null
           kind   = "system"
-          prefix = cidrsubnet(settings.address_space, 4, 0)
+          prefix = local.cell_slots[cell][0]
+        }
+      },
+      settings.pod_network != "pod-subnet" ? {} : {
+        "${cell}/snet-system-pods" = {
+          cell   = cell
+          name   = "snet-system-pods"
+          zone   = null
+          kind   = "system-pods"
+          prefix = local.cell_pod_slots[cell][0]
         }
       },
       !settings.api_server_subnet ? {} : {
@@ -49,7 +68,7 @@ locals {
           name   = "snet-apiserver"
           zone   = null
           kind   = "apiserver"
-          prefix = cidrsubnet(cidrsubnet(settings.address_space, 4, 15), 4, 0)
+          prefix = cidrsubnet(local.cell_slots[cell][15], 4, 0)
         }
       },
       merge([
@@ -59,19 +78,40 @@ locals {
             name   = "snet-${zone}-nodes"
             zone   = zone
             kind   = "nodes"
-            prefix = cidrsubnet(cidrsubnet(settings.address_space, 4, z.index), 1, 0)
+            prefix = cidrsubnet(local.cell_slots[cell][z.index], 1, 0)
           }
           "${cell}/snet-${zone}-ilb" = {
             cell   = cell
             name   = "snet-${zone}-ilb"
             zone   = zone
             kind   = "ilb"
-            prefix = cidrsubnet(cidrsubnet(settings.address_space, 4, z.index), 3, 4)
+            prefix = cidrsubnet(local.cell_slots[cell][z.index], 3, 4)
           }
         }
-      ]...)
+      ]...),
+      settings.pod_network != "pod-subnet" ? {} : {
+        for zone, z in local.isolation_zones : "${cell}/snet-${zone}-pods" => {
+          cell   = cell
+          name   = "snet-${zone}-pods"
+          zone   = zone
+          kind   = "pods"
+          prefix = local.cell_pod_slots[cell][z.index]
+        }
+      },
     )
   ]...)
+
+  # The subnets that hold nodes or pods - the system pool's and each zone's, and in a pod-subnet cell their
+  # pod subnets, which take the rules of their pool's node subnet - and the system pool's ones.
+  cell_host_kinds   = ["system", "nodes", "system-pods", "pods"]
+  cell_system_kinds = ["system", "system-pods"]
+
+  # Every pod subnet of a pod-subnet cell, for the rule that lets the pods in.
+  cell_pod_prefixes = {
+    for cell in keys(local.cells) : cell => [
+      for key, subnet in local.cell_subnets : subnet.prefix if subnet.cell == cell && contains(["system-pods", "pods"], subnet.kind)
+    ]
+  }
 
   # Every node subnet of a cell - the system pool's and each zone's - for the rules between nodes.
   cell_node_prefixes = {
@@ -83,7 +123,7 @@ locals {
   # The inbound flows each subnet allows, keyed `<cell>/<subnet>/<rule>`. Sources are address
   # prefixes or a service tag; never `VirtualNetwork` between zones.
   cell_nsg_rules = merge(
-    # Node subnets - the system pool's and the zones'.
+    # Node subnets - the system pool's and the zones' - and their pod subnets.
     merge([
       for key, subnet in local.cell_subnets : {
         "${key}/kubelet-from-system" = { subnet = key, priority = 100, protocol = "Tcp", ports = ["10250"], sources = [local.cell_subnets["${subnet.cell}/snet-system"].prefix] }
@@ -93,19 +133,19 @@ locals {
         # ACNS DNS proxy forwarding a pod's query.
         "${key}/dns" = { subnet = key, priority = 125, protocol = "*", ports = ["53"], sources = local.cell_node_prefixes[subnet.cell] }
         # Azure CNI Overlay keeps the pod addresses between nodes; which pod may reach which is
-        # Cilium's to decide. Without an overlay (`pod_network = "subnet"`) the pods have addresses of
-        # the cell's node subnets, so those are let in - the NSGs no longer tell a pod from a node there,
-        # and every flow between zones is Cilium's alone.
-        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = local.cells[subnet.cell].pod_network == "subnet" ? local.cell_node_prefixes[subnet.cell] : [var.cell_pod_cidr] }
+        # Cilium's to decide. In a pod-subnet cell (`pod_network = "pod-subnet"`, design D74) the pods
+        # have addresses of the cell's pod subnets, so those are let in - between zones the hub
+        # firewall sees them as well (D73), and Cilium decides inside a zone.
+        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = local.cells[subnet.cell].pod_network == "pod-subnet" ? local.cell_pod_prefixes[subnet.cell] : [var.cell_pod_cidr] }
         "${key}/lb-probes"   = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
         "${key}/same-subnet" = { subnet = key, priority = 150, protocol = "*", ports = ["*"], sources = [subnet.prefix] }
-      } if contains(["system", "nodes"], subnet.kind)
+      } if contains(local.cell_host_kinds, subnet.kind)
     ]...),
     # The VNet-integrated API server: the kubelet (logs, exec) and admission webhooks
     merge([
       for key, subnet in local.cell_subnets : {
         "${key}/api-server" = { subnet = key, priority = 160, protocol = "Tcp", ports = ["*"], sources = [local.cell_subnets["${subnet.cell}/snet-apiserver"].prefix] }
-      } if contains(["system", "nodes"], subnet.kind) && contains(keys(local.cell_subnets), "${subnet.cell}/snet-apiserver")
+      } if contains(local.cell_host_kinds, subnet.kind) && contains(keys(local.cell_subnets), "${subnet.cell}/snet-apiserver")
     ]...),
     # The API server's subnet: HTTPS from the network (the nodes, and through the hub's peering the
     # management network and the labfw VPN, which arrive SNATed to the firewall), the nodes' tunnel
@@ -128,9 +168,9 @@ locals {
           priority = 200
           protocol = "Tcp"
           ports    = ["443"]
-          sources  = [subnet.kind == "system" || try(local.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
+          sources  = [contains(local.cell_system_kinds, subnet.kind) || try(local.isolation_zones[subnet.zone].exposure, "") == "ext" ? "Internet" : "VirtualNetwork"]
         }
-      } if subnet.kind == "system" || subnet.kind == "nodes" || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int")
+      } if contains(local.cell_host_kinds, subnet.kind) || (subnet.kind == "ilb" && try(local.isolation_zones[subnet.zone].exposure, "") == "int")
     ]...),
     # With `hub`: ping from the hub firewall's address, which the management network and the labfw VPN
     # arrive as (SNAT) - the nodes answer it; never `VirtualNetwork`, which would let the zones ping each
@@ -139,7 +179,7 @@ locals {
     merge([
       for key, subnet in local.cell_subnets : {
         "${key}/icmp-from-hub-firewall" = { subnet = key, priority = 220, protocol = "Icmp", ports = ["*"], sources = [var.hub.next_hop_ip] }
-      } if var.hub != null && contains(["system", "nodes"], subnet.kind)
+      } if var.hub != null && contains(local.cell_host_kinds, subnet.kind)
     ]...),
     # A rule takes one service tag, so the system pool's HTTPS from the network is a rule of its own.
     {
@@ -149,7 +189,7 @@ locals {
         protocol = "Tcp"
         ports    = ["443"]
         sources  = ["VirtualNetwork"]
-      } if subnet.kind == "system"
+      } if contains(local.cell_system_kinds, subnet.kind)
     },
   )
 }
@@ -160,7 +200,8 @@ resource "azurerm_virtual_network" "cell" {
   name                = local.names["virtual_network/${each.key}"]
   location            = var.location
   resource_group_name = local.resource_group_name
-  address_space       = [each.value.address_space]
+  # A pod-subnet cell's pod address space beside the nodes'
+  address_space = compact([each.value.address_space, each.value.pod_address_space])
   # The hub firewall's DNS proxy with `hub`; Azure DNS otherwise
   dns_servers = var.hub == null ? [] : var.hub.dns_servers
 
@@ -287,20 +328,28 @@ resource "azurerm_route_table" "cell" {
 # the zone's own slot: Azure applies a route to the traffic within a subnet too, and the nodes of one
 # zone talk to each other directly. Not the system pool's slot either, for the flows above. And not
 # the pods of an overlay cell, whose addresses Azure routes between the nodes in a routing domain of
-# their own that no route table reaches - between zones those are Cilium's alone; `pod_network =
-# "subnet"` puts the pods into the zone's slot, so there the firewall sees them too. Each route is
-# named after the zone that holds the slot (enabled or not), or `slot-<n>` while it is free.
+# their own that no route table reaches - between zones those are Cilium's alone. A pod-subnet cell
+# (`pod_network = "pod-subnet"`, design D74) routes the other zones' pod slots the same way, and its pod
+# subnets take their pool's table, so there the firewall sees the pods too. Each route is named after
+# the zone that holds the slot (enabled or not), or `slot-<n>` while it is free; a pod slot's adds `-pods`.
 locals {
   cell_zone_route_tables = var.hub == null ? {} : merge([
     for cell, settings in local.cells : {
       for zone, z in local.isolation_zones : "${cell}/${zone}" => {
         cell = cell
         zone = zone
-        routes = {
-          for index in range(1, 15) :
-          "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-via-hub-firewall" => cidrsubnet(settings.address_space, 4, index)
-          if index != z.index
-        }
+        routes = merge(
+          {
+            for index in range(1, 15) :
+            "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-via-hub-firewall" => local.cell_slots[cell][index]
+            if index != z.index
+          },
+          {
+            for index in range(1, 15) :
+            "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-pods-via-hub-firewall" => local.cell_pod_slots[cell][index]
+            if index != z.index && settings.pod_network == "pod-subnet"
+          },
+        )
       }
     }
   ]...)
@@ -332,14 +381,14 @@ resource "azurerm_route_table" "zone" {
   }
 }
 
-# Node subnets only: an internal load balancer's subnet holds no NICs, and the API server's answers its
-# clients by the system routes (the hub's peering). The system pool's subnet takes the cell's table, a
-# zone's node subnet the zone's.
+# Node and pod subnets only: an internal load balancer's subnet holds no NICs, and the API server's answers
+# its clients by the system routes (the hub's peering). The system pool's subnets take the cell's table, a
+# zone's node and pod subnets the zone's.
 resource "azurerm_subnet_route_table_association" "cell" {
-  for_each = var.hub == null ? {} : { for key, subnet in local.cell_subnets : key => subnet if contains(["system", "nodes"], subnet.kind) }
+  for_each = var.hub == null ? {} : { for key, subnet in local.cell_subnets : key => subnet if contains(local.cell_host_kinds, subnet.kind) }
 
   subnet_id      = azurerm_subnet.cell[each.key].id
-  route_table_id = each.value.kind == "system" ? azurerm_route_table.cell[each.value.cell].id : azurerm_route_table.zone["${each.value.cell}/${each.value.zone}"].id
+  route_table_id = contains(local.cell_system_kinds, each.value.kind) ? azurerm_route_table.cell[each.value.cell].id : azurerm_route_table.zone["${each.value.cell}/${each.value.zone}"].id
 }
 
 resource "azurerm_virtual_network_peering" "cell_to_hub" {

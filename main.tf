@@ -212,6 +212,9 @@ module "aks" {
   }
   cluster_timeouts   = var.cluster_timeouts
   default_agent_pool = local.default_agent_pool
+  # The zones' classic node pools and their cluster autoscaler - a pod-subnet cell's (zones.tf)
+  agent_pools         = local.zone_agent_pools
+  auto_scaler_profile = local.auto_scaler_profile
   # Every node's OS disk with the cluster's own key - see encryption.tf.
   disk_encryption_set_id = local.disk_encryption_set_id
   dns_prefix             = var.name
