@@ -61,6 +61,23 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **The non-overlay cell becomes a pod-subnet cell (design D74, the user, 2026-10-18): NOT implemented - next session's work.**
+  NAP does not support Azure CNI Pod Subnet with dynamic IP allocation (karpenter-provider-azure issue 1351, open, the work on
+  the AKS machine API side, no date) and node subnet is Microsoft's legacy mode, so the design replaces az3's node-subnet
+  model with: Azure CNI Pod Subnet (dynamic IP allocation) + Cilium, `snet-<zone>-pods` as the FIRST HALF of the zone's slot
+  (a /21 of the /20 slot), nodes the SIXTH eighth (/23), ILB the fifth eighth as everywhere; classic node pools per zone x
+  capacity x arch (`<zone>`, `<zone>spot`, `<zone>arm`, `<zone>armspot`; `--vnet-subnet-id snet-<zone>-nodes --pod-subnet-id
+  snet-<zone>-pods`, the zone's label/taint, the cell's AZ, VNet-encryption-capable sizes) with the cluster autoscaler (min 0,
+  priority expander spot first); no NAP on that cell at all (refused on a pod-subnet cluster); node image channel + surge
+  upgrades. To build: shared/ `cells.<cell>.pod_network` gets a value `pod-subnet` (creates `snet-<zone>-pods` with its NSG;
+  the NSG `pods` rule then lists the pod subnets, not the node prefixes; D73's slot routes cover it unchanged), the root
+  module gets classic zone node pools + autoscaler profile for such a cell (reuse the stateful cluster's per-zone pool
+  pattern) and skips NAP (`node_auto_provisioning_enabled = false`, no `isolation_zones` NAP classes), the fleet drops az3's
+  `node-pools-int-se` NodePools and `pod-addresses-to-firewall` stays (pods must keep their addresses to labfw), az3 is
+  rebuilt (its address space 100.64.0.0/16 can stay; the slot layout changes). Verify = design V32 (spot fallback with the
+  3 low-priority vCPU quota, labfw's log naming the pod, isolation tests). Design pages: 2.1, 2.3 (the pod-subnet cell's
+  table), 3.1 (address plan row), 5.2 C, 7.2 D74/V32, 7.4 watch list "NAP with Azure CNI Pod Subnet" (the trigger to move
+  the pools back to NAP).
 - **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): code done, NOT applied.**
   Until now `rt-<cell>` (0.0.0.0/0 -> firewall) sat on the system and every zone's node subnet, and traffic between
   the slots of one cell took the VNet's own system route (more specific than /0), so the firewall never saw it and
