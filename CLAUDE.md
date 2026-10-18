@@ -61,6 +61,15 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **HTTP/2 only at the edge too (2026-10-18, design D70, the user's decision): not yet in the lab.** `gateways/traefik/release.yaml`
+  mounts a file-provider ConfigMap `traefik-dynamic` whose `tls.options.default.alpnProtocols` is `[h2]`: a client announcing
+  `http/1.1` is refused in the handshake; a client without ALPN still gets HTTP/1.1 (V29 measures). Reaches az2/az3 through the
+  `traefik-<gateway>` Flux configurations at the next Lab power start. Verify over the VPN: `curl --http1.1 -sv https://hello.int-fi.dev.onek8s.lol/`
+  must fail with `no application protocol`; plain `curl` (h2) must answer 200. If routes stop answering, the Gateway API provider
+  did not take the `default` option - check Traefik's log for the file provider and the option name. Consequence recorded in the
+  design: Traefik in every environment until App Routing can refuse HTTP/1.1; `platform_gateway_enabled` / `flux_github_webhook`
+  stay false everywhere and their code goes with the external exposure (backlog item 7). Policy `h2c-upstream` (azure-landing-zone)
+  holds every application Service port to `appProtocol: kubernetes.io/h2c`, audit first.
 - **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): not yet in the lab.** aks-fluxcd-example's aks-hello Service
   carries `appProtocol: kubernetes.io/h2c` (merged, #37; reaches az2/az3 at the next Lab power start). aks-hello **0.5.1**
   (#15, merge commit b3b282ca272b3554fc39c90479bc76d9bc688543) reports `protocol` in `/status`. Steps when the lab is back:

@@ -13,7 +13,14 @@
 # port, which Traefik matches to its entry point - so the Gateway and the Cilium policies are the same
 # for either implementation. Binding 443 as a non-root user takes the safe sysctl
 # net.ipv4.ip_unprivileged_port_start, as App Routing's gateway pods do. No plain HTTP anywhere, not
-# even a redirect. The load balancer is
+# even a redirect.
+#
+# HTTP/2 only (design D69, D70, "HTTP/1.1 must die"): the default TLS options, from a small file-provider
+# ConfigMap, offer `h2` as the one ALPN protocol - a client that announces anything else is refused in
+# the TLS handshake before Traefik parses a request (a client that sends no ALPN at all still gets
+# HTTP/1.1 from Go's server: the measured residual, V29). Upstream, Traefik speaks h2c to a pod whose
+# Service port says `appProtocol: kubernetes.io/h2c`, which the platform's policy requires. App Routing
+# has no such setting, which is why Traefik serves every environment under D70. The load balancer is
 #
 #   - an internal zone's: an Azure internal load balancer in the zone's own subnet
 #     snet-${gateway_name}-ilb, reached from the network only;
@@ -86,6 +93,28 @@ spec:
       enabled: false
     ingressClass:
       enabled: false
+    # The default TLS options (ALPN h2 only) as a dynamic-configuration file: the chart's `tlsOptions`
+    # would render a TLSOption CRD, and the chart's CRDs are not installed (crds: Skip, no CRD provider).
+    additionalArguments:
+      - --providers.file.filename=/config/dynamic.yaml
+    volumes:
+      - name: traefik-dynamic
+        mountPath: /config
+        type: configMap
+    extraObjects:
+      - apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: traefik-dynamic
+        data:
+          dynamic.yaml: |
+            # HTTP/2 only at the edge (design D70): every TLS router without options of its own - the
+            # Gateway API listeners' - takes `default`.
+            tls:
+              options:
+                default:
+                  alpnProtocols:
+                    - h2
     ports:
       web:
         expose:
