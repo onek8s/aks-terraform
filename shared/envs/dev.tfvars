@@ -157,6 +157,11 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "553980c84d1eeeed34060eff76f9b8b2c539a2ed"
   }
+  # Reports the request's protocol in /status (`protocol`): HTTP/2 from the gateway over h2c (design D69, V28)
+  "aks-hello:0.5.1" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "b3b282ca272b3554fc39c90479bc76d9bc688543"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
