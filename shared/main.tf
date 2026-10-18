@@ -68,7 +68,8 @@ module "conventions" {
 
 # The names of what this configuration creates, from the naming policy (var.naming, see
 # modules/conventions) - a variable that names a resource itself wins. A cell's network, NSGs and
-# route table take the cell's key (`dev-int-stateless-az2`) as their `{name}`, a zone's vault the zone.
+# route table take the cell's key (`dev-int-stateless-az2`) as their `{name}`, a zone's route table the cell and
+# the zone (`dev-int-stateless-az2-int-fi`), a zone's vault the zone.
 locals {
   name_requests = merge(
     # Only the names no variable gives: a resource named in its variable needs nothing of the policy.
@@ -81,6 +82,7 @@ locals {
     { for zone in keys(local.isolation_zones) : "zone_key_vault/${zone}" => { type = "key_vault", name = zone } if !contains(keys(var.zone_key_vault_names), zone) },
     { for cell in keys(local.cells) : "virtual_network/${cell}" => { type = "virtual_network", name = cell } },
     { for cell in keys(local.cells) : "route_table/${cell}" => { type = "route_table", name = cell } if var.hub != null },
+    { for key, table in local.cell_zone_route_tables : "route_table/${key}" => { type = "route_table", name = "${table.cell}-${table.zone}" } },
     { for key, subnet in local.cell_subnets : "network_security_group/${key}" => { type = "network_security_group", name = "${subnet.cell}-${trimprefix(subnet.name, "snet-")}" } },
     { for name in keys(local.global_hostnames) : "traffic_manager_profile/${name}" => { type = "traffic_manager_profile", name = replace(name, ".", "-"), domain = coalesce(var.dns_zone_name, "-") } },
   )

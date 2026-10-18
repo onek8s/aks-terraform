@@ -12,9 +12,12 @@
 # the virtual network (internal zones). Pod-to-pod traffic between zones is the third layer's to
 # stop: Cilium, in the platform repository. With `hub` (the build tenant's network mode `labfw`, or
 # `firewall`) every cell is peered with the landing zone's hub and its node subnets send everything
-# else to the hub's firewall, which decides what a cell reaches outside its own network; without it
-# (`sandbox`) the nodes reach the internet through the cluster's load balancer and the NSGs and
-# Cilium are the boundaries.
+# else to the hub's firewall, which decides what a cell reaches outside its own network - and, since
+# design D73, what one zone of the cell may reach in another: a zone's node subnet has a route table
+# of its own, `rt-<cell>-<zone>`, that routes every other zone's slot to the firewall as well, while
+# the system pool's subnet keeps `rt-<cell>` with the default route alone. Without a hub (`sandbox`)
+# the nodes reach the internet through the cluster's load balancer and the NSGs and Cilium are the
+# boundaries.
 #
 # Each cell's layout follows from its address space and the zones' indexes: a sixteenth of it per slot
 # (a /24 of a /20, a /20 of a /16) - the system pool's first, then one per zone (index 1, 2, ...) - split
@@ -256,6 +259,10 @@ locals {
   }
 }
 
+# The system pool's route table: the default route to the hub's firewall, nothing else. Traffic to the
+# cell's own address space takes the virtual network's system route, which is more specific, so the
+# system pool reaches every zone's nodes directly: the kubelet tunnel, metrics-server and the API
+# server's private endpoint stay inside the cell (design section 2.4, flows 1 to 4).
 resource "azurerm_route_table" "cell" {
   for_each = var.hub == null ? {} : local.cells
 
@@ -272,13 +279,67 @@ resource "azurerm_route_table" "cell" {
   }
 }
 
+# A zone's route table (design D73): the default route, plus every other zone's slot - occupied or
+# free, so that a new zone changes no existing table - with the hub's firewall as the next hop. A
+# slot's route is more specific than the virtual network's system route, so what one zone sends to
+# another leaves for the firewall, which denies and logs it (nothing is allowed between zones, design
+# R5 and section 2.4); a flow the firewall did allow would come back through the hub's peering. Not
+# the zone's own slot: Azure applies a route to the traffic within a subnet too, and the nodes of one
+# zone talk to each other directly. Not the system pool's slot either, for the flows above. And not
+# the pods of an overlay cell, whose addresses Azure routes between the nodes in a routing domain of
+# their own that no route table reaches - between zones those are Cilium's alone; `pod_network =
+# "subnet"` puts the pods into the zone's slot, so there the firewall sees them too. Each route is
+# named after the zone that holds the slot (enabled or not), or `slot-<n>` while it is free.
+locals {
+  cell_zone_route_tables = var.hub == null ? {} : merge([
+    for cell, settings in local.cells : {
+      for zone, z in local.isolation_zones : "${cell}/${zone}" => {
+        cell = cell
+        zone = zone
+        routes = {
+          for index in range(1, 15) :
+          "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-via-hub-firewall" => cidrsubnet(settings.address_space, 4, index)
+          if index != z.index
+        }
+      }
+    }
+  ]...)
+}
+
+resource "azurerm_route_table" "zone" {
+  for_each = local.cell_zone_route_tables
+
+  name                          = local.names["route_table/${each.key}"]
+  location                      = var.location
+  resource_group_name           = local.resource_group_name
+  bgp_route_propagation_enabled = false
+
+  route {
+    name                   = "default-via-hub-firewall"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = var.hub.next_hop_ip
+  }
+
+  dynamic "route" {
+    for_each = each.value.routes
+    content {
+      name                   = route.key
+      address_prefix         = route.value
+      next_hop_type          = "VirtualAppliance"
+      next_hop_in_ip_address = var.hub.next_hop_ip
+    }
+  }
+}
+
 # Node subnets only: an internal load balancer's subnet holds no NICs, and the API server's answers its
-# clients by the system routes (the hub's peering).
+# clients by the system routes (the hub's peering). The system pool's subnet takes the cell's table, a
+# zone's node subnet the zone's.
 resource "azurerm_subnet_route_table_association" "cell" {
   for_each = var.hub == null ? {} : { for key, subnet in local.cell_subnets : key => subnet if contains(["system", "nodes"], subnet.kind) }
 
   subnet_id      = azurerm_subnet.cell[each.key].id
-  route_table_id = azurerm_route_table.cell[each.value.cell].id
+  route_table_id = each.value.kind == "system" ? azurerm_route_table.cell[each.value.cell].id : azurerm_route_table.zone["${each.value.cell}/${each.value.zone}"].id
 }
 
 resource "azurerm_virtual_network_peering" "cell_to_hub" {

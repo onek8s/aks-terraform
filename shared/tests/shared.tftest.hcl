@@ -584,6 +584,37 @@ run "a_disabled_country_keeps_its_index_and_gets_nothing" {
     condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
     error_message = "No subnet for the disabled int-se."
   }
+  assert {
+    condition     = length(azurerm_route_table.zone) == 0
+    error_message = "No route table without a hub."
+  }
+}
+
+run "a_disabled_country_keeps_its_slot_in_the_other_zones_routes" {
+  command = plan
+
+  variables {
+    exposure = "int"
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+      int-se = { exposure = "int", index = 2, enabled = false }
+    }
+    cells = {
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+    }
+    hub = {
+      virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
+      next_hop_ip        = "10.0.1.4"
+    }
+  }
+
+  assert {
+    condition = (
+      keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "int-se-via-hub-firewall 172.22.2.0/24")
+    )
+    error_message = "A disabled zone gets no route table, but its slot is routed to the firewall from the other zones under its name."
+  }
 }
 
 run "a_cell_behind_the_hub_firewall" {
@@ -611,7 +642,30 @@ run "a_cell_behind_the_hub_firewall" {
   }
   assert {
     condition     = sort(keys(azurerm_subnet_route_table_association.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes"])
-    error_message = "Every node subnet - not the load balancer's - takes the route table."
+    error_message = "Every node subnet - not the load balancer's - takes a route table."
+  }
+  assert {
+    condition     = length(azurerm_route_table.cell["dev-int-stateless-az1"].route) == 1
+    error_message = "The system pool's table holds the default route alone: the system pool reaches every zone directly."
+  }
+  assert {
+    condition = (
+      keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
+      !azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].bgp_route_propagation_enabled &&
+      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 14 &&
+      alltrue([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : r.next_hop_type == "VirtualAppliance" && r.next_hop_in_ip_address == "10.0.1.4"]) &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "default-via-hub-firewall 0.0.0.0/0") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "slot-2-via-hub-firewall 172.22.2.0/24") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "slot-14-via-hub-firewall 172.22.14.0/24")
+    )
+    error_message = "A zone's table (design D73) sends the default route and every other slot, occupied or free, to the hub's firewall."
+  }
+  assert {
+    condition = !anytrue([
+      for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route :
+      contains(["172.22.0.0/24", "172.22.1.0/24", "172.22.15.0/24"], r.address_prefix)
+    ])
+    error_message = "A zone's table routes neither the system pool's slot, nor the zone's own, nor the API server's to the firewall."
   }
   assert {
     condition = (
@@ -1072,8 +1126,8 @@ run "a_disabled_cell_keeps_its_address_space_but_gets_no_network" {
   }
 
   assert {
-    condition     = keys(azurerm_virtual_network.cell) == ["dev-int-stateless-az2"] && keys(azurerm_route_table.cell) == ["dev-int-stateless-az2"] && keys(azurerm_virtual_network_peering.hub_to_cell) == ["dev-int-stateless-az2"]
-    error_message = "Only the enabled cell gets a network, a route table and a hub peering."
+    condition     = keys(azurerm_virtual_network.cell) == ["dev-int-stateless-az2"] && keys(azurerm_route_table.cell) == ["dev-int-stateless-az2"] && keys(azurerm_route_table.zone) == ["dev-int-stateless-az2/int-fi"] && keys(azurerm_virtual_network_peering.hub_to_cell) == ["dev-int-stateless-az2"]
+    error_message = "Only the enabled cell gets a network, its route tables and a hub peering."
   }
   assert {
     condition     = azurerm_subnet.cell["dev-int-stateless-az2/snet-int-fi-nodes"].address_prefixes[0] == "172.22.17.0/25"

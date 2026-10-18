@@ -574,7 +574,8 @@ azure-landing-zone network modes `firewall` and `labfw`): every cell's network i
 VNet `virtual_network_id` (in the connectivity subscription - the deploying identity needs the
 landing zone's `AKS spoke peering` role on it), every node subnet sends 0.0.0.0/0 to `next_hop_ip` (the
 Azure Firewall's or labfw's private address; the clusters then use AKS outbound type
-`userDefinedRouting`), the cells use `dns_servers` (the firewall's DNS proxy; empty keeps Azure DNS),
+`userDefinedRouting`) and a zone's node subnet also every other zone's slot (design D73: the firewall
+decides between the cell's zones too, and denies), the cells use `dns_servers` (the firewall's DNS proxy; empty keeps Azure DNS),
 and the internal zones' private DNS zones are linked to the hub as well, so the DNS proxy resolves
 them. Null: each cell is a network of its own with load balancer egress (network mode `sandbox`).
 DESCRIPTION

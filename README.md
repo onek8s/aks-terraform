@@ -803,7 +803,7 @@ its type. Its defaults are the lab's names, so the lab's tfvars name almost noth
 | `container_registry` | `acronek8s{environment}` | `acronek8sdev` |
 | `log_analytics_workspace` | `log-{environment}-{name}` | `log-dev-platform` |
 | `user_assigned_identity` | `id-{location_code}-{environment}-{name}` | `id-gwc-dev-shared-kv-int-fi-example`, `id-gwc-dev-aks-int-stateless-az2` |
-| `virtual_network`, `network_security_group`, `route_table` | `vnet-{name}`, `nsg-{name}`, `rt-{name}` | `vnet-dev-int-stateless-az2`, `nsg-dev-int-stateless-az2-int-fi-nodes`, `rt-dev-int-stateless-az2` |
+| `virtual_network`, `network_security_group`, `route_table` | `vnet-{name}`, `nsg-{name}`, `rt-{name}` | `vnet-dev-int-stateless-az2`, `nsg-dev-int-stateless-az2-int-fi-nodes`, `rt-dev-int-stateless-az2` (the system pool's), `rt-dev-int-stateless-az2-int-fi` (a zone's) |
 | `private_endpoint`, `network_interface` | `pe-{name}`, `nic-{name}` | `pe-kv-onek8s-gwc-platform`, `nic-pe-kv-onek8s-gwc-platform` |
 | `disk_encryption_set` | `des-{name}` | `des-aks-dev-int-stateless-az2` |
 | `consumption_budget` | `budget-{environment}` | `budget-dev` |
