@@ -751,7 +751,9 @@ run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
       azurerm_subnet.cell["dev-int-stateless-az3/snet-int-fi-pods"].address_prefixes == tolist(["100.64.16.0/20"]) &&
       azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-pods"].address_prefixes == tolist(["100.64.32.0/20"]) &&
       azurerm_subnet.cell["dev-int-stateless-az2/snet-int-se-nodes"].address_prefixes == tolist(["172.22.18.0/25"]) &&
-      !contains(keys(azurerm_subnet.cell), "dev-int-stateless-az2/snet-int-se-pods")
+      !contains(keys(azurerm_subnet.cell), "dev-int-stateless-az2/snet-int-se-pods") &&
+      one(azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-pods"].delegation).service_delegation[0].name == "Microsoft.ContainerService/managedClusters" &&
+      length(azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-nodes"].delegation) == 0
     )
     error_message = "Nodes and load balancers keep /24 slots in any address space; a pod-subnet cell's pods take the /20 of the same slot in the pod address space."
   }
