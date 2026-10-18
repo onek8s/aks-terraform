@@ -93,7 +93,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   3 low-priority vCPU quota, labfw's log naming the pod, isolation tests). Design pages: 2.1, 2.3 (the pod-subnet cell's
   table), 3.1 (address plan row), 5.2 C, 7.2 D74/V32, 7.4 watch list "NAP with Azure CNI Pod Subnet" (the trigger to move
   the pools back to NAP).
-- **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): code done, NOT applied.**
+- **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): applied 2026-10-18** (#193; traffic verified, V31 cross-zone denial not tested yet).
   Until now `rt-<cell>` (0.0.0.0/0 -> firewall) sat on the system and every zone's node subnet, and traffic between
   the slots of one cell took the VNet's own system route (more specific than /0), so the firewall never saw it and
   only NSG + Cilium separated the zones - against what R5, section 2.4 and the isolation tests claimed. Now
@@ -125,13 +125,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   parts; Renew certificate / Flux webhooks resolve unstated names with `scripts/policy-name.sh`. Not on the policy: a
   cluster's own name, subnets, child resources, the landing zone's resources; the other lab workflows still hard-code the lab's
   names. The cluster stack has `environment` for cluster names without it in the second segment.
-- **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): not yet in the lab.** The same ConfigMap sets
+- **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): in the lab, V30 holds (see the results above).** The same ConfigMap sets
   `tls.options.default.minVersion: VersionTLS13`; `curl --tls-max 1.2 https://hello.int-fi.dev.onek8s.lol/` must fail in the
   handshake, plain `curl -v` shows `TLSv1.3` and, with a curl built on a library that offers X25519MLKEM768, the hybrid
   post-quantum key exchange (Go 1.25 default). Policy `gateway-tls` (azure-landing-zone, audit) reads the ConfigMap back:
   ALPN exactly `[h2]`, `minVersion` `VersionTLS13`. Traffic Manager's probe TLS version is undocumented (V30 on the first
   external cell; TCP monitoring is the fallback).
-- **HTTP/2 only at the edge too (2026-10-18, design D70, the user's decision): not yet in the lab.** `gateways/traefik/release.yaml`
+- **HTTP/2 only at the edge too (2026-10-18, design D70, the user's decision): in the lab, but V29 FAILS (Go's ALPN fallback, see the results above).** `gateways/traefik/release.yaml`
   mounts a file-provider ConfigMap `traefik-dynamic` whose `tls.options.default.alpnProtocols` is `[h2]`: a client announcing
   `http/1.1` is refused in the handshake; a client without ALPN still gets HTTP/1.1 (V29 measures). Reaches az2/az3 through the
   `traefik-<gateway>` Flux configurations at the next Lab power start. Verify over the VPN: `curl --http1.1 -sv https://hello.int-fi.dev.onek8s.lol/`
@@ -140,7 +140,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   design: Traefik in every environment until App Routing can refuse HTTP/1.1; `platform_gateway_enabled` / `flux_github_webhook`
   stay false everywhere and their code goes with the external exposure (backlog item 7). Policy `h2c-upstream` (azure-landing-zone)
   holds every application Service port to `appProtocol: kubernetes.io/h2c`, audit first.
-- **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): not yet in the lab.** aks-fluxcd-example's aks-hello Service
+- **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): in the lab with aks-hello 0.5.2, V28 holds (the steps below are done).** aks-fluxcd-example's aks-hello Service
   carries `appProtocol: kubernetes.io/h2c` (merged, #37; reaches az2/az3 at the next Lab power start). aks-hello **0.5.1**
   (#15, merge commit b3b282ca272b3554fc39c90479bc76d9bc688543) reports `protocol` in `/status`. Steps when the lab is back:
   (1) `shared/envs/dev.tfvars` `container_registry_builds` entry `"aks-hello:0.5.1"` with that commit, Deploy `dev-shared`
@@ -266,7 +266,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **Network: azure-landing-zone mode `labfw` = firewall mode with labfw** (VM `labfw-fw`, Standard_B2ats_v2, 10.0.1.4,
   public IP 4.184.103.12, `rg-hub-labfw-germanywestcentral` in sub-hub; enforces `afwp-hub-int-germanywestcentral` + parent).
   shared/ `hub`: cells peered with `vnet-hub-germanywestcentral`, route table `rt-<cell>` 0.0.0.0/0 -> 10.0.1.4 on the system
-  subnet and `rt-<cell>-<zone>` (0.0.0.0/0 + the other zones' slots -> 10.0.1.4, D73, not applied yet) on each zone's node
+  subnet and `rt-<cell>-<zone>` (0.0.0.0/0 + the other zones' slots -> 10.0.1.4, D73) on each zone's node
   subnet, VNet DNS = labfw's DNS proxy, internal private DNS (`int-fi.dev.onek8s.lol`) also linked to the hub. Clusters
   `outbound_type = "userDefinedRouting"`; the cluster identity gets Network Contributor on the route tables. Cell egress
   allow-lists: parent `rcg-platform` (AKS FQDN tag, `AzureCloud.germanywc` 443 - service tags use the short region name,
