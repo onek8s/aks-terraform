@@ -162,6 +162,12 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "b3b282ca272b3554fc39c90479bc76d9bc688543"
   }
+  # h2c on its own port 8081, HTTP/1.1 on 8080 for the kubelet's probes: 0.5.1's one port spoke HTTP/1.1 only
+  # (Kestrel's default on a port without TLS), so Traefik's h2c to it answered 500 on every route
+  "aks-hello:0.5.2" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "b9ad11f879cf97186359fa8b97f2752e6efd9228"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
