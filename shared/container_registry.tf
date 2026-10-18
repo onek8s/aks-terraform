@@ -14,9 +14,9 @@ locals {
 }
 
 resource "azurerm_container_registry" "this" {
-  count = var.container_registry_name == null ? 0 : 1
+  count = local.names.container_registry == null ? 0 : 1
 
-  name                  = var.container_registry_name
+  name                  = local.names.container_registry
   location              = var.location
   resource_group_name   = local.resource_group_name
   sku                   = local.container_registry_sku
@@ -36,7 +36,7 @@ resource "azurerm_container_registry" "this" {
 # of an image is a new entry in container_registry_builds; the registry builds it on the next apply.
 # A task runs again only when it changes, so a published tag is built once.
 resource "azurerm_container_registry_task" "build" {
-  for_each = var.container_registry_name == null ? {} : var.container_registry_builds
+  for_each = local.names.container_registry == null ? {} : var.container_registry_builds
 
   # Task names take letters, digits, hyphens and underscores: aks-hello:0.2.0 is aks-hello-0_2_0.
   name                  = replace(replace(replace(each.key, "/", "-"), ":", "-"), ".", "_")

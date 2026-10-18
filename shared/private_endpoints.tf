@@ -33,7 +33,7 @@ locals {
   private_endpoint_targets = !local.private_endpoints ? {} : merge(
     { "kv-platform" = { id = azurerm_key_vault.this.id, name = azurerm_key_vault.this.name, subresource = "vault" } },
     { for zone, vault in azurerm_key_vault.zone : "kv-${zone}" => { id = vault.id, name = vault.name, subresource = "vault" } },
-    var.container_registry_name == null || !local.container_registry_premium ? {} : {
+    local.names.container_registry == null || !local.container_registry_premium ? {} : {
       acr = { id = azurerm_container_registry.this[0].id, name = azurerm_container_registry.this[0].name, subresource = "registry" }
     },
     var.ai_foundry == null ? {} : {
@@ -42,6 +42,21 @@ locals {
     var.private_endpoints.state_storage_account_id == null ? {} : {
       state = { id = var.private_endpoints.state_storage_account_id, name = element(split("/", var.private_endpoints.state_storage_account_id), 8), subresource = "blob" }
     },
+  )
+}
+
+# The endpoints and their network interfaces are named after their service, which the conventions
+# above named - so by a second pass of the naming policy.
+module "endpoint_names" {
+  source = "../modules/conventions"
+
+  location    = var.location
+  environment = var.environment
+  exposure    = var.exposure
+  naming      = var.naming
+  names = merge(
+    { for key, target in local.private_endpoint_targets : "pe/${key}" => { type = "private_endpoint", name = target.name } },
+    { for key, target in local.private_endpoint_targets : "nic/${key}" => { type = "network_interface", name = "pe-${target.name}" } },
   )
 }
 
@@ -65,11 +80,11 @@ resource "azurerm_subnet" "private_endpoints" {
 resource "azurerm_private_endpoint" "this" {
   for_each = local.private_endpoint_targets
 
-  name                          = "pe-${each.value.name}"
+  name                          = module.endpoint_names.names["pe/${each.key}"]
   location                      = var.location
   resource_group_name           = local.resource_group_name
   subnet_id                     = azurerm_subnet.private_endpoints[0].id
-  custom_network_interface_name = "nic-pe-${each.value.name}"
+  custom_network_interface_name = module.endpoint_names.names["nic/${each.key}"]
 
   private_service_connection {
     name                           = "psc-${each.value.name}"

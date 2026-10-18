@@ -8,7 +8,7 @@
 resource "azurerm_consumption_budget_subscription" "this" {
   count = var.monthly_budget == null ? 0 : 1
 
-  name            = "budget-${var.environment}"
+  name            = local.names.consumption_budget
   subscription_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
   amount          = var.monthly_budget.amount
   time_grain      = "Monthly"

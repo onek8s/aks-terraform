@@ -53,6 +53,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # For a name the variables file leaves to the naming policy (scripts/policy-name.sh).
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.4"
+          terraform_wrapper: false
+
       - uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -62,12 +68,15 @@ jobs:
       - name: Sync the webhooks
         env:
           GH_TOKEN: ${{ secrets.GH_WEBHOOK_TOKEN || secrets.GH_OWNER }}
+          NAMING_POLICY: ${{ secrets.NAMING_POLICY }}
         run: |
           set -euo pipefail
           tfvar() { sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$VARS" | head -n 1; }
           vault="$(tfvar key_vault_name)"; zone="$(tfvar dns_zone_name)"
           webhook="$(sed -nE 's/^flux_github_webhook[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$VARS" | head -n 1)"
           if [ "$webhook" = true ]; then
+            # The platform vault: named in the file, or by the naming policy (scripts/policy-name.sh).
+            [ -n "$vault" ] || vault="$(scripts/policy-name.sh "$VARS" key_vault platform)"
             token="$(az keyvault secret show --vault-name "$vault" --name flux-system--github-webhook-token --query value -o tsv)"
             echo "::add-mask::$token"
             clusters="$(az aks list -g "$RESOURCE_GROUP" --query "[?powerState.code=='Running'].name" -o tsv)"

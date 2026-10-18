@@ -35,7 +35,8 @@ left out: name none, and AKS creates and manages one for the cluster instead. Se
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
 | `envs/dev-int-stateless-az1.tfvars`, `envs/dev-int-stateless-az2.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters (since 2026-10-15, in germanywestcentral), `aks-dev-int-stateless-az1` (disabled in `shared/`: zone 1 is not available to the subscription), `aks-dev-int-stateless-az2` (running) and `aks-dev-int-stateful`, on the **Free** tier: one system node, no uptime SLA. Internal (`exposure = "int"`: Finland's zone `int-fi` only; Sweden's `int-se` is disabled in `shared/`). The stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own peered with the landing zone's hub, egress through labfw (`userDefinedRouting`), with the isolation zone's nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys, an ephemeral OS disk and no persistent storage; no platform gateway and no Flux webhook (no public entry point). The running one serves `hello-aks-dev-int-stateless-az2.int-fi.dev.onek8s.lol` on its zone's internal load balancer. The stateful one is defined but not deployed for now. |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
-| `modules/conventions/` | What the two root modules have to work out the same way: region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
+| `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
+| `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
 | `backend.hcl.example` | Template for the shared remote state backend. |
 | `docs/troubleshooting.md` | What to do when an apply fails or times out, and how to get a cluster stuck in `Creating` back under Terraform's control. |
@@ -746,7 +747,7 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | | Shared - `shared/envs/dev.tfvars` | Per cluster - `envs/dev-<cluster>.tfvars` |
 | --- | --- | --- |
 | Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-ext-stateless-az<N>` (`cells`) with `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb`, each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `isolation_zones` |
-| Key Vaults | The platform vault `kv-onek8s-dev-platform` (purge protection, for the customer-managed keys) and one per zone, `kv-onek8s-dev-<zone>` (`zone_key_vault_names`), with every grant on them - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false`, `key_vault_namespace_vaults`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
+| Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them - the admin groups' `Key Vault Administrator`, the namespaces' writers - and the Flux webhook's token | Looked up: `key_vault_name` with `key_vault_create = false`, `key_vault_namespace_vaults`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
 | Exposure | `exposure`: `ext` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-sec-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
 | DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-sec-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
@@ -758,7 +759,8 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 The names say which is which: a shared resource carries `shared` - or, for the zones, the
 environment's domain - and a cluster's carries the cluster's name. The shared identities' names are
 worked out the same way by both stacks, in [`modules/conventions`](modules/conventions/), which also
-holds the region codes and the ABAC conditions that draw each namespace's share of the vault.
+holds the [naming policy](#naming-policy), the region codes and the ABAC conditions that draw each
+namespace's share of the vault.
 
 - **A namespace is the same identity in every cluster.** Its client ID and its grants - including
   anything granted to it outside this repository - follow it to the next cluster. Azure allows 20
@@ -786,6 +788,66 @@ defaults to true - with its namespaces' identities named after it
 [gatewayapi]: https://gateway-api.sigs.k8s.io/
 [ilb]: https://learn.microsoft.com/azure/aks/internal-lb
 [managedgw]: https://learn.microsoft.com/azure/aks/managed-gateway-api
+
+## Naming policy
+
+The names of what these stacks create come from a **naming policy** (`naming`, in
+[`modules/conventions`](modules/conventions/)): one template per resource type, filled in from the
+**location**, the **exposure**, the **environment** and what tells the resource from the others of
+its type. Its defaults are the lab's names, so the lab's tfvars name almost nothing:
+
+| Type | Default template | The lab's (dev, int, germanywestcentral) |
+| --- | --- | --- |
+| `resource_group` | `rg-aks-{environment}` | `rg-aks-dev` |
+| `key_vault` | `kv-onek8s-{location_code}-{name}` | `kv-onek8s-gwc-platform`, `kv-onek8s-gwc-int-fi` |
+| `container_registry` | `acronek8s{environment}` | `acronek8sdev` |
+| `log_analytics_workspace` | `log-{environment}-{name}` | `log-dev-platform` |
+| `user_assigned_identity` | `id-{location_code}-{environment}-{name}` | `id-gwc-dev-shared-kv-int-fi-example`, `id-gwc-dev-aks-int-stateless-az2` |
+| `virtual_network`, `network_security_group`, `route_table` | `vnet-{name}`, `nsg-{name}`, `rt-{name}` | `vnet-dev-int-stateless-az2`, `nsg-dev-int-stateless-az2-int-fi-nodes`, `rt-dev-int-stateless-az2` |
+| `private_endpoint`, `network_interface` | `pe-{name}`, `nic-{name}` | `pe-kv-onek8s-gwc-platform`, `nic-pe-kv-onek8s-gwc-platform` |
+| `disk_encryption_set` | `des-{name}` | `des-aks-dev-int-stateless-az2` |
+| `consumption_budget` | `budget-{environment}` | `budget-dev` |
+| `traffic_manager_profile` | `{domain}-{environment}-{name}` | (`onek8s-lol-dev-hello-ext-fi-dev`, external only) |
+| `ai_services` | `ais-onek8s-{environment}-{name}` | `ais-onek8s-dev-agents` |
+
+The placeholders are `{environment}`, `{exposure}` (empty without one), `{location}`,
+`{location_code}` (the region's short code, `naming.location_codes` over the built-in list),
+`{name}` and `{domain}` (Traffic Manager's DNS zone). An empty placeholder leaves no stray hyphen; a
+registry name loses everything but letters and digits; every name is checked against its type's Azure
+rules at plan time, and an unknown type or placeholder fails the plan (output `names`). A variable that
+names a resource itself (`resource_group_name`, `key_vault_name`, `zone_key_vault_names`,
+`container_registry_name`, `log_analytics_workspace_name`, `ai_foundry.name`) still wins, resource by
+resource; a registry or workspace without a name is created only with `container_registry_create` /
+`log_analytics_workspace_create`. A cluster's own name, its subnets and what a cluster looks up are
+stated in its tfvars as before - the cluster stack takes the same policy for its identities and its
+disk encryption set, and `environment` when the cluster's name does not carry it in its second segment.
+
+**A real estate's policy is not kept here.** Some of these names are global - Key Vault, the
+registry, the AI Services subdomain, Traffic Manager - and a published convention tells anyone which
+name the next vault will take. Keep the policy as JSON outside Git and give it to both stacks:
+
+```json
+{
+  "templates": {
+    "key_vault": "kv-<prefix>-{location_code}-{environment}-{name}",
+    "container_registry": "cr<prefix>{location_code}{environment}{exposure}"
+  },
+  "location_codes": { "germanywestcentral": "dewc" }
+}
+```
+
+- **Deploy workflow**: the `dev` environment's secret `NAMING_POLICY` holds that JSON; the run writes it
+  to `naming.auto.tfvars.json` (ignored by Git, like every tfvars file outside `envs/`) and masks the
+  templates' fixed parts, so the plan in this public repository's log does not show them. No secret: the
+  defaults. Renew certificate and Flux webhooks read the same secret through `scripts/policy-name.sh`.
+- **By hand**: `{"naming": <the JSON>}` as `naming.auto.tfvars.json` in the stack's directory, or
+  `-var-file=` a file elsewhere.
+
+Changing a template renames what it names, and for most of these types a new name is a new resource
+(a vault, a network, an identity and its grants): adopt a policy before the first apply of an
+environment, or plan the move. The lab's other workflows (Store secret, Sign images, Lab power, the
+VPN action, the tests) name the lab's resources directly; an estate with its own policy points them at
+its names. The landing zone (onek8s/azure-landing-zone) names its own resources.
 
 ## Node auto provisioning
 
@@ -1231,12 +1293,13 @@ choice for a throwaway cluster and a poor one for anything else.
   [Clusters without a network of their own](#clusters-without-a-network-of-their-own). The identity
   exists because AKS has to be granted the existing network and the private DNS zone *before* the
   cluster is created, which a system assigned identity cannot be: it does not exist until the cluster
-  does. Its name is **worked out, not configured**: `id-<region code>-<environment>-<function>`,
-  built from the cluster name and the region. A cluster name reads `<what it is>-<environment>-<which
-  one>`, so `aks-dev-ext-stateful` in `swedencentral` is run by `id-sec-dev-aks-a`. The region
-  codes are the estate's own convention rather than anything Azure defines, so they live in
-  `local.location_codes` in `locals.tf`; a region that is not listed there stops the plan rather than
-  being given a guessed code. An identity cannot be renamed in place, so a name that changes replaces
+  does. Its name is **worked out, not configured**: by default `id-<region code>-<environment>-<function>`
+  (the [naming policy](#naming-policy)'s `user_assigned_identity`), built from the cluster name and the
+  region. A cluster name reads `<what it is>-<environment>-<which one>`, so `aks-dev-ext-stateful` in
+  `swedencentral` is run by `id-sec-dev-aks-ext-stateful`. The region codes are the estate's own
+  convention rather than anything Azure defines, so they live in `local.location_codes` in
+  `modules/conventions/main.tf` and the policy's `location_codes`; a region that is listed in neither
+  stops the plan rather than being given a guessed code. An identity cannot be renamed in place, so a name that changes replaces
   the identity, its principal ID and its role assignments - the replacement is built and granted
   before the old one goes, so the cluster is never left pointing at an identity that no longer
   exists.

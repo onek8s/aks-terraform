@@ -21,8 +21,8 @@ variable "location" {
 
 variable "resource_group_name" {
   type        = string
-  description = "Name of the resource group the shared resources are created in - the clusters' resource group. It exists already, unless resource_group_create."
-  nullable    = false
+  default     = null
+  description = "Name of the resource group the shared resources are created in - the clusters' resource group. It exists already, unless resource_group_create. Null: the naming policy's `resource_group` (by default `rg-aks-<environment>`)."
 }
 
 variable "resource_group_create" {
@@ -55,15 +55,16 @@ variable "subnets" {
 
 variable "key_vault_name" {
   type        = string
+  default     = null
   description = <<DESCRIPTION
 Name of the environment's shared Key Vault, which the clusters name in their `key_vault_name` with
 `key_vault_create = false`. Key Vault names are global: 3 to 24 letters, digits and single hyphens,
-starting with a letter.
+starting with a letter. Null: the naming policy's `key_vault` with the name `platform` (by default
+`kv-onek8s-<region code>-platform`).
 DESCRIPTION
-  nullable    = false
 
   validation {
-    condition     = can(regex("^[a-zA-Z](-?[a-zA-Z0-9])+$", var.key_vault_name)) && length(var.key_vault_name) >= 3 && length(var.key_vault_name) <= 24
+    condition     = var.key_vault_name == null || can(regex("^[a-zA-Z](-?[a-zA-Z0-9])+$", coalesce(var.key_vault_name, "-"))) && try(length(var.key_vault_name) >= 3 && length(var.key_vault_name) <= 24, false)
     error_message = "key_vault_name must be 3 to 24 letters, digits and single hyphens, starting with a letter and ending with a letter or digit."
   }
 }
@@ -83,7 +84,7 @@ variable "key_vault_namespaces" {
   }))
   description = <<DESCRIPTION
 The namespaces with a share of the vault, in any cluster of the environment: each owns the secrets
-named `<namespace>--<name>`, and reads them as the identity `id-<region>-<environment>-shared-kv-
+named `<namespace>--<name>`, and reads them as the identity (by default) `id-<region>-<environment>-shared-kv-
 <namespace>`, granted `Key Vault Secrets User` under an ABAC condition that holds it to them. A
 cluster federates the identity with its namespace's `key-vault` service account - so a namespace
 with a share in a cluster has to be listed here.
@@ -107,8 +108,8 @@ DESCRIPTION
   nullable    = false
 
   validation {
-    condition     = alltrue([for share in values(var.key_vault_namespaces) : share.zone == null || contains(keys(var.zone_key_vault_names), coalesce(share.zone, "-"))])
-    error_message = "A namespace's zone must be one of zone_key_vault_names."
+    condition     = alltrue([for share in values(var.key_vault_namespaces) : share.zone == null || contains([for zone, z in var.isolation_zones : zone if z.enabled], coalesce(share.zone, "-"))])
+    error_message = "A namespace's zone must be one of the enabled isolation_zones, each of which has its vault."
   }
 
   validation {
@@ -218,13 +219,21 @@ variable "container_registry_name" {
 Name of the environment's Azure Container Registry, created here: the images the clusters run, which
 each cluster pulls as its kubelet identity - nothing is stored to read it with. The images get there
 through container_registry_builds. Registry names are
-global, 5 to 50 letters and digits. Null for none.
+global, 5 to 50 letters and digits. Null: the naming policy's `container_registry` (by default
+`acronek8s<environment>`) with container_registry_create, else no registry.
 DESCRIPTION
 
   validation {
     condition     = var.container_registry_name == null || can(regex("^[a-zA-Z0-9]{5,50}$", coalesce(var.container_registry_name, "-")))
     error_message = "container_registry_name must be 5 to 50 letters and digits."
   }
+}
+
+variable "container_registry_create" {
+  type        = bool
+  default     = false
+  description = "Whether the environment has a container registry when container_registry_name names none: named by the naming policy. A container_registry_name creates it anyway."
+  nullable    = false
 }
 
 variable "container_registry_builds" {
@@ -267,7 +276,7 @@ Signing of the registry's images (OneK8s design section 2.7): a self-signed code
 in the platform vault, `image-signing`, with this `subject` - Notation wants it to name a country
 (`C`), a state (`ST`) and an organisation (`O`) - valid for `validity_in_months`, and the identity the
 clusters' image signature verifier (Ratify, AKS Image Integrity) reads the registry and the
-certificate as. Needs container_registry_name. Null for none.
+certificate as. Needs the registry (container_registry_name or container_registry_create). Null for none.
 DESCRIPTION
 
   validation {
@@ -278,8 +287,8 @@ DESCRIPTION
   }
 
   validation {
-    condition     = var.image_signing == null || var.container_registry_name != null
-    error_message = "image_signing signs the images of the environment's registry, and container_registry_name names none."
+    condition     = var.image_signing == null || var.container_registry_name != null || var.container_registry_create
+    error_message = "image_signing signs the images of the environment's registry, and there is none (container_registry_name or container_registry_create)."
   }
 }
 
@@ -321,15 +330,21 @@ variable "zone_key_vault_names" {
   type        = map(string)
   default     = {}
   description = <<DESCRIPTION
-One Key Vault per isolation zone - OneK8s design section 2.5 - keyed by the zone (`int-fi`): the
-secrets of the zone's applications. A namespace's share is in its zone's vault (key_vault_namespaces,
-`zone`). Key Vault names are global.
+The names of the isolation zones' Key Vaults - OneK8s design section 2.5 - keyed by the zone
+(`int-fi`), where they depart from the naming policy. Every enabled isolation zone has a vault for
+the secrets of its applications, named by the policy's `key_vault` with the zone as the name (by
+default `kv-onek8s-<region code>-<zone>`) unless it is named here. A namespace's share is in its
+zone's vault (key_vault_namespaces, `zone`). Key Vault names are global.
 DESCRIPTION
   nullable    = false
 
   validation {
     condition     = alltrue([for name in values(var.zone_key_vault_names) : can(regex("^[a-zA-Z](-?[a-zA-Z0-9])+$", name)) && length(name) >= 3 && length(name) <= 24])
     error_message = "A zone vault's name must be 3 to 24 letters, digits and single hyphens, starting with a letter and ending with a letter or digit."
+  }
+  validation {
+    condition     = alltrue([for zone in keys(var.zone_key_vault_names) : contains(keys(var.isolation_zones), zone)])
+    error_message = "zone_key_vault_names names the vaults of isolation_zones only."
   }
 }
 
@@ -462,8 +477,17 @@ variable "log_analytics_workspace_name" {
   description = <<DESCRIPTION
 Name of the environment's Log Analytics workspace, created here (OneK8s design section 6.2,
 `log-<env>-platform`): the Kubernetes audit logs of every cluster of the environment, which each
-cluster sends to it by naming it in its own log_analytics_workspace_name. Null for none.
+cluster sends to it by naming it in its own log_analytics_workspace_name. Null: the naming policy's
+`log_analytics_workspace` with the name `platform` (by default `log-<environment>-platform`) with
+log_analytics_workspace_create, else no workspace.
 DESCRIPTION
+}
+
+variable "log_analytics_workspace_create" {
+  type        = bool
+  default     = false
+  description = "Whether the environment has a Log Analytics workspace when log_analytics_workspace_name names none: named by the naming policy. A log_analytics_workspace_name creates it anyway."
+  nullable    = false
 }
 
 variable "log_analytics_retention_in_days" {
@@ -616,7 +640,7 @@ DESCRIPTION
 
 variable "ai_foundry" {
   type = object({
-    name          = string
+    name          = optional(string)
     location      = string
     model         = optional(string, "claude-sonnet-5-5")
     model_version = optional(string, "1")
@@ -643,10 +667,28 @@ variable "ai_foundry" {
   default     = null
   description = <<DESCRIPTION
 The AI agents' model endpoint (onek8s/aks-ai-agents, `model.provider: foundry`): a Microsoft Foundry (AI Services)
-resource `name` in `location` - a region that offers Anthropic's models - with one GlobalStandard deployment of
+resource `name` (null: the naming policy's `ai_services` with the name `agents`, by default
+`ais-onek8s-<environment>-agents` - also its custom subdomain, so global) in `location` - a region that offers Anthropic's models - with one GlobalStandard deployment of
 `model`, named like the model, once `model_provider` names the organisation that deploys it (Anthropic's terms are
 accepted in its name, and its name, country and industry go to Anthropic with every request). Entra ID only (no
 keys); the identity that applies this stack, which also runs the agent workflows, gets `Cognitive Services User`.
 Null for none.
 DESCRIPTION
+}
+
+variable "naming" {
+  type = object({
+    templates      = optional(map(string), {})
+    location_codes = optional(map(string), {})
+  })
+  default     = {}
+  description = <<DESCRIPTION
+The estate's naming policy (modules/conventions, variable `naming`): a template per resource type
+with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}`, `{name}` and
+`{domain}`, merged over the defaults - the lab's names - and the regions' short codes. Every name this
+configuration makes comes from it, unless a variable names the resource itself. The clusters' stacks
+take the same policy, so they look up what this one created. A real estate's policy stays out of the
+repository - see the README, "Naming policy".
+DESCRIPTION
+  nullable    = false
 }

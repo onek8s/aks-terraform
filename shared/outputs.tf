@@ -73,3 +73,22 @@ output "ai_foundry" {
   description = "The agents' Foundry resource name and model deployment, for aks-ai-agents' model.foundryResource and model.name."
   value       = var.ai_foundry == null ? null : { resource = azurerm_cognitive_account.agents[0].name, model = try(azapi_resource.agents_model[0].name, null), openai_models = keys(azurerm_cognitive_deployment.agents_openai) }
 }
+
+output "names" {
+  description = "Every name this configuration took from the naming policy (var.naming), by what it names - the variables that name a resource themselves are not among them."
+  value       = merge(module.conventions.names, module.endpoint_names.names)
+
+  # The policy and its names are checked here, where a test can expect the failure.
+  precondition {
+    condition     = length(module.conventions.policy_errors) == 0
+    error_message = "The naming policy (var.naming) is not one this configuration can use: ${join("; ", module.conventions.policy_errors)}. Its resource types and placeholders are listed in modules/conventions/variables.tf."
+  }
+  precondition {
+    condition     = length(concat(module.conventions.names_without_location_code, module.endpoint_names.names_without_location_code)) == 0
+    error_message = "No short code is known for ${var.location}, and the naming policy needs one for: ${join(", ", distinct(concat(module.conventions.names_without_location_code, module.endpoint_names.names_without_location_code)))}. Add it to naming.location_codes, or to local.location_codes in modules/conventions/main.tf."
+  }
+  precondition {
+    condition     = length(concat(module.conventions.invalid_names, module.endpoint_names.invalid_names)) == 0
+    error_message = "The naming policy makes names Azure refuses: ${join(", ", concat(module.conventions.invalid_names, module.endpoint_names.invalid_names))}. Change the type's template in naming.templates."
+  }
+}

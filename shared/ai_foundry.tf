@@ -5,12 +5,12 @@
 resource "azurerm_cognitive_account" "agents" {
   count = var.ai_foundry == null ? 0 : 1
 
-  name                  = var.ai_foundry.name
+  name                  = local.names.ai_services
   location              = var.ai_foundry.location
   resource_group_name   = local.resource_group_name
   kind                  = "AIServices"
   sku_name              = "S0"
-  custom_subdomain_name = var.ai_foundry.name
+  custom_subdomain_name = local.names.ai_services
   # Entra ID only: no keys to leak. Reached through its private endpoint (private_endpoints.tf) - the agent
   # workflows join the labfw VPN - and, while private_endpoints.public_network_access allows, its public one.
   local_auth_enabled            = false
@@ -96,5 +96,5 @@ resource "azurerm_cognitive_deployment" "agents_openai" {
 import {
   for_each = var.ai_foundry == null ? {} : { for name, d in var.ai_foundry.openai_deployments : name => d if d.import }
   to       = azurerm_cognitive_deployment.agents_openai[each.key]
-  id       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}/providers/Microsoft.CognitiveServices/accounts/${var.ai_foundry.name}/deployments/${each.key}"
+  id       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}/providers/Microsoft.CognitiveServices/accounts/${local.names.ai_services}/deployments/${each.key}"
 }

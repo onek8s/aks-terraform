@@ -224,6 +224,31 @@ jobs:
           echo "::error::${TF_STACK} holds what every cluster shares; it is not destroyed from this workflow." >&2
           exit 1
 
+      # The estate's naming policy (README, "Naming policy"): the `dev` environment's secret NAMING_POLICY -
+      # a JSON object {"templates": {...}, "location_codes": {...}} - as a variables file Terraform reads by
+      # itself, for every stack alike. Without it the policy's defaults name everything: the lab's names.
+      # The templates' fixed parts are masked first, so the plan in this public repository's log does not
+      # publish the convention (the names are only kept out of sight, not secret).
+      - name: Naming policy
+        env:
+          NAMING_POLICY: ${{ secrets.NAMING_POLICY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NAMING_POLICY" ]; then
+            echo "No NAMING_POLICY: the naming policy's defaults name everything."
+            exit 0
+          fi
+          if ! jq -e 'type == "object"' <<<"$NAMING_POLICY" >/dev/null 2>&1; then
+            echo "::error::NAMING_POLICY is not a JSON object" >&2
+            exit 1
+          fi
+          # Each fixed part of each template with three letters or digits or more, also as a registry name
+          # (letters and digits only).
+          jq -r '(.templates // {})[] | gsub("\\{[a-z_]+\\}"; "\n") | split("\n")[] | (., gsub("[^A-Za-z0-9]"; "")) | select(gsub("[^A-Za-z0-9]"; "") | length >= 3)' \
+            <<<"$NAMING_POLICY" | sort -u | while read -r part; do echo "::add-mask::$part"; done
+          jq '{naming: .}' <<<"$NAMING_POLICY" > naming.auto.tfvars.json
+          echo "The naming policy of NAMING_POLICY applies (naming.auto.tfvars.json)."
+
       - name: Initialize
         run: |
           set -euo pipefail

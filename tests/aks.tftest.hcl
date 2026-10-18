@@ -193,6 +193,54 @@ run "the_region_follows_the_location" {
   }
 }
 
+# The estate's naming policy (modules/conventions) names the cluster's own resources; the defaults
+# above are the lab's.
+run "the_naming_policy_names_the_identity_and_the_disk_encryption_set" {
+  command = plan
+
+  variables {
+    name = "aks-prototype-a"
+    naming = {
+      location_codes = { swedencentral = "se1" }
+      templates = {
+        user_assigned_identity = "mi-{location_code}-{environment}-{name}"
+        disk_encryption_set    = "des-{location_code}-{environment}-{name}"
+      }
+    }
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this[0].name == "mi-se1-prototype-aks-a" && output.names.disk_encryption_set == "des-se1-prototype-aks-prototype-a"
+    error_message = "The policy's templates and region codes should name the cluster's identity and disk encryption set."
+  }
+}
+
+# A naming policy may name clusters without the environment in the second segment: then the
+# environment is stated, and the whole cluster name is the identity's `{name}`.
+run "an_environment_stated_apart_from_the_cluster_name" {
+  command = plan
+
+  variables {
+    name        = "k8s-weu-p-01"
+    environment = "prd"
+  }
+
+  assert {
+    condition     = azurerm_user_assigned_identity.this[0].name == "id-sec-prd-k8s-weu-p-01"
+    error_message = "A stated environment goes into the names; the cluster name stays whole."
+  }
+}
+
+run "refuses_a_naming_policy_with_an_unknown_placeholder" {
+  command = plan
+
+  variables {
+    naming = { templates = { traffic_manager_profile = "tm-{region}" } }
+  }
+
+  expect_failures = [output.names]
+}
+
 # Guessing a code for an unknown region would put an off-convention name on a real identity.
 run "refuses_a_region_with_no_short_code" {
   command = plan
@@ -201,7 +249,7 @@ run "refuses_a_region_with_no_short_code" {
     location = "moonbase1"
   }
 
-  expect_failures = [azurerm_user_assigned_identity.this]
+  expect_failures = [output.names]
 }
 
 run "wider_scope_grants_the_virtual_network_instead" {

@@ -3,9 +3,9 @@
 # Kubernetes audit logs, which each cluster sends here through a diagnostic setting (its
 # log_analytics_workspace_name). CIS AKS Benchmark 2.1.1. See log_analytics_workspace_name.
 resource "azurerm_log_analytics_workspace" "platform" {
-  count = var.log_analytics_workspace_name == null ? 0 : 1
+  count = local.names.log_analytics_workspace == null ? 0 : 1
 
-  name                = var.log_analytics_workspace_name
+  name                = local.names.log_analytics_workspace
   location            = var.location
   resource_group_name = local.resource_group_name
   sku                 = "PerGB2018"

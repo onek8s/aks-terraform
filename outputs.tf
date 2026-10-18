@@ -89,3 +89,22 @@ output "resource_id" {
   description = "Resource ID of the AKS cluster."
   value       = module.aks.resource_id
 }
+
+output "names" {
+  description = "The names this cluster took from the naming policy (var.naming): its identity and its disk encryption set."
+  value       = module.conventions.names
+
+  # The policy and its names are checked here, where a test can expect the failure.
+  precondition {
+    condition     = length(module.conventions.policy_errors) == 0
+    error_message = "The naming policy (var.naming) is not one this configuration can use: ${join("; ", module.conventions.policy_errors)}. Its resource types and placeholders are listed in modules/conventions/variables.tf."
+  }
+  precondition {
+    condition     = length(module.conventions.names_without_location_code) == 0
+    error_message = "No short code is known for ${var.location}, and the naming policy needs one for: ${join(", ", module.conventions.names_without_location_code)}. Add it to naming.location_codes, or to local.location_codes in modules/conventions/main.tf."
+  }
+  precondition {
+    condition     = length(module.conventions.invalid_names) == 0
+    error_message = "The naming policy makes names Azure refuses: ${join(", ", module.conventions.invalid_names)}. Change the type's template in naming.templates."
+  }
+}
