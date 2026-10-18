@@ -299,6 +299,16 @@ jobs:
           az vm get-instance-view --ids "$FIREWALL_VM_ID" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv
           echo "labfw: deallocated (the VPN and the cells' egress are off until the next start)" >> "$GITHUB_STEP_SUMMARY"
 
+      # Starting the clusters outlasts the GitHub OIDC assertion of the first sign-in (valid about 5 minutes): kubelogin's
+      # first token for a cluster then fails with AADSTS700024 (run 39105646964, 2026-10-18). Sign in again first.
+      - name: Sign in to Azure again (GitHub OIDC)
+        if: inputs.action == 'start' && inputs.clusters != '' && env.AZURE_CLIENT_SECRET == ''
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: NAP on and Flux resumed
         if: inputs.action == 'start' && inputs.clusters != ''
         run: |
