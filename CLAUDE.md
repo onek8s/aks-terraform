@@ -61,6 +61,23 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): code done, NOT applied.**
+  Until now `rt-<cell>` (0.0.0.0/0 -> firewall) sat on the system and every zone's node subnet, and traffic between
+  the slots of one cell took the VNet's own system route (more specific than /0), so the firewall never saw it and
+  only NSG + Cilium separated the zones - against what R5, section 2.4 and the isolation tests claimed. Now
+  (shared/cells.tf) the system subnet keeps `rt-<cell>` with the default route alone, and every enabled zone's node
+  subnet gets `rt-<cell>-<zone>` (naming type `route_table`, `{name}` = `<cell>-<zone>`): the default route plus a route
+  per OTHER zone slot 1-14 (occupied or free, named `<zone>-via-hub-firewall` or `slot-<n>-via-hub-firewall`) to
+  `hub.next_hop_ip`; never the zone's own slot (Azure applies a UDR to intra-subnet traffic too), never slot 0 (the
+  system pool: kubelet tunnel, metrics-server, API server PE stay direct) or slot 15. The root module grants the cluster
+  identity Network Contributor on each zone's table (`route_table_<zone>` scopes, locals.tf). Apply: the node subnets'
+  associations move to the new tables (replace: a few seconds without a route table on the zone subnet - do it
+  while the lab is quiet). Expected after apply: `int-fi` nodes/pods -> another zone's slot (az2 has only int-fi, so
+  test with az3's int-se slot inside az3, or a second zone) denied and logged by labfw; cilium-health between zones
+  fails (optional flow, design 2.4 ⑦). Overlay pods (100.201.0.0/16) are routed by Azure's overlay domain, not by UDRs:
+  cross-zone pod-to-pod in an overlay cell stays Cilium's alone; in az3 (`pod_network = "subnet"`) the pods carry the
+  zone's addresses and the firewall sees them. Verify = design V31; azure-landing-zone needs no rule (default deny), but
+  labfw must forward hairpinned traffic back into the same spoke - check its forward chain.
 - **Naming policy (2026-10-18, design D72, the user's ask): built and verified** - Deploy plans of dev-shared, az2 and az3
   on 2026-10-18 changed no infrastructure (only the new `names` outputs; az3's one add is the pending Dapr trial). `modules/conventions` `naming` (both
   stacks' variable `naming`): a template per resource type (`resource_group`, `key_vault`, `container_registry`,
@@ -216,9 +233,10 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `dev-int-stateless-az1|az2`, `dev-int-stateful`; the `dev-ext-*` tfvars are gone (fleet keeps its `clusters/dev-ext-*`).
 - **Network: azure-landing-zone mode `labfw` = firewall mode with labfw** (VM `labfw-fw`, Standard_B2ats_v2, 10.0.1.4,
   public IP 4.184.103.12, `rg-hub-labfw-germanywestcentral` in sub-hub; enforces `afwp-hub-int-germanywestcentral` + parent).
-  shared/ `hub`: cells peered with `vnet-hub-germanywestcentral`, route table `rt-<cell>` 0.0.0.0/0 -> 10.0.1.4 on the node
-  subnets, VNet DNS = labfw's DNS proxy, internal private DNS (`int-fi.dev.onek8s.lol`) also linked to the hub. Clusters
-  `outbound_type = "userDefinedRouting"`; the cluster identity gets Network Contributor on the route table. Cell egress
+  shared/ `hub`: cells peered with `vnet-hub-germanywestcentral`, route table `rt-<cell>` 0.0.0.0/0 -> 10.0.1.4 on the system
+  subnet and `rt-<cell>-<zone>` (0.0.0.0/0 + the other zones' slots -> 10.0.1.4, D73, not applied yet) on each zone's node
+  subnet, VNet DNS = labfw's DNS proxy, internal private DNS (`int-fi.dev.onek8s.lol`) also linked to the hub. Clusters
+  `outbound_type = "userDefinedRouting"`; the cluster identity gets Network Contributor on the route tables. Cell egress
   allow-lists: parent `rcg-platform` (AKS FQDN tag, `AzureCloud.germanywc` 443 - service tags use the short region name,
   `service_tag_region`; the long one matched nothing and labfw sent the no-SNI API server traffic to its app proxy, which denied it -
   `platform_source_fqdns` = chart/image sources) + child `rcg-aks-dev` (vaults, ACR, Grafana, zone lists). A denied

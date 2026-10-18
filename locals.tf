@@ -650,6 +650,12 @@ locals {
     # The node subnet's route table - a cell routed through the hub's firewall (`userDefinedRouting`):
     # AKS reads and joins it, and the table is a resource of its own, outside the network's scope.
     startswith(lower(try(data.azurerm_subnet.node[0].route_table_id, "")), "/subscriptions/") ? { route_table = data.azurerm_subnet.node[0].route_table_id } : {},
+    # The zones' route tables, for the same reason: a zone's node subnet has a table of its own, with
+    # the other zones' slots routed to the hub's firewall (design D73). A zone whose subnet shares the
+    # node subnet's table is covered above.
+    { for zone, subnet in data.azurerm_subnet.zone : "route_table_${zone}" => subnet.route_table_id
+      if startswith(lower(try(subnet.route_table_id, "")), "/subscriptions/") && lower(try(subnet.route_table_id, "")) != lower(try(data.azurerm_subnet.node[0].route_table_id, ""))
+    },
   )
   network_role_assignment_subnet_scopes = merge(
     { node_subnet = one(data.azurerm_subnet.node[*].id) },
