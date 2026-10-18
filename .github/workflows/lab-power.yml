@@ -198,8 +198,13 @@ jobs:
           set -euo pipefail
           source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
-            echo "== $cluster: $(power_state "$cluster")"
-            az aks start -g "$RESOURCE_GROUP" -n "$cluster" --no-wait
+            state="$(power_state "$cluster")"
+            echo "== $cluster: $state"
+            # A re-run skips a cluster already started: Azure refuses a start of a running cluster
+            case "$state" in
+              Stopped*) az aks start -g "$RESOURCE_GROUP" -n "$cluster" --no-wait ;;
+              *) echo "$cluster: not stopped, not started" ;;
+            esac
           done
           for cluster in $CLUSTERS; do wait_cluster "$cluster" Running; done
 
