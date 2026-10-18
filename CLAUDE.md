@@ -61,6 +61,15 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): not yet in the lab.** aks-fluxcd-example's aks-hello Service
+  carries `appProtocol: kubernetes.io/h2c` (merged, #37; reaches az2/az3 at the next Lab power start). aks-hello **0.5.1**
+  (#15, merge commit b3b282ca272b3554fc39c90479bc76d9bc688543) reports `protocol` in `/status`. Steps when the lab is back:
+  (1) `shared/envs/dev.tfvars` `container_registry_builds` entry `"aks-hello:0.5.1"` with that commit, Deploy `dev-shared`
+  apply (builds and signs it); (2) aks-fluxcd-example overlays `newTag: 0.5.1`; (3) Cluster status `route_path: /status` on az2
+  (Traefik) - expected `"protocol":"HTTP/2"` (V28); if `HTTP/1.1`, Traefik ignored the standard value - try `appProtocol: http2`
+  or report it; a 503 means the pod did not speak h2c. (4) azure-landing-zone: write the `h2c-upstream` policy (every Service
+  port an HTTPRoute references declares `appProtocol: kubernetes.io/h2c`; audit first - boot-log's busybox httpd is the known
+  finding) and the fleet's CI check. The kubelet's httpGet probes stay HTTP/1.1 until 1.38 (`protocol: HTTP2`, KEP-5999).
 - **Dapr trial on az3 (2026-10-17, design D65 proposed: Dapr is NOT a platform feature)**: `dapr = { high_availability = false }`
   in `envs/dev-int-stateless-az3.tfvars` (dapr.tf: AKS extension `microsoft.dapr` into `dapr-system` on the system pool, placement
   and scheduler in memory, sidecars PSS restricted). **Not deployed** (the user's ask): when the lab is back, first merge
