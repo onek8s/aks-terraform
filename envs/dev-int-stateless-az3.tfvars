@@ -76,10 +76,10 @@ default_node_pool = {
   ssh_access          = "Disabled"
   node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
   # No overlay (network_profile below): the system pool's pods take addresses of snet-system-pods (100.64.0.0/20),
-  # handed to the node in batches of 16 as it needs them (dynamic IP allocation). 110 pods a node, as in the
-  # overlay cells.
+  # handed to the node in batches of 16 as it needs them (dynamic IP allocation), so a high limit reserves nothing.
+  # 250 pods a node, the overlay cells' AKS default and the most AKS allows; it cannot change on a running pool.
   pod_subnet_name = "snet-system-pods"
-  max_pods        = 110
+  max_pods        = 250
 }
 
 # ---------------------------------------------------------------------------------------------------

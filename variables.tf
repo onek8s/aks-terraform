@@ -1909,7 +1909,7 @@ variable "zone_node_pools" {
     arm64_vm_size   = optional(string, "Standard_D2pds_v6")
     max_count       = optional(number, 3)
     spot_max_count  = optional(number, 1)
-    max_pods        = optional(number, 110)
+    max_pods        = optional(number, 250)
     os_disk_type    = optional(string, "Ephemeral")
     os_disk_size_gb = optional(number, 64)
   })
@@ -1923,7 +1923,8 @@ capacity type and architecture: `<zone>` (on-demand amd64), `<zone>spot`, `<zone
 for the spot pools) nodes in the system pool's availability zone, in the zone's node subnet with its
 pods in the zone's pod subnet (isolation_zones), labelled and tainted `platform/zone=<zone>` - what
 the zone's NodePools say under NAP; the spot pools also `platform/capacity=spot` (and AKS's own
-`kubernetes.azure.com/scalesetpriority=spot`). Same OS, encryption at host and SSH setting as the
+`kubernetes.azure.com/scalesetpriority=spot`). `max_pods` 250 by default (dynamic IP allocation hands a node its
+pod addresses in batches of 16, so the limit reserves nothing). Same OS, encryption at host and SSH setting as the
 system pool; the sizes support VNet encryption. The cluster autoscaler takes the priority expander:
 the Flux repository's `cluster-autoscaler-priority-expander` ConfigMap puts the spot pools first, so a
 pod that tolerates spot gets a spot node and an on-demand one when Azure has none.

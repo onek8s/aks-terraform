@@ -216,7 +216,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - **az3, the firewall-egress cell (2026-10-15, design D59 - NOT decided, both models under test, H15)**:
   `aks-dev-int-stateless-az3`, zone 3, **Sweden's int-se only** (int-se enabled in shared/; az2 keeps int-fi). No overlay:
   `network_profile.network_plugin_mode = "none"` - since 2026-10-18 Azure CNI Pod Subnet (D74, see the pod-subnet bullet
-  above; it was Azure CNI node subnet with NAP until then), system pool `max_pods = 110`. Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
+  above; it was Azure CNI node subnet with NAP until then), every pool `max_pods = 250` (110 until 2026-10-18 - wrong: az2 runs AKS's overlay default of 250; dynamic allocation reserves nothing). Pods keep their addresses to labfw: the fleet's `pod-addresses-to-firewall` sets AKS's
   `azure-ip-masq-agent-config` to translate nothing; `infrastructure/zones/firewall-egress` lets int-se's apps out to `world`.
   labfw decides from azure-landing-zone `firewall-applications/<env>-<exposure>/<namespace>.yaml` (zone IP group as source),
   SNATs everything leaving 10.0.0.0/16, 10.100.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10. aks-hello 0.5.0 in int-se-example
