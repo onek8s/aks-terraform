@@ -5,7 +5,15 @@ module "conventions" {
 
   location             = var.location
   environment          = local.environment
+  exposure             = var.exposure
+  naming               = var.naming
   key_vault_namespaces = local.key_vault_namespaces
+  # The cluster's own resources' names (naming policy, var.naming): its identity - the cluster's name
+  # without the environment, which the template puts back where it wants it - and its disk encryption set.
+  names = {
+    identity            = { type = "user_assigned_identity", name = local.identity_name_part }
+    disk_encryption_set = { type = "disk_encryption_set", name = var.name }
+  }
 }
 
 data "azurerm_resource_group" "this" {
@@ -113,11 +121,6 @@ resource "azurerm_user_assigned_identity" "this" {
   # the network it is attached to. The two names differ, so nothing collides while both exist.
   lifecycle {
     create_before_destroy = true
-
-    precondition {
-      condition     = local.location_code != ""
-      error_message = "No short code is known for ${var.location}, so the identity of ${var.name} cannot be named. Add it to local.location_codes in modules/conventions/main.tf."
-    }
   }
 }
 

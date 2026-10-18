@@ -17,13 +17,13 @@ data "azurerm_client_config" "current" {}
 resource "azurerm_resource_group" "this" {
   count = var.resource_group_create ? 1 : 0
 
-  name     = var.resource_group_name
+  name     = local.names.resource_group
   location = var.location
 }
 
 # The resource group, whichever way it came to be: the resources below wait for it this way.
 locals {
-  resource_group_name = var.resource_group_create ? azurerm_resource_group.this[0].name : var.resource_group_name
+  resource_group_name = var.resource_group_create ? azurerm_resource_group.this[0].name : local.names.resource_group
 }
 
 # The clusters' network, with virtual_network_create: one virtual network, and the subnets the
@@ -60,7 +60,43 @@ module "conventions" {
 
   location             = var.location
   environment          = var.environment
+  exposure             = var.exposure
+  naming               = var.naming
   key_vault_namespaces = toset(keys(var.key_vault_namespaces))
+  names                = local.name_requests
+}
+
+# The names of what this configuration creates, from the naming policy (var.naming, see
+# modules/conventions) - a variable that names a resource itself wins. A cell's network, NSGs and
+# route table take the cell's key (`dev-int-stateless-az2`) as their `{name}`, a zone's vault the zone.
+locals {
+  name_requests = merge(
+    # Only the names no variable gives: a resource named in its variable needs nothing of the policy.
+    var.resource_group_name != null ? {} : { resource_group = { type = "resource_group" } },
+    var.key_vault_name != null ? {} : { key_vault = { type = "key_vault", name = "platform" } },
+    var.container_registry_name != null || !var.container_registry_create ? {} : { container_registry = { type = "container_registry" } },
+    var.log_analytics_workspace_name != null || !var.log_analytics_workspace_create ? {} : { log_analytics_workspace = { type = "log_analytics_workspace", name = "platform" } },
+    try(var.ai_foundry.name, "-") != null ? {} : { ai_services = { type = "ai_services", name = "agents" } },
+    var.monthly_budget == null ? {} : { consumption_budget = { type = "consumption_budget" } },
+    { for zone in keys(local.isolation_zones) : "zone_key_vault/${zone}" => { type = "key_vault", name = zone } if !contains(keys(var.zone_key_vault_names), zone) },
+    { for cell in keys(local.cells) : "virtual_network/${cell}" => { type = "virtual_network", name = cell } },
+    { for cell in keys(local.cells) : "route_table/${cell}" => { type = "route_table", name = cell } if var.hub != null },
+    { for key, subnet in local.cell_subnets : "network_security_group/${key}" => { type = "network_security_group", name = "${subnet.cell}-${trimprefix(subnet.name, "snet-")}" } },
+    { for name in keys(local.global_hostnames) : "traffic_manager_profile/${name}" => { type = "traffic_manager_profile", name = replace(name, ".", "-"), domain = coalesce(var.dns_zone_name, "-") } },
+  )
+
+  names = merge(module.conventions.names, {
+    resource_group          = coalesce(var.resource_group_name, try(module.conventions.names.resource_group, null))
+    key_vault               = coalesce(var.key_vault_name, try(module.conventions.names.key_vault, null))
+    container_registry      = var.container_registry_name != null ? var.container_registry_name : try(module.conventions.names.container_registry, null)
+    log_analytics_workspace = var.log_analytics_workspace_name != null ? var.log_analytics_workspace_name : try(module.conventions.names.log_analytics_workspace, null)
+    ai_services             = var.ai_foundry == null ? null : coalesce(var.ai_foundry.name, try(module.conventions.names.ai_services, null))
+  })
+
+  # Every enabled isolation zone's vault: its name in zone_key_vault_names, or the policy's.
+  zone_key_vault_names = {
+    for zone in keys(local.isolation_zones) : zone => lookup(var.zone_key_vault_names, zone, try(local.names["zone_key_vault/${zone}"], null))
+  }
 }
 
 locals {
@@ -109,7 +145,7 @@ locals {
 # zone's vault below.
 resource "azurerm_key_vault" "this" {
   location                   = var.location
-  name                       = var.key_vault_name
+  name                       = local.names.key_vault
   resource_group_name        = local.resource_group_name
   sku_name                   = "standard"
   tenant_id                  = data.azurerm_client_config.current.tenant_id
@@ -131,7 +167,7 @@ resource "azurerm_key_vault" "this" {
 # application reading only its own under an ABAC condition, as below. Nothing of one zone is in
 # another zone's vault.
 resource "azurerm_key_vault" "zone" {
-  for_each = var.zone_key_vault_names
+  for_each = local.zone_key_vault_names
 
   location                   = var.location
   name                       = each.value
@@ -169,13 +205,6 @@ resource "azurerm_user_assigned_identity" "key_vault" {
   location            = var.location
   name                = module.conventions.shared_key_vault_identity_names[each.key]
   resource_group_name = local.resource_group_name
-
-  lifecycle {
-    precondition {
-      condition     = module.conventions.location_code != ""
-      error_message = "No short code is known for ${var.location}, so the shared identities cannot be named. Add it to local.location_codes in modules/conventions/main.tf."
-    }
-  }
 }
 
 # Reading the namespace's own secrets, by name. Listing the vault is refused - see the README, "Key
@@ -340,14 +369,14 @@ data "azurerm_dns_zone" "this" {
   count = var.dns_zone_name != null && !var.dns_zone_create && !var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
-  resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+  resource_group_name = coalesce(var.dns_zone_resource_group_name, local.names.resource_group)
 }
 
 data "azurerm_private_dns_zone" "this" {
   count = var.dns_zone_name != null && !var.dns_zone_create && var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
-  resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
+  resource_group_name = coalesce(var.dns_zone_resource_group_name, local.names.resource_group)
 }
 
 locals {
@@ -371,8 +400,6 @@ locals {
     for name, hostname in var.global_hostnames : name => hostname
     if hostname.zone == null || try(local.isolation_zones[hostname.zone].exposure == "ext", false)
   }
-  # Traffic Manager names are global: the zone and the environment make them unique.
-  traffic_manager_prefix = "${replace(coalesce(var.dns_zone_name, "-"), ".", "-")}-${var.environment}"
   global_hostname_endpoints = merge([
     for name, hostname in local.global_hostnames : {
       for endpoint in hostname.endpoints : "${name}/${endpoint}" => { name = name, target = endpoint }
@@ -390,13 +417,14 @@ check "global_hostnames_need_a_public_zone" {
 resource "azurerm_traffic_manager_profile" "global" {
   for_each = local.global_hostnames
 
-  # A hostname below the zone may have dots in it (`hello.ext-fi.dev`); a profile's name may not.
-  name                   = "${local.traffic_manager_prefix}-${replace(each.key, ".", "-")}"
+  # Traffic Manager names are global (the DNS label below): the policy's `traffic_manager_profile`,
+  # by default the zone, the environment and the hostname - whose dots a profile's name may not have.
+  name                   = local.names["traffic_manager_profile/${each.key}"]
   resource_group_name    = local.resource_group_name
   traffic_routing_method = "Weighted"
 
   dns_config {
-    relative_name = "${local.traffic_manager_prefix}-${replace(each.key, ".", "-")}"
+    relative_name = local.names["traffic_manager_profile/${each.key}"]
     ttl           = each.value.ttl
   }
 

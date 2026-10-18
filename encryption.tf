@@ -43,7 +43,7 @@ resource "azurerm_key_vault_key" "cluster" {
 resource "azurerm_disk_encryption_set" "this" {
   count = var.customer_managed_keys == null ? 0 : 1
 
-  name                      = "des-${var.name}"
+  name                      = module.conventions.names.disk_encryption_set
   location                  = var.location
   resource_group_name       = var.resource_group_name
   key_vault_key_id          = azurerm_key_vault_key.cluster["disk"].versionless_id

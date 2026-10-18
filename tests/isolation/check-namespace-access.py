@@ -258,6 +258,12 @@ def unquoted(value):
     return value.strip('"') if isinstance(value, str) else value
 
 
+def resource_group(shared_tfvars, tfvars):
+    """The environment's resource group: shared/'s resource_group_name, or - when the naming policy names
+    it there - the cell's, which is the same group (the clusters live beside what they share)."""
+    return unquoted(parse(shared_tfvars).get("resource_group_name")) or unquoted(parse(tfvars).get("resource_group_name"))
+
+
 def shared_groups(shared_tfvars):
     """managed namespace -> {role: group} as shared/ grants them on the vault."""
     shares = parse(shared_tfvars).get("key_vault_namespaces", {})
@@ -392,7 +398,7 @@ def check_vault_tester(namespace, role, client_id, tenant, vault, other):
         result("PASS", f"{label}: {what}")
 
 
-def check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults):
+def check_platform_viewers(shared_tfvars, tfvars, testers, tenant, workdir, vaults):
     """The platform viewers: the custom role at the resource group, and signed in as the tester -
     namespaces and secret names listed, nothing inside a namespace, no secret value, no write."""
     parsed = parse(shared_tfvars)
@@ -400,7 +406,7 @@ def check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults):
     if not groups:
         result("AUDIT", "platform viewers", "shared/ names no platform_viewer_group_object_ids")
         return
-    group = unquoted(parsed.get("resource_group_name"))
+    group = resource_group(shared_tfvars, tfvars)
     try:
         subscription = az("account", "show")["id"]
         scope = f"/subscriptions/{subscription}/resourceGroups/{group}"
@@ -481,7 +487,7 @@ def main():
         in_shared = shared_groups(shared_tfvars)
         parsed = parse(shared_tfvars)
         editor = (unquoted(parsed.get("key_vault_secrets_editor_role_name"))
-                  or f"OneK8s Key Vault Secrets Editor ({unquoted(parsed.get('resource_group_name'))})")
+                  or f"OneK8s Key Vault Secrets Editor ({resource_group(shared_tfvars, tfvars)})")
         for namespace, roles in groups.items():
             if not roles:
                 continue
@@ -508,7 +514,7 @@ def main():
                     result("AUDIT", f"{namespace}: signed in as a member of the {role} group",
                            f"no tester in {os.path.basename(testers_file)}; checked by impersonation only")
         if shared_tfvars:
-            check_platform_viewers(shared_tfvars, testers, tenant, workdir, vaults)
+            check_platform_viewers(shared_tfvars, tfvars, testers, tenant, workdir, vaults)
     return 1 if failed else 0
 
 

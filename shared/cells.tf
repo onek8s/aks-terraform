@@ -154,7 +154,7 @@ locals {
 resource "azurerm_virtual_network" "cell" {
   for_each = local.cells
 
-  name                = "vnet-${each.key}"
+  name                = local.names["virtual_network/${each.key}"]
   location            = var.location
   resource_group_name = local.resource_group_name
   address_space       = [each.value.address_space]
@@ -171,7 +171,7 @@ resource "azurerm_virtual_network" "cell" {
 resource "azurerm_network_security_group" "cell" {
   for_each = local.cell_subnets
 
-  name                = "nsg-${each.value.cell}-${trimprefix(each.value.name, "snet-")}"
+  name                = local.names["network_security_group/${each.key}"]
   location            = var.location
   resource_group_name = local.resource_group_name
 }
@@ -259,7 +259,7 @@ locals {
 resource "azurerm_route_table" "cell" {
   for_each = var.hub == null ? {} : local.cells
 
-  name                          = "rt-${each.key}"
+  name                          = local.names["route_table/${each.key}"]
   location                      = var.location
   resource_group_name           = local.resource_group_name
   bgp_route_propagation_enabled = false

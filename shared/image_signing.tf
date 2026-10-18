@@ -60,17 +60,10 @@ resource "azurerm_user_assigned_identity" "image_verification" {
   location            = var.location
   name                = module.conventions.image_verification_identity_name
   resource_group_name = local.resource_group_name
-
-  lifecycle {
-    precondition {
-      condition     = module.conventions.location_code != ""
-      error_message = "No short code is known for ${var.location}, so the shared identities cannot be named. Add it to local.location_codes in modules/conventions/main.tf."
-    }
-  }
 }
 
 locals {
-  image_verification_grants = var.image_signing == null || var.container_registry_name == null || !var.create_role_assignments ? {} : {
+  image_verification_grants = var.image_signing == null || local.names.container_registry == null || !var.create_role_assignments ? {} : {
     # The images' signatures, which are artifacts in the registry next to the images.
     registry = { scope = azurerm_container_registry.this[0].id, role = "AcrPull" }
     # The signing certificate, through its secret - only that one.

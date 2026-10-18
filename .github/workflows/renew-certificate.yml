@@ -34,7 +34,7 @@ name: Renew Certificate
 #
 # The vault, the DNS zone and their resource groups are not configuration here: they are read out of
 # the variables file that names them - for `dev`, the environment's shared resources in
-# shared/envs/dev.tfvars (key_vault_name: the platform vault).
+# shared/envs/dev.tfvars (the platform vault: key_vault_name, or the naming policy's name for it).
 #
 # Key Vault is also the only state this workflow keeps. Nothing is carried between runs on disk: the
 # certificate already in the vault decides whether a renewal is due, and the ACME account key sits
@@ -167,11 +167,21 @@ jobs:
             exit 1
           fi
 
+      # For the names the variables file leaves to the naming policy (scripts/policy-name.sh).
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.4"
+          terraform_wrapper: false
+
       # The vault and the zone are the ones the environment's variables file names - the ones
       # Terraform created, and the ones the cluster reads from and external-dns writes to. Read with
       # sed rather than Terraform: the values are plain strings, and the state is not needed for them.
+      # A name the file leaves to the naming policy comes from the policy (its defaults, or the
+      # environment's secret NAMING_POLICY), worked out the way Terraform does.
       - name: Resolve the environment
         id: env
+        env:
+          NAMING_POLICY: ${{ secrets.NAMING_POLICY }}
         run: |
           set -euo pipefail
           file="envs/${TF_ENV}.tfvars"
@@ -181,9 +191,11 @@ jobs:
             sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$file" | head -n 1
           }
           vault="$(tfvar key_vault_name)"
+          [ -n "$vault" ] || [ "$file" != "shared/envs/dev.tfvars" ] || vault="$(scripts/policy-name.sh "$file" key_vault platform)"
           zone="$(tfvar dns_zone_name)"
           zone_rg="$(tfvar dns_zone_resource_group_name)"
           [ -n "$zone_rg" ] || zone_rg="$(tfvar resource_group_name)"
+          [ -n "$zone_rg" ] || [ "$file" != "shared/envs/dev.tfvars" ] || zone_rg="$(scripts/policy-name.sh "$file" resource_group)"
           if [ -z "$vault" ]; then
             echo "::error::$file sets no key_vault_name; the cluster has no Key Vault to put the certificate in" >&2
             exit 1

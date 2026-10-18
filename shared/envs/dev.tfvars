@@ -17,7 +17,11 @@ environment = "dev"
 exposure    = "int"
 location    = "germanywestcentral"
 
-resource_group_name   = "rg-aks-dev"
+# Names come from the naming policy (variable `naming`, modules/conventions): its defaults are the lab's
+# names - rg-aks-dev, kv-onek8s-gwc-platform and kv-onek8s-gwc-<zone>, acronek8sdev, log-dev-platform,
+# ais-onek8s-dev-agents, vnet-/nsg-/rt-<cell>, id-gwc-dev-shared-* - so nothing here names them. A real
+# estate passes its own policy from outside the repository (README, "Naming policy"); a variable that
+# names a resource itself still wins.
 resource_group_create = true
 
 # The stateful cluster's network (envs/dev-int-stateful.tfvars, defined but not deployed). Azure CNI
@@ -91,28 +95,27 @@ hub = {
 internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
 
-# The environment's platform Key Vault (OneK8s design sections 4.1 and 4.2), which the clusters name
-# in key_vault_name with key_vault_create = false: the gateways' certificates, the clusters'
-# customer-managed keys (so purge protection - a disk encryption set needs it) and the Flux webhook
-# token. Key Vault names are global; pick another if this one is taken. kv-onek8s-gwc-* since the
-# move to germanywestcentral: kv-onek8s-dev-platform is soft-deleted with purge protection in
-# swedencentral (until 2027-01) and cannot be recovered into another region.
-key_vault_name                     = "kv-onek8s-gwc-platform"
+# The environment's platform Key Vault (OneK8s design sections 4.1 and 4.2), kv-onek8s-gwc-platform by
+# the naming policy, which the clusters name in key_vault_name with key_vault_create = false: the
+# gateways' certificates, the clusters' customer-managed keys (so purge protection - a disk encryption
+# set needs it) and the Flux webhook token. Key Vault names are global; name it in key_vault_name if
+# this one is taken. kv-onek8s-gwc-* since the move to germanywestcentral: kv-onek8s-dev-platform is
+# soft-deleted with purge protection in swedencentral (until 2027-01) and cannot be recovered into
+# another region.
 key_vault_purge_protection_enabled = true
 
-# One vault per isolation zone, for the secrets of the zone's applications (design section 2.5).
-zone_key_vault_names = {
-  int-fi = "kv-onek8s-gwc-int-fi"
-  int-se = "kv-onek8s-gwc-int-se"
-}
+# One vault per enabled isolation zone, for the secrets of the zone's applications (design section
+# 2.5): kv-onek8s-gwc-int-fi and kv-onek8s-gwc-int-se by the naming policy (zone_key_vault_names would
+# name one otherwise).
 
-# The environment's Log Analytics workspace (design section 6.2): every cluster's Kubernetes audit log
-# (CIS AKS Benchmark 2.1.1), 30 days, at most 1 GB a day.
-log_analytics_workspace_name = "log-dev-platform"
+# The environment's Log Analytics workspace (design section 6.2), log-dev-platform by the naming policy:
+# every cluster's Kubernetes audit log (CIS AKS Benchmark 2.1.1), 30 days, at most 1 GB a day.
+log_analytics_workspace_create = true
 
-# The environment's container registry, which every cluster pulls from as its kubelet identity. Not
-# part of the landing zone. Registry names are global; pick another if this one is taken.
-container_registry_name = "acronek8sdev"
+# The environment's container registry, acronek8sdev by the naming policy, which every cluster pulls from
+# as its kubelet identity. Not part of the landing zone. Registry names are global; name it in
+# container_registry_name if this one is taken.
+container_registry_create = true
 # Basic, on its public endpoint with Entra ID only (the default below prd, design D62, 2026-10-16): a
 # private endpoint needs Premium, about 1.7 USD a day against Basic's 0.2 - prd's registry alone is
 # Premium and private. The hub firewall lets the cells reach the public endpoint and its storage
@@ -240,8 +243,8 @@ monthly_budget = {
 # country and industry go to Anthropic with every request (the user's choice, 2026-10-15).
 # Not deployed yet: sub-aks-dev has 0 Foundry quota (Tokens Per Minute) for every Claude model in swedencentral
 # (InsufficientQuota, 2026-10-15) - a quota request in the Azure portal (Foundry > Quotas) first, then deploy = true.
+# ais-onek8s-dev-agents by the naming policy (also its custom subdomain, so global).
 ai_foundry = {
-  name     = "ais-onek8s-dev-agents"
   location = "swedencentral"
   deploy   = false
   # The agents' model meanwhile (the user's choice, 2026-10-15): created in the portal, imported here

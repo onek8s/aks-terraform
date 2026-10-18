@@ -20,6 +20,41 @@ variable "name" {
   }
 }
 
+variable "environment" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+The environment the cluster belongs to (`dev`), for the names of the environment's shared resources
+it looks up and of its own (naming). Null: the second segment of the cluster's name -
+`aks-<environment>-<which one>` - or the whole name if it has one segment. State it when the naming
+policy names clusters some other way.
+DESCRIPTION
+
+  validation {
+    condition     = var.environment == null || can(regex("^[a-z0-9]+$", coalesce(var.environment, "-")))
+    error_message = "environment must be lowercase letters and digits."
+  }
+}
+
+variable "naming" {
+  type = object({
+    templates      = optional(map(string), {})
+    location_codes = optional(map(string), {})
+  })
+  default     = {}
+  description = <<DESCRIPTION
+The estate's naming policy (modules/conventions, variable `naming`) - the same as shared/'s, so the
+cluster finds the environment's shared identities under the names shared/ gave them: a template per
+resource type with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}`,
+`{name}` and `{domain}`, merged over the defaults (the lab's names), and the regions' short codes. Here
+it names the cluster's identities (`user_assigned_identity`; the namespaces' and external-dns's
+add `-kv-<namespace>` and `-dns`) and its disk encryption set. The cluster's own name and the names of
+what it looks up are stated in their variables. A real estate's policy stays out of the repository -
+see the README, "Naming policy".
+DESCRIPTION
+  nullable    = false
+}
+
 variable "node_subnet_name" {
   type        = string
   default     = null

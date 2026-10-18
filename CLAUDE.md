@@ -61,6 +61,21 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **Naming policy (2026-10-18, design D72, the user's ask): built, not applied yet.** `modules/conventions` `naming` (both
+  stacks' variable `naming`): a template per resource type (`resource_group`, `key_vault`, `container_registry`,
+  `log_analytics_workspace`, `user_assigned_identity`, `virtual_network`, `network_security_group`, `route_table`,
+  `private_endpoint`, `network_interface`, `disk_encryption_set`, `consumption_budget`, `traffic_manager_profile`,
+  `ai_services`) over `{environment}`, `{exposure}`, `{location}`, `{location_code}`, `{name}`, `{domain}`, plus
+  `location_codes`; **defaults = the lab's names** (shared/tests/naming.tftest.hcl asserts them; a run against the real
+  dev.tfvars matched every name), so dev.tfvars no longer states `resource_group_name`, `key_vault_name`,
+  `zone_key_vault_names`, `container_registry_name` (now `container_registry_create = true`), `log_analytics_workspace_name`
+  (`log_analytics_workspace_create = true`) or `ai_foundry.name`; every enabled isolation zone gets its vault. A variable that
+  names a resource still wins. The real estate's policy stays out of Git: `dev` environment secret `NAMING_POLICY` (JSON
+  `{"templates": ..., "location_codes": ...}`) - Deploy writes it to `naming.auto.tfvars.json` and masks the templates' fixed
+  parts; Renew certificate / Flux webhooks resolve unstated names with `scripts/policy-name.sh`. Not on the policy: a
+  cluster's own name, subnets, child resources, the landing zone's resources; the other lab workflows still hard-code the lab's
+  names. The cluster stack has `environment` for cluster names without it in the second segment. **The next Deploy plan of
+  dev-shared must show no change** (the names are the same) - if it shows a replacement, stop and compare the names.
 - **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): not yet in the lab.** The same ConfigMap sets
   `tls.options.default.minVersion: VersionTLS13`; `curl --tls-max 1.2 https://hello.int-fi.dev.onek8s.lol/` must fail in the
   handshake, plain `curl -v` shows `TLSv1.3` and, with a curl built on a library that offers X25519MLKEM768, the hybrid

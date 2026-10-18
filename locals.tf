@@ -265,9 +265,10 @@ locals {
   # to be granted. The identity is not created at all in that case; the cluster's own is used.
   system_assigned_identity = local.is_automatic && !local.byo_network
 
-  # The environment a cluster belongs to, from its name - <what it is>-<environment>-<which one> - for
-  # the names of the environment's shared resources: `aks-dev-ext-stateless-az1` is in `dev`.
-  environment = length(local.name_segments) < 2 ? var.name : local.name_segments[1]
+  # The environment a cluster belongs to, for the names of the environment's shared resources: the
+  # variable, or else from the cluster's name - <what it is>-<environment>-<which one> -
+  # `aks-dev-ext-stateless-az1` is in `dev`.
+  environment = coalesce(var.environment, length(local.name_segments) < 2 ? var.name : local.name_segments[1])
 
   # The principal the cluster acts as towards Azure: the identity created here, or its own.
   cluster_identity_principal_id = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
@@ -366,20 +367,19 @@ locals {
     var.network_profile.service_cidr,
   ]) : local.azure_assigned_cluster_cidrs
 
-  # Short code for the region, for the identity names below - see modules/conventions. Empty for a
-  # region with no code, which the identity is refused for rather than named with a guess.
-  location_code = module.conventions.location_code
-  # `id-<region code>-<environment>-<function>`, worked out from the cluster name and the region
-  # rather than stated per environment. A cluster name reads <what it is>-<environment>-<which one>,
-  # so `aks-dev-ext-stateless-az1` in swedencentral is run by `id-sec-dev-aks-stateless-az1`: the environment
-  # moves to the front of the function, and everything past it distinguishes the cluster from its
-  # siblings in the same environment. A name with nothing to split has no environment to lift out,
-  # and becomes `id-<region code>-<name>`.
-  managed_identity_name = length(local.name_segments) < 2 ? join("-", ["id", local.location_code, var.name]) : join("-", concat(
-    ["id", local.location_code, local.name_segments[1], local.name_segments[0]],
-    slice(local.name_segments, 2, length(local.name_segments)),
-  ))
-  name_segments = split("-", var.name)
+  # The cluster's identity, by the naming policy's `user_assigned_identity` (modules/conventions) -
+  # `id-<region code>-<environment>-<function>` by default - worked out from the cluster name and the
+  # region rather than stated per environment. Its `{name}` is the cluster's name without the
+  # environment's segment, so `aks-dev-ext-stateless-az1` in swedencentral is run by
+  # `id-sec-dev-aks-stateless-az1`: the environment moves to the front of the function, and everything
+  # past it distinguishes the cluster from its siblings in the same environment. A name with nothing to
+  # split is its own environment and becomes `id-<region code>-<name>`. The policy refuses a region
+  # with no code rather than name the identity with a guess.
+  managed_identity_name = module.conventions.names.identity
+  name_segments         = split("-", var.name)
+  identity_name_part = join("-", [
+    for i, segment in local.name_segments : segment if i != try(index(local.name_segments, local.environment), -1)
+  ])
 
   # Every managed namespace as the request body AKS takes, with the estate-wide defaults filled in
   # wherever the namespace itself says nothing. Labels and annotations merge key by key, so a

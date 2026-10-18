@@ -181,7 +181,7 @@ run "refuses_a_region_with_no_code" {
     location = "brazilsouth"
   }
 
-  expect_failures = [azurerm_user_assigned_identity.key_vault]
+  expect_failures = [output.names]
 }
 
 run "a_registry_is_created_and_builds_its_images" {
@@ -380,6 +380,7 @@ run "a_namespace_with_a_zone_reads_the_zone_vault" {
   command = apply
 
   variables {
+    isolation_zones      = { ext-fi = { exposure = "ext", index = 3 } }
     zone_key_vault_names = { ext-fi = "kv-sec-test-ext-fi" }
     key_vault_namespaces = {
       ext-fi-gateway = {}
@@ -404,7 +405,9 @@ run "a_namespace_with_a_zone_reads_the_zone_vault" {
 run "rejects_a_namespace_in_a_zone_with_no_vault" {
   command = plan
 
+  # A disabled zone has no vault.
   variables {
+    isolation_zones = { ext-fi = { exposure = "ext", index = 3, enabled = false } }
     key_vault_namespaces = {
       ext-fi-orders = { zone = "ext-fi" }
     }
@@ -1087,6 +1090,7 @@ run "private_endpoints_for_the_vaults_and_the_registry" {
     virtual_network_name          = "vnet-aks-test"
     virtual_network_address_space = ["172.20.0.0/22"]
     subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
+    isolation_zones               = { int-fi = { exposure = "int", index = 1 } }
     zone_key_vault_names          = { int-fi = "kv-test-int-fi" }
     container_registry_name       = "acrtest"
     container_registry_sku        = "Premium"
@@ -1123,6 +1127,7 @@ run "no_public_network_access" {
     virtual_network_name          = "vnet-aks-test"
     virtual_network_address_space = ["172.20.0.0/22"]
     subnets                       = { snet-aks-nodes = "172.20.0.0/23" }
+    isolation_zones               = { int-fi = { exposure = "int", index = 1 } }
     zone_key_vault_names          = { int-fi = "kv-test-int-fi" }
     container_registry_name       = "acrtest"
     container_registry_sku        = "Premium"
