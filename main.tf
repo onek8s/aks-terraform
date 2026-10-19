@@ -250,9 +250,9 @@ module "aks" {
   security_profile = {
     # KMS: the Kubernetes secrets in etcd encrypted with the cluster's own key - see encryption.tf.
     azure_key_vault_kms = local.azure_key_vault_kms
-    # Defender for Containers is off, like the rest of the Azure monitoring stack. Stated rather
-    # than left out, because a subscription with the Defender for Containers plan and its
-    # auto-provisioning on turns the agent on by itself.
+    # Defender for Containers is off: Microsoft Defender is not used, the company's third-party
+    # security tool is (design D81). Stated rather than left out, because a subscription with the
+    # Defender for Containers plan and its auto-provisioning on turns the agent on by itself.
     defender = {
       security_monitoring = {
         enabled = false
