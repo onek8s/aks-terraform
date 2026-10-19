@@ -333,6 +333,32 @@ resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
   }
 }
 
+# The Isolation tests' fixture (design section 7.1, R7): a secret in the share of each namespace of
+# isolation_test_namespaces, which the tests read as the namespace's own identity - and which every
+# other namespace's identity must be refused.
+resource "random_password" "isolation_test" {
+  for_each = toset(var.isolation_test_namespaces)
+
+  length  = 24
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "isolation_test" {
+  for_each = toset(var.isolation_test_namespaces)
+
+  key_vault_id = lookup(local.namespace_key_vault_ids, each.key, azurerm_key_vault.this.id)
+  name         = "${each.key}--isolation-test"
+  value        = random_password.isolation_test[each.key].result
+  content_type = "text/plain"
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(var.key_vault_namespaces), each.key)
+      error_message = "${each.key} has no share in key_vault_namespaces to read its isolation test secret with."
+    }
+  }
+}
+
 # The one zone every cluster of the environment publishes in - public (Azure DNS) or private (Azure
 # Private DNS, dns_zone_private). Each cluster's external-dns owns its own records under its own name,
 # so the clusters never touch each other's - and a hostname moves with its workload.
