@@ -78,7 +78,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `moved` blocks keep the identity and the propagation sleep at their state addresses; the `random` provider is gone.
   The stateful tfvars now states a private API server (D58) instead of a public one. #199, applied to dev-shared (no
   changes), az2 and az3 on 2026-10-19 (the state moves, the propagation sleep replaced, the Flux configurations' null
-  `sensitive_body_version` dropped); the `moved` blocks went with the follow-up PR, which also split the cells' tfvars
+  `sensitive_body_version` dropped - the first apply of a cell failed with azapi's "Provider produced inconsistent result
+  after apply" on those Flux configurations, whose `output` timestamps Azure moved while the body did not change; the
+  re-run applied cleanly); the `moved` blocks went with the follow-up PR, which also split the cells' tfvars
   into `envs/dev-int-stateless.tfvars` (shared by every cell, applied first) + a short file per cell, and cut the
   variable descriptions that repeated the README. The design's option E (D75, AKS Automatic per zone) is a path, not
   code: a cluster per zone with its own spoke would be a module of its own when decided (D64).
