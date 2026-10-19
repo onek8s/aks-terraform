@@ -486,7 +486,8 @@ With App Routing, for every Gateway of class `approuting-istio`, istiod creates 
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
 shaped by the ConfigMap the Gateway names in `spec.infrastructure.parametersRef` - within the
 add-on's allow list. The Flux repository runs one such Gateway per isolation zone - `<zone>` in
-`<zone>-gateway` - all on the system pool. The zones' gateways are on the system pool so that a zone's own nodes exist
+`<zone>-gateway` - and, with `flux_github_webhook`, one for the platform in `platform-gateway` for
+Flux's webhook receivers, all on the system pool. The zones' gateways are on the system pool so that a zone's own nodes exist
 only for its applications: a zone without any has none. The system subnet's NSG therefore lets
 HTTPS in from the internet and from the virtual network. Each is behind a `LoadBalancer` Service
 of its own:
@@ -495,7 +496,7 @@ of its own:
   (`service.beta.kubernetes.io/azure-load-balancer-internal-subnet`), reachable from inside the
   network only. The cluster identity holds `Network Contributor` on the whole network (node auto
   provisioning), which is all AKS needs.
-- **An external zone's** is public: Azure Traffic Manager
+- **An external zone's**, and the platform gateway's, is public: Azure Traffic Manager
   (`global_hostnames` in `shared/`) points an application's one hostname at it in every cell.
 
 Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
@@ -520,8 +521,8 @@ created here:
   behind the certificate as PKCS#12 - so a certificate is imported as a `.pfx`, never as PEM. A new
   version is picked up within the hour.
 
-  Each zone's listener serves its zone's wildcard certificate (`*.<zone>.dev.onek8s.lol`), issued
-  and renewed by the
+  Each zone's listener serves its zone's wildcard certificate (`*.<zone>.dev.onek8s.lol`), and the
+  platform gateway `platform-gateway--wildcard` (`*.onek8s.lol`), all issued and renewed by the
   [Renew Certificate](.github/workflows/renew-certificate.yml) workflow: Let's Encrypt, with the
   DNS-01 challenge solved in the environment's public `dns_zone_name` - imported into its
   `key_vault_name`, both read from the variables file that creates them - `shared/envs/dev.tfvars`
@@ -719,7 +720,7 @@ name the next vault will take. Keep the policy as JSON outside Git and give it t
 - **Deploy workflow**: the `dev` environment's secret `NAMING_POLICY` holds that JSON; the run writes it
   to `naming.auto.tfvars.json` (ignored by Git, like every tfvars file outside `envs/`) and masks the
   templates' fixed parts, so the plan in this public repository's log does not show them. No secret: the
-  defaults. Renew certificate reads the same secret through `scripts/policy-name.sh`.
+  defaults. Renew certificate and Flux webhooks read the same secret through `scripts/policy-name.sh`.
 - **By hand**: `{"naming": <the JSON>}` as `naming.auto.tfvars.json` in the stack's directory, or
   `-var-file=` a file elsewhere.
 
@@ -828,7 +829,17 @@ repository. `platform` runs no health checks of its own (`wait = false`): it app
 holds - in practice the cluster's own Flux Kustomizations, each waiting for its objects - and is
 done, so a commit is never held back behind one of them that is unhealthy.
 
-There is no webhook: every cluster polls (design D70 - no public entry point in a cell).
+With `flux_github_webhook = true` the repository is also told about a push as it happens: the
+cluster gets the platform gateway (`platform` in `platform-gateway`, public), `flux-system` a share
+of the vault (`key_vault_client_id_flux_system`) to read the token `shared/` keeps there as
+`flux-system--github-webhook-token` (its own `flux_github_webhook`; `flux_github_webhook_namespaces`
+puts the same token in a team namespace's share for the team's Receiver), and the Flux repository
+publishes a GitHub webhook receiver that checks deliveries against it. The Flux webhooks workflow
+(after every Deploy, and by hand) points each repository's webhook at every running cluster that has
+it on, with the token as its secret, and deletes the rest. It needs a public entry point: behind the
+hub's firewall a public load balancer cannot answer, so the `dev` cells - internal - leave it off and
+poll every minute. GitHub delivers over HTTP/1.1, which the gateway's `h2`-only ALPN does not refuse
+(design V29), so the receiver is the platform's one HTTP/1.1 path.
 
 The `platform` Kustomization is also given the Azure facts the repository cannot know on its own, as
 Flux [post-build variables][postbuild], so they are never copied into it by hand:

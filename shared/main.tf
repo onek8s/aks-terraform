@@ -278,6 +278,49 @@ resource "azurerm_role_assignment" "key_vault_admin" {
   principal_type       = "Group"
 }
 
+# The token GitHub signs the Flux webhook's deliveries with, in flux-system's share of the vault - and
+# in the share of every team namespace of flux_github_webhook_namespaces, whose own Receiver
+# reconciles the team's repository. The Flux webhooks workflow sets it as the secret of the
+# repositories' webhooks - one per cluster, each to its own hostname, all with this token.
+resource "random_password" "flux_github_webhook" {
+  count = var.flux_github_webhook ? 1 : 0
+
+  length  = 40
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "flux_github_webhook" {
+  count = var.flux_github_webhook ? 1 : 0
+
+  key_vault_id = azurerm_key_vault.this.id
+  name         = "flux-system--github-webhook-token"
+  value        = random_password.flux_github_webhook[0].result
+  content_type = "text/plain"
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(var.key_vault_namespaces), "flux-system")
+      error_message = "The Flux webhook's token is flux-system's secret, and flux-system has no share in key_vault_namespaces to read it with."
+    }
+  }
+}
+
+resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
+  for_each = var.flux_github_webhook ? toset(var.flux_github_webhook_namespaces) : toset([])
+
+  key_vault_id = lookup(local.namespace_key_vault_ids, each.key, azurerm_key_vault.this.id)
+  name         = "${each.key}--github-webhook-token"
+  value        = random_password.flux_github_webhook[0].result
+  content_type = "text/plain"
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(var.key_vault_namespaces), each.key)
+      error_message = "${each.key} has no share in key_vault_namespaces to read its webhook token with."
+    }
+  }
+}
+
 # The one zone every cluster of the environment publishes in - public (Azure DNS) or private (Azure
 # Private DNS, dns_zone_private). Each cluster's external-dns owns its own records under its own name,
 # so the clusters never touch each other's - and a hostname moves with its workload.

@@ -34,6 +34,7 @@ reads; job logs via `get_job_logs`).
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-gwc-platform` (over the VPN) without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
+| `flux-webhooks.yml` (Flux webhooks) | After every Deploy, by hand, and on a change of itself: GitHub push webhooks of aks-fluxcd-platform and aks-fluxcd-example to `https://flux-webhook-<cluster without aks->.<dns zone>/hook/...` of every running cluster with `flux_github_webhook` on, secret = shared/'s token (read over the labfw VPN); deletes the rest - all of them while shared/ has it off (the lab today). |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
 | `lab-power.yml` (Lab power) | Manual: `action` stop / start of the dev cells for a pause (`clusters`, default az2 az3; `firewall`). stop, per cluster: every Flux configuration suspended, Deployments/StatefulSets of the `platform/zone` namespaces scaled to 0 and waited for, NAP off (NodePool cpu limits 0, NAP nodes deleted, mode Manual - a NAP cluster cannot be stopped), `az aks stop`; then labfw's VM deallocated (custom role `OneK8s labfw Power`, azure-landing-zone). start: labfw first (+1 min), `az aks start`, mode Auto, Flux resumed (Git puts the limits and replicas back). Git unchanged. VPN for kubectl (concurrency `labfw-vpn`). |
 | `entra-test-groups.yml` (Entra test groups) | Manual, as `AZURE_OWNER`: for a `namespace` and `roles` input, groups `grp-onek8s-dev-<ns>-<role>` (default view edit admin; `platform` + `viewers` for the platform viewers) and tester apps `onek8s-dev-<ns>-<role>-tester` (members, federated with the `dev` environment's subject `repo:onek8s@340519759/aks-terraform@1340382905:environment:dev`). Idempotent; prints the IDs for the tfvars and `tests/isolation/namespace-access-testers.yaml`. |
@@ -47,8 +48,8 @@ tenant (so Graph works: groups, apps, role assignments); `GH_OWNER` - org secret
 onek8s organization. Use them through `lab-admin.yml`,
 `entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
-Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (151
-runs) and in `shared/` (65), `kustomize build` for changed fleet directories; for a policy change in
+Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (154
+runs) and in `shared/` (68), `kustomize build` for changed fleet directories; for a policy change in
 azure-landing-zone, `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and
 `terraform test` there. The fleet and example
 repos' CI does not run on GitHub, so validate them locally.
@@ -60,6 +61,16 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **The Flux GitHub webhook is back (2026-10-19, design D78, the user: HTTP/1.1 cannot be refused by Traefik anyway,
+  V29)**: restored after #199 removed it, simplified - root `flux_github_webhook` alone brings the platform gateway
+  (`platform` in `platform-gateway`, public; no `platform_gateway_enabled` any more) and `flux-system`'s vault share; check
+  `flux_github_webhook_has_a_repository_a_vault_and_a_gateway`. The token is shared/'s alone (`flux_github_webhook`,
+  `flux_github_webhook_namespaces`, `random` provider back in shared/ only). Workflow `flux-webhooks.yml` (after every
+  Deploy, by hand) now joins the labfw VPN to read the token and points the webhooks only at running clusters whose
+  tfvars (or the stack's common file) have the webhook on. **Off everywhere in the lab** (internal cells: no public entry
+  point; shared/ `flux_github_webhook = false`): it is for the external cells (backlog item 7); the fleet kept
+  `platform-gateway/` and `flux-webhook/`. GitHub's deliveries are HTTP/1.1: the receiver is the stated exception of
+  D69/D70 (policy `h2c-upstream` must exempt it when it denies).
 - **The root module is the OneK8s cell and nothing else (2026-10-19, the user's ask: simplify the code like the design):**
   removed the paths no environment used and the design rules out - AKS Automatic (`sku_name`, system-assigned identity,
   hosted system profile, Azure's default-CIDR overlap case), clusters without a network (`virtual_network_name` and
@@ -74,8 +85,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (Azure RBAC per namespace; `groups` since D49 - the `namespace_user` grant of each group stays, same state keys),
   the root's own-vault path (`key_vault_create`: every cluster uses shared/'s vaults - key_vault.tf is the lookup and the
   federated credentials), the Flux GitHub webhook and the platform gateway (`flux_github_webhook`, `platform_gateway_enabled`,
-  shared's `flux_github_webhook_namespaces`, the Flux webhooks workflow; D70) and the Dapr extension (`dapr.tf`, D65).
-  `moved` blocks keep the identity and the propagation sleep at their state addresses; the `random` provider is gone.
+  shared's `flux_github_webhook_namespaces`, the Flux webhooks workflow; D70 - **back the same day, see the next bullet**)
+  and the Dapr extension (`dapr.tf`, D65).
+  `moved` blocks keep the identity and the propagation sleep at their state addresses; the root has no `random` provider.
   The stateful tfvars now states a private API server (D58) instead of a public one. #199, applied to dev-shared (no
   changes), az2 and az3 on 2026-10-19 (the state moves, the propagation sleep replaced, the Flux configurations' null
   `sensitive_body_version` dropped - the first apply of a cell failed with azapi's "Provider produced inconsistent result
@@ -161,8 +173,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   must fail with `no application protocol`; plain `curl` (h2) must answer 200. If routes stop answering, the Gateway API provider
   did not take the `default` option - check Traefik's log for the file provider and the option name. Consequence recorded in the
   design: Traefik in every environment until App Routing can refuse HTTP/1.1; the platform gateway and the Flux webhook
-  code is gone from this repo since 2026-10-19 (the simplification below; the fleet's `platform-gateway/`, `flux-webhook/`
-  go with backlog item 7). Policy `h2c-upstream` (azure-landing-zone)
+  were removed on 2026-10-19 and restored the same day (D78, the Flux webhook bullet above). Policy `h2c-upstream` (azure-landing-zone)
   holds every application Service port to `appProtocol: kubernetes.io/h2c`, audit first.
 - **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): in the lab with aks-hello 0.5.2, V28 holds (the steps below are done).** aks-fluxcd-example's aks-hello Service
   carries `appProtocol: kubernetes.io/h2c` (merged, #37; reaches az2/az3 at the next Lab power start). aks-hello **0.5.1**
@@ -290,7 +301,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `platform_source_fqdns` = chart/image sources) + child `rcg-aks-dev` (vaults, ACR, Grafana, zone lists). A denied
   flow shows in labfw's logs (azure-lab-fw view-logs or `labfw logs --action deny` via Run Command).
 - **No public entry point in the internal cell**: a public LB cannot answer behind labfw (asymmetric routing), so
-  no platform gateway and no Flux webhook (Flux polls every minute; the code for both was removed 2026-10-19). The fleet's `flux-system-key-vault` Kustomization gives flux-system its SecretStore.
+  no platform gateway and no Flux webhook (Flux polls every minute; `flux_github_webhook = false` in the cells' common tfvars). The fleet's `flux-system-key-vault` Kustomization gives flux-system its SecretStore.
   Traffic Manager: only for a deployed external zone (`global_hostnames.<name>.zone`), so none now.
 - **Vaults `kv-onek8s-gwc-platform` and `kv-onek8s-gwc-int-fi`** (kv-onek8s-dev-platform is soft-deleted with purge
   protection in swedencentral until 2027-01). Store secret / Sign images use the new one. ACR `acronek8sdev` kept its name.

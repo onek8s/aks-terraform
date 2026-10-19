@@ -445,6 +445,15 @@ check "namespace_groups_need_flux" {
   }
 }
 
+# The Flux webhook's Receiver is reconciled by the cluster's Flux repository, reads its token from the
+# vault and is reached by GitHub through the platform gateway.
+check "flux_github_webhook_has_a_repository_a_vault_and_a_gateway" {
+  assert {
+    condition     = !var.flux_github_webhook || (local.flux_github_webhook_enabled && var.gateway_implementation != null)
+    error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${!local.flux_enabled ? "no flux_git_repository to reconcile" : !local.key_vault_enabled ? "no key_vault_name to read its token from" : "no gateway_implementation for the platform gateway GitHub reaches it through"}."
+  }
+}
+
 # The upgrade windows. Azure fixes the three names: `default` covers the weekly AKS release of the
 # control plane and add-ons, `aksManagedAutoUpgradeSchedule` the Kubernetes version upgrade driven by
 # `upgrade_channel`, and `aksManagedNodeOSUpgradeSchedule` the node image patching driven by

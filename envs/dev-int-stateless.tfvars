@@ -101,6 +101,10 @@ image_integrity_enabled = true
 private_cluster_public_fqdn_enabled = true
 private_dns_zone_mode               = "none"
 
+# No Flux webhook: an internal cell has no public entry point for GitHub's deliveries (behind labfw a
+# public load balancer cannot answer), so no platform gateway either. Flux polls every minute.
+flux_github_webhook = false
+
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster. None yet in the build tenant.
 entra_admin_group_object_ids  = []

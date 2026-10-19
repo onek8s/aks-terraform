@@ -4,14 +4,24 @@
 
 locals {
   # The cluster's Gateways, as the Flux repository runs them: one per isolation zone, `<zone>` in
-  # `<zone>-gateway`, behind an internal load balancer for an internal zone.
-  gateways = var.gateway_implementation == null ? {} : {
-    for zone in keys(var.isolation_zones) : zone => {
-      namespace = "${zone}-gateway"
-      exposure  = startswith(zone, "int-") ? "int" : "ext"
-      internal  = startswith(zone, "int-")
-    }
-  }
+  # `<zone>-gateway`, behind an internal load balancer for an internal zone, and with the Flux webhook
+  # the platform's, `platform` in `platform-gateway`, always public (Flux's webhook receivers).
+  gateways = var.gateway_implementation == null ? {} : merge(
+    {
+      for zone in keys(var.isolation_zones) : zone => {
+        namespace = "${zone}-gateway"
+        exposure  = startswith(zone, "int-") ? "int" : "ext"
+        internal  = startswith(zone, "int-")
+      }
+    },
+    local.flux_github_webhook_enabled ? {
+      platform = {
+        namespace = "platform-gateway"
+        exposure  = "ext"
+        internal  = false
+      }
+    } : {},
+  )
 
   # The class each Gateway names, told to the Flux repository as `gateway_class_name_<gateway>`, and
   # the implementation itself as `gateway_implementation`: the Flux repository adds what only one
