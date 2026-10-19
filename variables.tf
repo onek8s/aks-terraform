@@ -418,6 +418,21 @@ DESCRIPTION
   }
 }
 
+variable "flux_github_webhook" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether a GitHub push reaches the cluster at once rather than at the next poll: the cluster gets the
+platform's Gateway, `platform` in `platform-gateway` - a public load balancer for Flux's webhook
+receivers - and `flux-system` a share of the vault to read the token shared/ keeps there
+(`flux-system--github-webhook-token`, its `flux_github_webhook`). Only for a cell with a public entry
+point: behind the hub's firewall a public load balancer cannot answer, so an internal cell polls.
+Needs `flux_git_repository`, `key_vault_name` and a `gateway_implementation`; the Flux webhooks
+workflow points the repositories' webhooks at it.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "key_vault_name" {
   type        = string
   default     = null

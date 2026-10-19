@@ -203,7 +203,10 @@ locals {
 
   # The namespaces with a share of a vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.
-  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces))) : toset([])
+  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces), local.flux_github_webhook_enabled ? ["flux-system"] : [])) : toset([])
+
+  # The Flux GitHub webhook's token is in the vault, for the Receiver in flux-system to read.
+  flux_github_webhook_enabled = var.flux_github_webhook && local.flux_enabled && local.key_vault_enabled
 
   # The environment a cluster belongs to, for the names of the environment's shared resources: the
   # variable, or else from the cluster's name - <what it is>-<environment>-<which one> -

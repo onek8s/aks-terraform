@@ -210,6 +210,10 @@ key_vault_namespaces = {
 # tester application the isolation tests sign in as.
 platform_viewer_group_object_ids = ["75353964-033e-4ea2-8ec4-f44e89fee6a6"]
 
+# No Flux webhook token: an internal cell has no public entry point for GitHub's deliveries, so Flux
+# polls (every minute). An environment with external cells turns it on for their platform gateways.
+flux_github_webhook = false
+
 # The one zone the environment publishes in, public or private - the clusters say the same in their
 # own dns_zone_private. Public here, so every hostname resolves on the internet: onek8s.lol exists
 # already - created once with the Azure CLI in rg-onek8s-dns, outside every state, and delegated at the

@@ -140,6 +140,28 @@ variable "key_vault_admin_group_object_ids" {
   nullable    = false
 }
 
+variable "flux_github_webhook" {
+  type        = bool
+  default     = false
+  description = <<DESCRIPTION
+Whether to generate the token GitHub signs Flux webhook deliveries with, as
+`flux-system--github-webhook-token`. Every cluster's Receiver reads the same token, so each answers
+on the same path. `flux-system` needs a share in `key_vault_namespaces` to read it.
+DESCRIPTION
+  nullable    = false
+}
+
+variable "flux_github_webhook_namespaces" {
+  type        = list(string)
+  default     = []
+  description = <<DESCRIPTION
+Team namespaces whose own Flux Receiver reconciles the team's repository on a GitHub push: the same
+token is put in each one's share of the vault as `<namespace>--github-webhook-token`. Each needs a
+share in `key_vault_namespaces`; `flux_github_webhook` has to be on.
+DESCRIPTION
+  nullable    = false
+}
+
 variable "dns_zone_name" {
   type        = string
   default     = null
