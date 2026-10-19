@@ -13,8 +13,6 @@ location = "germanywestcentral"
 # Internal (design decision D52): the internal zones' stateful workloads only.
 exposure = "int"
 
-sku_name = "Base"
-
 # ---------------------------------------------------------------------------------------------------
 # Non-production cost savings
 #
@@ -51,7 +49,6 @@ node_subnet_name     = "snet-aks-nodes"
 # gateway of its own (sections 3.1 and 4.1), which clusters/dev-int-stateful of the platform repository does
 # not follow yet.
 key_vault_name       = "kv-onek8s-gwc-platform"
-key_vault_create     = false
 key_vault_namespaces = []
 key_vault_namespace_vaults = {
   int-fi-example = "kv-onek8s-gwc-int-fi"
@@ -79,10 +76,10 @@ container_registry_name = "acronek8sdev"
 # audit log (kube-audit-admin and guard) - design section 6.2, CIS AKS Benchmark 2.1.1.
 log_analytics_workspace_name = "log-dev-platform"
 
-# A public API server, open to every address: a lab with no network path into the VNet. Entra ID
-# authenticates every call; local accounts are disabled.
-private_cluster_enabled         = false
-api_server_authorized_ip_ranges = ["0.0.0.0/0"]
+# The private API server (design D58) over Private Link, like the cells': no private DNS zone, the
+# public FQDN names the private address through the hub's DNS proxy.
+private_cluster_public_fqdn_enabled = true
+private_dns_zone_mode               = "none"
 
 # No Gateway API implementation: the stateful cluster has no gateway of its own (design R9a), whatever
 # the environment - not a cost saving.
@@ -154,8 +151,3 @@ flux_git_repository = {
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
-
-# A GitHub push reaches the cluster at once: the platform repository publishes Flux's webhook
-# receiver (flux-webhook-dev-int-stateful.onek8s.lol), checked against the token shared/ keeps in the
-# platform vault. flux-system gets this cluster's credential on its shared identity to read it.
-flux_github_webhook = true

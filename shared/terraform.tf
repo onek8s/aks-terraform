@@ -15,10 +15,6 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 4.46.0, < 5.0.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
     # The agents' Claude deployment (ai_foundry): its modelProviderData is not in azurerm
     azapi = {
       source  = "Azure/azapi"

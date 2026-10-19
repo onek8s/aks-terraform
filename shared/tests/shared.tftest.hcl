@@ -48,7 +48,6 @@ mock_provider "azurerm" {
     }
   }
 }
-mock_provider "random" {}
 mock_provider "azapi" {}
 
 variables {
@@ -115,51 +114,6 @@ run "each_namespace_reads_and_its_writers_manage_its_own_share" {
     ])
     error_message = "Each namespace's identity should read, and its writers manage, its own secrets only."
   }
-}
-
-run "grants_can_be_left_to_someone_else" {
-  command = plan
-
-  variables {
-    create_role_assignments          = false
-    key_vault_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
-  }
-
-  assert {
-    condition = alltrue([
-      length(azurerm_role_assignment.key_vault_namespace_reader) == 0,
-      length(azurerm_role_assignment.key_vault_namespace_writer) == 0,
-      length(azurerm_role_assignment.key_vault_admin) == 0,
-      length(azurerm_user_assigned_identity.key_vault) == 2,
-    ])
-    error_message = "With create_role_assignments = false the identities are still created, and the grants left to the estate."
-  }
-}
-
-run "the_webhook_token_is_flux_systems" {
-  command = plan
-
-  variables {
-    flux_github_webhook = true
-    key_vault_namespaces = {
-      flux-system = {}
-    }
-  }
-
-  assert {
-    condition     = azurerm_key_vault_secret.flux_github_webhook[0].name == "flux-system--github-webhook-token"
-    error_message = "The webhook's token should be in flux-system's share of the vault."
-  }
-}
-
-run "the_webhook_token_needs_flux_system_to_have_a_share" {
-  command = plan
-
-  variables {
-    flux_github_webhook = true
-  }
-
-  expect_failures = [azurerm_key_vault_secret.flux_github_webhook]
 }
 
 run "rejects_a_namespace_whose_share_would_overlap_another" {
@@ -288,24 +242,6 @@ run "a_global_hostname_is_a_traffic_manager_profile_over_the_clusters" {
   }
 }
 
-run "a_team_namespace_gets_the_webhook_token_in_its_share" {
-  command = plan
-
-  variables {
-    key_vault_namespaces = {
-      flux-system = {}
-      example     = {}
-    }
-    flux_github_webhook            = true
-    flux_github_webhook_namespaces = ["example"]
-  }
-
-  assert {
-    condition     = azurerm_key_vault_secret.flux_github_webhook_namespace["example"].name == "example--github-webhook-token"
-    error_message = "The example namespace should get the webhook token in its own share of the vault."
-  }
-}
-
 run "a_private_zone_is_looked_up_and_gets_no_traffic_manager" {
   command = plan
 
@@ -426,71 +362,6 @@ run "the_platform_vault_can_hold_customer_managed_keys" {
   assert {
     condition     = azurerm_key_vault.this.purge_protection_enabled
     error_message = "A disk encryption set needs purge protection on the vault of its key."
-  }
-}
-
-run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
-  command = plan
-
-  variables {
-    resource_group_create = true
-    isolation_zones = {
-      int-fi = { exposure = "int", index = 1 }
-      ext-fi = { exposure = "ext", index = 3 }
-    }
-    cells = {
-      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20", api_server_subnet = true }
-    }
-    internal_dns_zones = ["int-fi.test.contoso.com"]
-  }
-
-  assert {
-    condition     = azurerm_virtual_network.cell["dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1" && azurerm_virtual_network.cell["dev-ext-stateless-az1"].encryption[0].enforcement == "AllowUnencrypted"
-    error_message = "Every cell has a network of its own, with VNet encryption."
-  }
-  assert {
-    condition = (
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25" &&
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-apiserver"].address_prefixes[0] == "172.21.15.0/28"
-    )
-    error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second; the API server a /28 at the start of the last."
-  }
-  assert {
-    condition = (
-      azurerm_subnet.cell["dev-ext-stateless-az1/snet-apiserver"].delegation[0].service_delegation[0].name == "Microsoft.ContainerService/managedClusters" &&
-      length(azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].delegation) == 0 &&
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-apiserver/https"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/api-server"].source_address_prefix == "172.21.15.0/28"
-    )
-    error_message = "With api_server_subnet, snet-apiserver is delegated to AKS and takes HTTPS from the network; the node subnets take the API server."
-  }
-  assert {
-    condition     = length(azurerm_network_security_group.cell) == 6 && length(azurerm_network_security_rule.cell_deny) == 6
-    error_message = "Every subnet has an NSG of its own that denies what it does not allow."
-  }
-  assert {
-    condition = (
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https"].source_address_prefix == "Internet" &&
-      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https-from-network"].source_address_prefix == "VirtualNetwork"
-    )
-    error_message = "HTTPS comes from the internet to the external zones, from the network to the internal zones, and from both to the system pool, where every zone's gateway runs."
-  }
-  assert {
-    condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-ext-stateless-az1/snet-ext-fi-ilb/https")
-    error_message = "An external zone's load balancer is public: its internal load balancer subnet lets nothing in."
-  }
-  assert {
-    condition     = azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/kubelet-from-system"].source_address_prefix == "172.21.0.0/24"
-    error_message = "Only the system pool reaches a zone's kubelets."
-  }
-  assert {
-    condition     = azurerm_private_dns_zone_virtual_network_link.internal["int-fi.test.contoso.com/dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1"
-    error_message = "The internal zones' names resolve in every cell."
   }
 }
 
@@ -711,6 +582,62 @@ run "an_external_exposure_with_its_zones_plans" {
   assert {
     condition     = output.exposure == "ext"
     error_message = "The stack says which exposure it serves."
+  }
+}
+
+run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
+  command = plan
+
+  variables {
+    resource_group_create = true
+    isolation_zones = {
+      int-fi = { exposure = "int", index = 1 }
+      ext-fi = { exposure = "ext", index = 3 }
+    }
+    cells = {
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+    }
+    internal_dns_zones = ["int-fi.test.contoso.com"]
+  }
+
+  assert {
+    condition     = azurerm_virtual_network.cell["dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1" && azurerm_virtual_network.cell["dev-ext-stateless-az1"].encryption[0].enforcement == "AllowUnencrypted"
+    error_message = "Every cell has a network of its own, with VNet encryption."
+  }
+  assert {
+    condition = (
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].address_prefixes[0] == "172.21.0.0/24" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-nodes"].address_prefixes[0] == "172.21.1.0/25" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-int-fi-ilb"].address_prefixes[0] == "172.21.1.128/27" &&
+      azurerm_subnet.cell["dev-ext-stateless-az1/snet-ext-fi-nodes"].address_prefixes[0] == "172.21.3.0/25" &&
+      length(azurerm_subnet.cell["dev-ext-stateless-az1/snet-system"].delegation) == 0
+    )
+    error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second."
+  }
+  assert {
+    condition     = length(azurerm_network_security_group.cell) == 5 && length(azurerm_network_security_rule.cell_deny) == 5
+    error_message = "Every subnet has an NSG of its own that denies what it does not allow."
+  }
+  assert {
+    condition = (
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/https"].source_address_prefix == "Internet" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-int-fi-nodes/https"].source_address_prefix == "VirtualNetwork" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https"].source_address_prefix == "Internet" &&
+      azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-system/https-from-network"].source_address_prefix == "VirtualNetwork"
+    )
+    error_message = "HTTPS comes from the internet to the external zones, from the network to the internal zones, and from both to the system pool, where every zone's gateway runs."
+  }
+  assert {
+    condition     = !contains(keys(azurerm_network_security_rule.cell_allow), "dev-ext-stateless-az1/snet-ext-fi-ilb/https")
+    error_message = "An external zone's load balancer is public: its internal load balancer subnet lets nothing in."
+  }
+  assert {
+    condition     = azurerm_network_security_rule.cell_allow["dev-ext-stateless-az1/snet-ext-fi-nodes/kubelet-from-system"].source_address_prefix == "172.21.0.0/24"
+    error_message = "Only the system pool reaches a zone's kubelets."
+  }
+  assert {
+    condition     = azurerm_private_dns_zone_virtual_network_link.internal["int-fi.test.contoso.com/dev-ext-stateless-az1"].name == "vnet-dev-ext-stateless-az1"
+    error_message = "The internal zones' names resolve in every cell."
   }
 }
 

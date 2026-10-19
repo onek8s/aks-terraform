@@ -30,7 +30,6 @@ mock_provider "azurerm" {
     }
   }
 }
-mock_provider "random" {}
 mock_provider "azapi" {}
 
 # The lab's environment (envs/dev.tfvars) as far as its names go, with no name stated.

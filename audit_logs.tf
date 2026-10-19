@@ -5,7 +5,7 @@ data "azurerm_log_analytics_workspace" "platform" {
   count = var.log_analytics_workspace_name == null ? 0 : 1
 
   name                = var.log_analytics_workspace_name
-  resource_group_name = coalesce(var.log_analytics_workspace_resource_group_name, var.resource_group_name)
+  resource_group_name = var.resource_group_name
 }
 
 resource "azurerm_monitor_diagnostic_setting" "audit" {

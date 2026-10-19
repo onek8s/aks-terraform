@@ -1,62 +1,35 @@
-output "dns_zone_name_servers" {
-  description = <<DESCRIPTION
-Name servers of the DNS zone created here, to set as the domain's NS records at its registrar. Null
-unless `dns_zone_create` is set.
-DESCRIPTION
-  value       = one(azurerm_dns_zone.this[*].name_servers)
-}
-
 output "fqdn" {
-  description = "Public FQDN of the API server. Null for a private cluster without a public FQDN."
+  description = "Public FQDN of the API server, resolving to its private address. Null without `private_cluster_public_fqdn_enabled`."
   value       = module.aks.fqdn
 }
 
 output "identity_principal_id" {
-  description = <<DESCRIPTION
-Principal ID of the identity the cluster runs as - the user assigned identity created here, or the
-cluster's own system assigned one where Azure requires that instead. Grant it access to resources
-the cluster has to reach.
-DESCRIPTION
-  value       = local.cluster_identity_principal_id
+  description = "Principal ID of the identity the cluster runs as. Grant it access to resources the cluster has to reach."
+  value       = azurerm_user_assigned_identity.this.principal_id
 }
 
 output "identity_resource_id" {
-  description = <<DESCRIPTION
-Resource ID of the user assigned identity used by the cluster. Null for a cluster running on a
-system assigned identity, which is part of the cluster rather than a resource of its own.
-DESCRIPTION
-  value       = one(azurerm_user_assigned_identity.this[*].id)
+  description = "Resource ID of the identity the cluster runs as."
+  value       = azurerm_user_assigned_identity.this.id
 }
 
 output "key_vault_id" {
-  description = "Resource ID of the cluster's Key Vault. Null when `key_vault_name` is unset."
+  description = "Resource ID of the environment's platform Key Vault. Null when `key_vault_name` is unset."
   value       = local.key_vault_id
 }
 
 output "key_vault_uri" {
-  description = <<DESCRIPTION
-URI of the cluster's Key Vault, for `az keyvault secret set --id` and the like. Null when
-`key_vault_name` is unset. A namespace's secrets are the ones named `<namespace>--<name>`.
-DESCRIPTION
+  description = "URI of the environment's platform Key Vault, for `az keyvault secret set --id` and the like. Null when `key_vault_name` is unset. A namespace's secrets are the ones named `<namespace>--<name>`."
   value       = local.key_vault_uri
 }
 
 output "kubelet_identity_object_id" {
-  description = <<DESCRIPTION
-Object ID of the identity the nodes run as. Grant it `AcrPull` on a container registry to let the
-cluster pull images without a pull secret.
-DESCRIPTION
+  description = "Object ID of the identity the nodes run as, granted `AcrPull` on the environment's registry."
   value       = try(module.aks.kubelet_identity.objectId, null)
 }
 
 output "managed_namespace_ids" {
-  description = <<DESCRIPTION
-Resource IDs of the managed namespaces, keyed by namespace name. Empty when the cluster has none.
-
-An Azure role assignment scoped to one of these grants access to that namespace alone.
-`managed_namespaces[*].access` makes those assignments here; this output is what an estate running
-`create_role_assignments = false` scopes them to instead.
-DESCRIPTION
+  description = "Resource IDs of the managed namespaces, keyed by namespace name. An Azure role assignment scoped to one of these grants access to that namespace alone."
   value       = { for name, namespace in azapi_resource.managed_namespace : name => namespace.id }
 }
 
@@ -81,7 +54,7 @@ output "oidc_issuer_url" {
 }
 
 output "private_fqdn" {
-  description = "Private FQDN of the API server. Null for a public cluster."
+  description = "Private FQDN of the API server."
   value       = module.aks.private_fqdn
 }
 

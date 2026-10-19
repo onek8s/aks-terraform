@@ -20,54 +20,24 @@ data "azurerm_resource_group" "this" {
   name = var.resource_group_name
 }
 
-# The existing network and its subnets, looked up only when the cluster is attached to one. A
-# cluster that brings no network has AKS create one for it, and none of these have anything to read.
+# The cell's network and the system pool's subnet, created by shared/ and looked up here.
 data "azurerm_virtual_network" "this" {
-  count = local.byo_network ? 1 : 0
-
   name                = var.virtual_network_name
-  resource_group_name = local.virtual_network_resource_group_name
+  resource_group_name = var.resource_group_name
 }
 
 data "azurerm_subnet" "node" {
-  count = local.byo_network ? 1 : 0
-
   name                 = var.node_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
-  virtual_network_name = var.virtual_network_name
-}
-
-data "azurerm_subnet" "system_node" {
-  count = var.system_node_subnet_name == null ? 0 : 1
-
-  name                 = var.system_node_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
-  virtual_network_name = var.virtual_network_name
-}
-
-data "azurerm_subnet" "api_server" {
-  count = local.api_server_vnet_integration ? 1 : 0
-
-  name                 = var.api_server_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
 # The one zone the Gateway's hostnames are published in: public, in Azure DNS, or private, in Azure
 # Private DNS (dns_zone_private) - for a domain that only resolves inside the networks the zone is
 # linked to. It exists already - shared/ creates it, or it was provisioned outside Terraform - and the
-# cluster is only given access to it; or, for a public zone only, it is created here with
-# dns_zone_create, and the domain's registrar is pointed at the name servers the
-# dns_zone_name_servers output lists.
+# cluster is only given access to it.
 data "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name != null && !var.dns_zone_create && !var.dns_zone_private ? 1 : 0
-
-  name                = var.dns_zone_name
-  resource_group_name = local.dns_zone_resource_group_name
-}
-
-resource "azurerm_dns_zone" "this" {
-  count = var.dns_zone_name != null && var.dns_zone_create ? 1 : 0
+  count = var.dns_zone_name != null && !var.dns_zone_private ? 1 : 0
 
   name                = var.dns_zone_name
   resource_group_name = local.dns_zone_resource_group_name
@@ -78,13 +48,6 @@ data "azurerm_private_dns_zone" "zone" {
 
   name                = var.dns_zone_name
   resource_group_name = local.dns_zone_resource_group_name
-}
-
-data "azurerm_private_dns_zone" "this" {
-  count = local.use_byo_private_dns_zone ? 1 : 0
-
-  name                = var.private_dns_zone_name
-  resource_group_name = local.private_dns_zone_resource_group_name
 }
 
 # Cluster tags are maintained outside Terraform, by the automation running against the cluster. They
@@ -102,15 +65,9 @@ data "azapi_resource_list" "managed_clusters" {
 }
 
 # AKS needs an identity that already exists when the cluster is created, so that it can be granted
-# access to the pre-existing network and private DNS zone. A system assigned identity cannot be used
-# for that, because it only comes into existence together with the cluster.
-#
-# A cluster that brings no network has nothing of the sort to be granted, and an Automatic one is
-# refused by Azure unless it runs on a system assigned identity - so there the cluster's own identity
-# is used and none is created here.
+# access to the network before the first node joins it. A system assigned identity only comes into
+# existence together with the cluster.
 resource "azurerm_user_assigned_identity" "this" {
-  count = local.system_assigned_identity ? 0 : 1
-
   location            = var.location
   name                = local.managed_identity_name
   resource_group_name = var.resource_group_name
@@ -124,26 +81,15 @@ resource "azurerm_user_assigned_identity" "this" {
   }
 }
 
-# Lets the cluster join nodes, load balancers and the integrated API server to the existing network.
-# A Base cluster is scoped to the subnets it uses; AKS Automatic is scoped to the whole virtual
-# network, because node autoprovisioning needs it. Either can be overridden through
-# network_role_assignment_scope.
+# Lets the cluster join nodes and load balancers to the network: the whole virtual network for a cell
+# whose zone nodes come from node auto provisioning or the zones' node pools, the system pool's subnet
+# alone for a cluster without zones - and the route tables of a cell routed through the hub's firewall.
 resource "azurerm_role_assignment" "network_contributor" {
   for_each = local.network_role_assignment_scopes
 
-  principal_id                     = azurerm_user_assigned_identity.this[0].principal_id
+  principal_id                     = azurerm_user_assigned_identity.this.principal_id
   scope                            = each.value
   role_definition_name             = "Network Contributor"
-  skip_service_principal_aad_check = true
-}
-
-# Lets the cluster register the API server record in the existing private DNS zone.
-resource "azurerm_role_assignment" "private_dns_zone_contributor" {
-  count = local.create_private_dns_zone_assignment ? 1 : 0
-
-  principal_id                     = azurerm_user_assigned_identity.this[0].principal_id
-  scope                            = data.azurerm_private_dns_zone.this[0].id
-  role_definition_name             = "Private DNS Zone Contributor"
   skip_service_principal_aad_check = true
 }
 
@@ -151,27 +97,28 @@ resource "azurerm_role_assignment" "private_dns_zone_contributor" {
 # effect when the cluster is created seconds later, which fails the apply with an authorization error
 # on the subnet. Waiting once on creation is cheaper than a half-created cluster.
 resource "time_sleep" "role_assignment_propagation" {
-  count = (length(local.network_role_assignment_scopes) > 0 || local.create_private_dns_zone_assignment) && var.role_assignment_propagation_delay != "0s" ? 1 : 0
-
-  create_duration = var.role_assignment_propagation_delay
+  create_duration = local.role_assignment_propagation_delay
   triggers = {
-    network_contributor          = join(",", [for assignment in azurerm_role_assignment.network_contributor : assignment.id])
-    private_dns_zone_contributor = join(",", azurerm_role_assignment.private_dns_zone_contributor[*].id)
+    network_contributor = join(",", [for assignment in azurerm_role_assignment.network_contributor : assignment.id])
   }
 }
 
 module "aks" {
-  # The Azure Verified Module. Image Integrity, the one setting it has no input for, is set beside it
-  # - see image_integrity.tf.
+  # The Azure Verified Module. Image Integrity and KMS data encryption, which it has no inputs for, are
+  # set beside it - see image_integrity.tf and kms.tf.
   source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
   version = "0.8.5"
 
   location  = var.location
   name      = var.name
   parent_id = data.azurerm_resource_group.this.id
+  # Microsoft Entra ID authentication with Azure RBAC: every call to the Kubernetes API is decided
+  # from Azure role assignments on the cluster (entra_admin_group_object_ids and the rest below). The
+  # profile's own admin groups are not honored in this mode, which is also what Azure reports for such
+  # a cluster: `"adminGroupObjectIds": null`.
   aad_profile = {
-    admin_group_object_ids = local.kubernetes_rbac_admin_group_object_ids
-    enable_azure_rbac      = local.azure_rbac_enabled
+    admin_group_object_ids = null
+    enable_azure_rbac      = true
     managed                = true
     tenant_id              = data.azurerm_client_config.current.tenant_id
   }
@@ -180,10 +127,8 @@ module "aks" {
     enabled = var.azure_policy_enabled
   }
   # Container Insights stays off: node and pod telemetry is collected by the third party agent that
-  # runs inside the cluster. AKS Automatic turns the add-on on by itself unless the request says
-  # otherwise, so it is disabled explicitly rather than left out. It goes through
-  # `addon_profiles_extra` because `addon_profile_oms_agent` insists on a workspace to name even
-  # when the add-on is being turned off.
+  # runs inside the cluster. It goes through `addon_profiles_extra` because `addon_profile_oms_agent`
+  # insists on a workspace to name even when the add-on is being turned off.
   addon_profiles_extra = {
     omsagent = {
       enabled = false
@@ -195,22 +140,26 @@ module "aks" {
       enabled = false
     }
   }
+  # A private API server (design D58): over Private Link, with its endpoint in the system pool's subnet.
   api_server_access_profile = {
-    authorized_ip_ranges               = local.api_server_authorized_ip_ranges
-    enable_private_cluster             = var.private_cluster_enabled
-    enable_private_cluster_public_fqdn = var.private_cluster_enabled ? var.private_cluster_public_fqdn_enabled : null
-    enable_vnet_integration            = local.api_server_vnet_integration ? true : null
-    private_dns_zone                   = local.private_dns_zone
-    subnet_id                          = one(data.azurerm_subnet.api_server[*].id)
+    enable_private_cluster             = true
+    enable_private_cluster_public_fqdn = var.private_cluster_public_fqdn_enabled
+    private_dns_zone                   = var.private_dns_zone_mode
   }
-  # Azure Monitor managed Prometheus. On by default on AKS Automatic as well, and replaced by the
-  # same third party metrics pipeline.
+  # Azure Monitor managed Prometheus, replaced by the same third party metrics pipeline.
   azure_monitor_profile = {
     metrics = {
       enabled = false
     }
   }
-  cluster_timeouts   = var.cluster_timeouts
+  # The AzAPI provider's 30 minutes are regularly exceeded by a cluster create; Terraform then reports
+  # a timeout while Azure carries on, and the cluster is left in `Creating` with nothing in state.
+  cluster_timeouts = {
+    create = "90m"
+    delete = "90m"
+    read   = "10m"
+    update = "90m"
+  }
   default_agent_pool = local.default_agent_pool
   # The zones' classic node pools and their cluster autoscaler - a pod-subnet cell's (zones.tf)
   agent_pools         = local.zone_agent_pools
@@ -218,28 +167,17 @@ module "aks" {
   # Every node's OS disk with the cluster's own key - see encryption.tf.
   disk_encryption_set_id = local.disk_encryption_set_id
   dns_prefix             = var.name
-  enable_telemetry       = var.enable_telemetry
-  fqdn_subdomain         = local.fqdn_subdomain
-  # AKS Automatic places its hosted system components in a subnet of the existing network. A cluster
-  # that brings no network sends no profile at all, and AKS hosts them in the network it creates.
-  hosted_system_profile = local.is_automatic && var.system_node_subnet_name != null ? {
-    enabled               = true
-    node_subnet_id        = one(data.azurerm_subnet.node[*].id)
-    system_node_subnet_id = one(data.azurerm_subnet.system_node[*].id)
-  } : null
   # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
   # channel) and, with gateway_implementation = "approuting-istio", App Routing's Gateway API
   # implementation - a sidecar-less Istio control plane serving the GatewayClass `approuting-istio`, no
   # service mesh. With "traefik" it stays off and Traefik is deployed through Flux (traefik.tf). The
   # Gateways themselves, their listeners, load balancers and certificates are deployed through Flux.
-  # See the README.
   #
   # Every other managed ingress AKS offers stays off: the Application Gateway for Containers ALB
   # Controller add-on and App Routing's NGINX controller. All of it is stated rather than left out,
-  # because AKS Automatic enables App Routing unless the create request says otherwise, because a
-  # cluster that had the ALB Controller add-on only loses it when told to - and because the module
-  # cannot validate a partially filled ingress_profile: it reads through the nested objects and fails
-  # on the ones left null. Stating the add-on keeps the module on a preview cluster API
+  # because a cluster that had the ALB Controller add-on only loses it when told to, and because the
+  # module cannot validate a partially filled ingress_profile: it reads through the nested objects and
+  # fails on the ones left null. Stating the add-on keeps the module on a preview cluster API
   # (2026-03-02-preview), which knows both it and App Routing Istio.
   ingress_profile = {
     application_load_balancer = {
@@ -261,35 +199,28 @@ module "aks" {
     }
   }
   kubernetes_version = var.kubernetes_version
-  lock = var.lock_kind == null ? null : {
-    kind = var.lock_kind
-  }
-  # The identity created above, or the cluster's own where Azure insists on one - see
-  # local.system_assigned_identity. The splat is empty in that case, which leaves `SystemAssigned`.
   managed_identities = {
-    system_assigned            = local.system_assigned_identity
-    user_assigned_resource_ids = azurerm_user_assigned_identity.this[*].id
+    system_assigned            = false
+    user_assigned_resource_ids = [azurerm_user_assigned_identity.this.id]
   }
-  # Cost analysis, which is the one Azure side telemetry these clusters do keep: it feeds Azure Cost
-  # Management rather than Azure Monitor, and it is the only place the spend of a namespace or a
-  # deployment can be seen at all. Off on the Free tier, where Azure rejects it.
+  # The AKS cost analysis add-on is not used (design D46): cost per namespace comes from OpenCost.
+  # Stated, so that it cannot be switched on beside Terraform without showing up in the plan.
   metrics_profile = {
     cost_analysis = {
-      enabled = local.cost_analysis_enabled
+      enabled = false
     }
   }
   network_profile = local.network_profile
   # Node auto provisioning (Karpenter) for the zone nodes - see node_auto_provisioning_enabled. AKS's
   # default NodePools stay off: every NAP node belongs to a zone NodePool of the Flux repository,
   # and nothing is created for a pod that no NodePool takes - the ones the system pool runs, say.
-  # Not sent for AKS Automatic, which decides this itself, nor for a cluster without it, which is
-  # left on the `Manual` mode Azure defaults to.
-  node_provisioning_profile = local.node_auto_provisioning ? {
+  # A cluster without it is left on the `Manual` mode Azure defaults to.
+  node_provisioning_profile = var.node_auto_provisioning_enabled ? {
     default_node_pools = "None"
     mode               = "Auto"
   } : null
   sku = {
-    name = var.sku_name
+    name = "Base"
     tier = var.sku_tier
   }
   # Persistent storage, or a stateless cluster without any - see persistent_storage_enabled. The
@@ -311,8 +242,12 @@ module "aks" {
     }
   }
   tags = local.cluster_tags
-  # The Vertical Pod Autoscaler add-on - see vertical_pod_autoscaler_enabled.
-  workload_auto_scaler_profile = local.workload_auto_scaler_profile
+  # The Vertical Pod Autoscaler add-on - see vertical_pod_autoscaler_enabled. KEDA is left to AKS.
+  workload_auto_scaler_profile = {
+    vertical_pod_autoscaler = {
+      enabled = var.vertical_pod_autoscaler_enabled
+    }
+  }
 
   disable_local_accounts = true
   # Workload identity federates Kubernetes service accounts with Entra ID, which only works when the
@@ -349,7 +284,6 @@ module "aks" {
   }
   depends_on = [
     azurerm_role_assignment.network_contributor,
-    azurerm_role_assignment.private_dns_zone_contributor,
     time_sleep.role_assignment_propagation,
     azurerm_role_assignment.disk_encryption_set_key,
     azurerm_role_assignment.cluster_customer_managed_keys,
@@ -357,16 +291,12 @@ module "aks" {
   ]
 }
 
-# Cluster admin for the Entra ID groups that are meant to have it, under Azure RBAC. The groups the
-# cluster itself carries in its Entra ID profile - `admin_group_object_ids` above - are not honored
-# in this mode, so the grant is a role assignment on the cluster instead, and the same list means
-# one or the other depending on how the cluster authorizes. `Azure Kubernetes Service RBAC Cluster
-# Admin` is the Azure role that answers to `cluster-admin` inside the cluster.
-#
-# It does not let anyone download a kubeconfig: that takes `Azure Kubernetes Service Cluster User
-# Role` on the cluster, which is a control plane role and is not created here.
+# Cluster admin for the Entra ID groups that are meant to have it. `Azure Kubernetes Service RBAC
+# Cluster Admin` is the Azure role that answers to `cluster-admin` inside the cluster. It does not let
+# anyone download a kubeconfig: that takes `Azure Kubernetes Service Cluster User Role` on the cluster,
+# which is a control plane role and is not created here.
 resource "azurerm_role_assignment" "entra_cluster_admin" {
-  for_each = toset(local.create_entra_group_role_assignments ? var.entra_admin_group_object_ids : [])
+  for_each = toset(var.entra_admin_group_object_ids)
 
   principal_id         = each.value
   scope                = module.aks.resource_id
@@ -380,11 +310,8 @@ resource "azurerm_role_assignment" "entra_cluster_admin" {
 # Read-only access for the Entra ID groups that only need to look. `Azure Kubernetes Service RBAC
 # Reader` reads most objects in every namespace, but not `Secrets` - reading those is a way to act
 # as any service account in the namespace - and not roles or role bindings.
-#
-# Azure RBAC only. Kubernetes RBAC has no counterpart: the cluster's Entra ID profile carries admin
-# groups and nothing else, so a reader group has nowhere to go and the check below says so.
 resource "azurerm_role_assignment" "entra_reader" {
-  for_each = toset(local.create_entra_group_role_assignments ? var.entra_reader_group_object_ids : [])
+  for_each = toset(var.entra_reader_group_object_ids)
 
   principal_id         = each.value
   scope                = module.aks.resource_id
@@ -393,10 +320,9 @@ resource "azurerm_role_assignment" "entra_reader" {
 }
 
 # The identity external-dns publishes the Gateway's hostnames as, federated with the Kubernetes
-# service accounts that act as it - one per zone, see local.external_dns_service_account and
-# Named after the cluster identity with what it does
-# appended, and created only for a zone that is named. The identities that read Key Vault, one per
-# namespace, are in key_vault.tf.
+# service account that acts as it (local.external_dns_service_account). Named after the cluster
+# identity with what it does appended, and created only for a zone that is named. The identities
+# that read Key Vault, one per namespace, are in key_vault.tf.
 #
 # external-dns keeps an A record in each zone for every hostname a Gateway listener serves in it.
 resource "azurerm_user_assigned_identity" "external_dns" {
@@ -408,7 +334,7 @@ resource "azurerm_user_assigned_identity" "external_dns" {
 }
 
 resource "azurerm_federated_identity_credential" "external_dns" {
-  count = var.dns_zone_name == null ? 0 : 1
+  count = local.external_dns_enabled ? 1 : 0
 
   name                      = "aks-${var.name}"
   user_assigned_identity_id = azurerm_user_assigned_identity.external_dns[0].id
@@ -418,7 +344,7 @@ resource "azurerm_federated_identity_credential" "external_dns" {
 }
 
 resource "azurerm_role_assignment" "external_dns" {
-  count = var.create_role_assignments && var.dns_zone_name != null ? 1 : 0
+  count = local.external_dns_enabled ? 1 : 0
 
   principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
   scope                = local.dns_zone_id
@@ -455,130 +381,33 @@ resource "azurerm_role_definition" "portable_disks" {
 }
 
 resource "azurerm_role_assignment" "portable_disks" {
-  count = var.portable_disks_enabled && var.create_role_assignments ? 1 : 0
+  count = var.portable_disks_enabled ? 1 : 0
 
-  principal_id       = local.cluster_identity_principal_id
+  principal_id       = azurerm_user_assigned_identity.this.principal_id
   scope              = data.azurerm_resource_group.this.id
   role_definition_id = azurerm_role_definition.portable_disks[0].role_definition_resource_id
   principal_type     = "ServicePrincipal"
 }
 
-# A public API server with no allowlist is reachable from anywhere on the internet, and Azure will
-# not stop you from creating one. Terraform reports this as a warning rather than an error, because
-# it is a legitimate choice for a throwaway cluster and a bad one for anything else.
-check "api_server_exposure" {
-  assert {
-    condition     = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) > 0
-    error_message = "The API server of ${var.name} is public and reachable from any address. Set private_cluster_enabled = true, or list the ranges that need to reach it in api_server_authorized_ip_ranges."
-  }
-}
-
-# Microsoft documents a delegated API server subnet as required for an AKS Automatic cluster in an
-# existing virtual network - the API server is injected into that subnet, and there is nowhere else
-# in the network for it to go. Terraform warns rather than refuses, because the requirement is
-# Microsoft's rather than something that can be checked here, and Azure has the final say.
-#
-# An environment that has turned the integration off through api_server_vnet_integration_enabled is
-# left alone: the missing subnet is the decision there, not an omission, and a warning on every plan
-# would only train people to ignore this one. So is a cluster that brings no network - the
-# requirement is about an existing virtual network, and there is none.
-check "automatic_api_server_subnet" {
-  assert {
-    condition     = !local.is_automatic || !local.byo_network || !var.api_server_vnet_integration_enabled || var.api_server_subnet_name != null
-    error_message = "${var.name} is an AKS Automatic cluster in an existing virtual network with no api_server_subnet_name, so API Server VNet Integration is off. Microsoft documents a subnet delegated to Microsoft.ContainerService/managedClusters as required for this combination; Azure may refuse the cluster or leave it in Creating. Set api_server_vnet_integration_enabled = false to state that this is deliberate."
-  }
-}
-
-# Pods and services on a range that also belongs to the existing network have nowhere to route to.
+# Pods and services on a range that also belongs to the cell's network have nowhere to route to.
 # Azure creates the cluster regardless and the damage only shows once something tries to talk across
-# it, so this is checked before the apply rather than discovered afterwards.
-#
-# It matters most for AKS Automatic. The module drops the whole network profile for that SKU while
-# `outbound_type` is `loadBalancer`, so the ranges below are Azure's own defaults rather than the
-# ones network_profile asks for - and Azure's default service range, 10.0.0.0/16, collides with a
-# great many existing networks. The ranges cannot be changed after the cluster is created.
+# it, so this is checked before the apply rather than discovered afterwards. The ranges cannot be
+# changed after the cluster is created.
 check "cluster_cidrs_do_not_overlap_the_network" {
   assert {
     condition     = length(local.overlapping_cluster_cidrs) == 0
-    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${coalesce(var.virtual_network_name, "the existing network")}: ${join(", ", local.overlapping_cluster_cidrs)}.${local.network_profile_is_sent ? " Move network_profile.pod_cidr and network_profile.service_cidr out of the way." : " These are Azure's defaults, because an AKS Automatic cluster on loadBalancer egress is sent no network profile at all - see the AKS Automatic section of the README."}"
+    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${var.virtual_network_name}: ${join(", ", local.overlapping_cluster_cidrs)}. Move network_profile.pod_cidr and network_profile.service_cidr out of the way."
   }
 }
 
-# AKS Automatic cannot bring its own node pools up without Network Contributor on the whole virtual
-# network. This only fires when an environment overrides the scope back down to the subnets, since
-# that is otherwise the default for Base clusters only. A cluster with no network of its own grants
-# nothing and needs nothing granted: AKS owns the network it creates.
-check "automatic_network_role_assignment_scope" {
+# The zone NodePools of the Flux repository read the availability zone from the cluster's settings
+# (nap_availability_zone). Without it the variable is substituted as nothing, Azure is handed an
+# empty zone, and every NodePool is refused or never ready - so a cell that cannot say it is worth a
+# word before it is built.
+check "node_auto_provisioning_has_a_zone" {
   assert {
-    condition     = !local.is_automatic || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
-    error_message = "${var.name} is an AKS Automatic cluster scoped to its subnets. Node autoprovisioning creates node pools the subnet assignments do not cover, and the cluster can sit in Creating until it times out. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
-  }
-}
-
-# The same for node auto provisioning on a Base cluster: the zone NodePools create their nodes
-# outside every node pool the subnet assignments were made for.
-check "node_auto_provisioning_network_role_assignment_scope" {
-  assert {
-    condition     = !local.node_auto_provisioning || !local.byo_network || !var.create_role_assignments || local.network_role_assignment_scope == "virtual_network"
-    error_message = "${var.name} runs node auto provisioning with Network Contributor on its subnets only. Microsoft documents the whole virtual network as the scope NAP needs; nodes may fail to join. Leave network_role_assignment_scope unset, or set it to \"virtual_network\"."
-  }
-}
-
-# The zone NodePools of the Flux repository read the subnet and the availability zone from the
-# cluster's settings (nap_subnet_id, nap_availability_zone). Without them the variables are
-# substituted as nothing, Azure is handed an empty subnet or zone, and every NodePool is refused or
-# never ready - so a cell that cannot say either is worth a word before it is built.
-check "node_auto_provisioning_has_a_subnet_and_a_zone" {
-  assert {
-    condition     = !local.node_auto_provisioning || (local.byo_network && length(coalesce(var.default_node_pool.availability_zones, [])) == 1)
-    error_message = "${var.name} runs node auto provisioning, but ${local.byo_network ? "its system pool is not in exactly one availability zone" : "it brings no network of its own"}, so the Flux repository is not told ${local.byo_network ? "nap_availability_zone" : "nap_subnet_id"} for its zone NodePools. A stateless cell is one availability zone in an existing network: set default_node_pool.availability_zones to one zone and name virtual_network_name and node_subnet_name."
-  }
-}
-
-# Azure preconfigures an Automatic cluster with Microsoft Entra ID authentication with Azure RBAC and
-# gives it no way off, so `azure_rbac_enabled = false` is overridden rather than sent. The groups are
-# granted through role assignments regardless of what the variable says, and this warns that the
-# variable is not what decided it.
-check "automatic_is_always_authorized_through_azure_rbac" {
-  assert {
-    condition     = !local.is_automatic || var.azure_rbac_enabled
-    error_message = "${var.name} is an AKS Automatic cluster with azure_rbac_enabled = false. Azure preconfigures Automatic with Microsoft Entra ID authentication with Azure RBAC, so the cluster is authorized that way regardless and the Entra ID groups are granted their access as role assignments on it. Leave azure_rbac_enabled unset, or use the Base SKU to authorize through Kubernetes RBAC."
-  }
-}
-
-# Read-only access exists in Azure RBAC only. Under Kubernetes RBAC the cluster's Entra ID profile
-# takes admin groups and nothing else, so listed reader groups are granted nothing at all - by
-# Terraform or by anyone else - and the silence is worth a word.
-check "reader_groups_need_azure_rbac" {
-  assert {
-    condition     = local.azure_rbac_enabled || length(var.entra_reader_group_object_ids) == 0
-    error_message = "${var.name} authorizes through Kubernetes RBAC, where entra_reader_group_object_ids has no equivalent: the cluster's Entra ID profile carries admin groups only, so those ${length(var.entra_reader_group_object_ids)} group(s) are granted nothing. Set azure_rbac_enabled = true to grant them Azure Kubernetes Service RBAC Reader, or bind them inside the cluster with a Kubernetes ClusterRoleBinding."
-  }
-}
-
-# With role assignments managed elsewhere, the groups are named here but granted somewhere else -
-# and nobody notices until the first kubectl comes back forbidden.
-check "entra_groups_are_granted_somewhere" {
-  assert {
-    condition     = var.create_role_assignments || !local.azure_rbac_enabled || length(var.entra_admin_group_object_ids) + length(var.entra_reader_group_object_ids) == 0
-    error_message = "${var.name} has create_role_assignments = false, so the Entra ID groups listed for it are not granted anything here. Assign Azure Kubernetes Service RBAC Cluster Admin to entra_admin_group_object_ids and Azure Kubernetes Service RBAC Reader to entra_reader_group_object_ids on the cluster wherever the role assignments of this estate are managed."
-  }
-}
-
-check "flux_github_webhook_has_a_vault_and_a_repository" {
-  assert {
-    condition     = !var.flux_github_webhook || local.flux_github_webhook_enabled
-    error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${local.key_vault_enabled ? "no flux_git_repository to reconcile" : "no key_vault_name to keep its token in"}: no token is created."
-  }
-}
-
-# A bring-your-own private DNS zone is registered by the cluster identity, which has to hold Private
-# DNS Zone Contributor before the cluster is created. A system assigned identity does not exist until
-# then, so the grant cannot be made in advance and the create can fail to register its record.
-check "byo_private_dns_zone_has_an_identity_to_grant" {
-  assert {
-    condition     = !local.system_assigned_identity || !local.use_byo_private_dns_zone
-    error_message = "${var.name} is a private AKS Automatic cluster on the network AKS manages, so it runs on a system assigned identity that does not exist until the cluster does - and ${coalesce(var.private_dns_zone_name, "the private DNS zone")} cannot be granted to it in advance. Use the AKS-managed zone (leave private_dns_zone_name unset), or attach the cluster to an existing virtual network, which lets it run on the identity created here."
+    condition     = !var.node_auto_provisioning_enabled || length(coalesce(var.default_node_pool.availability_zones, [])) == 1
+    error_message = "${var.name} runs node auto provisioning, but its system pool is not in exactly one availability zone, so the Flux repository is not told nap_availability_zone for its zone NodePools. A stateless cell is one availability zone: set default_node_pool.availability_zones to one zone."
   }
 }
 
@@ -589,7 +418,7 @@ check "byo_private_dns_zone_has_an_identity_to_grant" {
 # hand, say - which `network_profile.network_policy` knows nothing about.
 check "managed_namespaces_have_something_enforcing_their_network_policies" {
   assert {
-    condition     = local.network_policy_engine_enabled || length(local.managed_namespaces_relying_on_network_policy) == 0
+    condition     = var.network_profile.network_policy != "none" || length(local.managed_namespaces_relying_on_network_policy) == 0
     error_message = "${var.name} has network_profile.network_policy = \"none\", so nothing in it enforces a Kubernetes NetworkPolicy - and the restricted default policies of ${join(", ", local.managed_namespaces_relying_on_network_policy)} are written but never applied. Set network_profile.network_policy to \"cilium\", \"azure\" or \"calico\", or set network_policy = { egress = \"AllowAll\", ingress = \"AllowAll\" } on those namespaces to say that the boundary is drawn somewhere else."
   }
 }
@@ -607,32 +436,12 @@ check "pod_security_exceptions_stay_on_the_record" {
   }
 }
 
-# The three data plane roles are Azure RBAC roles, and a cluster authorizing through Kubernetes RBAC
-# does not consult Azure role assignments at all: the grants are made, Azure reports them, and every
-# kubectl from those principals still comes back forbidden. `namespace_user` is unaffected - it is a
-# control plane role on the Azure resource - so a namespace granted only that is not warned about.
-check "namespace_access_needs_azure_rbac" {
-  assert {
-    condition     = local.azure_rbac_enabled || length(local.managed_namespace_data_plane_grants) == 0
-    error_message = "${var.name} authorizes through Kubernetes RBAC, where the reader, writer and admin roles granted on its namespaces mean nothing: ${length(local.managed_namespace_data_plane_grants)} grant(s) would be created and no kubectl would be allowed by them. Set azure_rbac_enabled = true, or bind those principals inside the cluster with a Kubernetes RoleBinding in the namespace."
-  }
-}
-
 # The role bindings of managed_namespaces[*].groups live inside the cluster and are applied by the
 # cluster's Flux configuration; a cluster without one gets the namespaces and no bindings in them.
 check "namespace_groups_need_flux" {
   assert {
     condition     = local.flux_enabled || length(local.managed_namespace_role_bindings) == 0
     error_message = "${var.name} has no flux_git_repository, so the ${length(local.managed_namespace_role_bindings)} role binding(s) of managed_namespaces[*].groups are not applied: they are delivered by the cluster's Flux configuration. Set flux_git_repository, or bind those groups inside the cluster some other way."
-  }
-}
-
-# With role assignments managed elsewhere the namespaces are still created here, but nobody is
-# granted anything on them - and the first sign of it is a team that cannot reach its own namespace.
-check "namespace_access_is_granted_somewhere" {
-  assert {
-    condition     = var.create_role_assignments || length(local.managed_namespace_access_grants) == 0
-    error_message = "${var.name} has create_role_assignments = false, so the ${length(local.managed_namespace_access_grants)} namespace grant(s) listed in managed_namespaces are not made here. Assign the roles on the namespace resource IDs - the managed_namespace_ids output - wherever the role assignments of this estate are managed."
   }
 }
 
@@ -677,10 +486,9 @@ resource "azapi_resource" "maintenance_configuration" {
 }
 
 # GitOps through Flux, for a cluster that names a repository in flux_git_repository, or a managed
-# namespace that names one in `flux` - on either SKU.
-# The extension installs the Flux controllers into `flux-system` and keeps them on the newest minor
-# version of the stable release train; the configuration points them at the repository and
-# reconciles the one Kustomization the cluster's main configuration lives in.
+# namespace that names one in `flux`. The extension installs the Flux controllers into `flux-system`
+# and keeps them on the newest minor version of the stable release train; the configuration points
+# them at the repository and reconciles the one Kustomization the cluster's main configuration lives in.
 #
 # The module has no input for cluster extensions, so both are written here with AzAPI, like the
 # upgrade windows and the namespaces.
@@ -717,11 +525,9 @@ resource "azapi_resource" "flux_extension" {
   depends_on = [module.aks]
 }
 
-# A private repository is read with the credential in flux_git_credentials: a token over HTTPS, or an
-# SSH private key - see that variable.
-#
-# `prune` lets Flux delete what was removed from the repository, so the cluster follows the
-# repository rather than accumulating everything it ever contained.
+# The platform's repositories are public: no credential is sent. `prune` lets Flux delete what was
+# removed from the repository, so the cluster follows the repository rather than accumulating
+# everything it ever contained.
 resource "azapi_resource" "flux_configuration" {
   count = local.flux_enabled ? 1 : 0
 
@@ -729,27 +535,12 @@ resource "azapi_resource" "flux_configuration" {
   parent_id = module.aks.resource_id
   type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
   body      = local.flux_configuration_body
-  # The token or private key of a private repository. Write-only: Azure gets it, the state does not.
-  # AzAPI sends it only when its entry in sensitive_body_version moves, yet every update is a PUT
-  # that replaces the whole configuration - and Azure drops protected settings a PUT leaves out. So
-  # the version hashes the body along with the credential: any change to the configuration sends
-  # the credential with it, and rotating the credential is an ordinary apply.
-  sensitive_body = length(local.flux_protected_settings) == 0 ? null : {
-    properties = {
-      configurationProtectedSettings = local.flux_protected_settings
-    }
-  }
-  sensitive_body_version = {
-    for setting, value in local.flux_protected_settings :
-    "properties.configurationProtectedSettings.${setting}" => sha256("${value}${jsonencode(local.flux_configuration_body)}")
-  }
 
   depends_on = [azapi_resource.flux_extension]
 }
 
 # The role bindings of a managed namespace's groups - see managed_namespace_access_flux_configurations.
-# Named `<namespace>-access`; its Kustomizations are `<namespace>-access-<role>` in flux-system. It reads
-# the cluster's repository with the same credential as the `platform` configuration, sent the same way.
+# Named `<namespace>-access`; its Kustomizations are `<namespace>-access-<role>` in flux-system.
 resource "azapi_resource" "managed_namespace_access_flux_configuration" {
   for_each = local.managed_namespace_access_flux_configurations
 
@@ -757,15 +548,6 @@ resource "azapi_resource" "managed_namespace_access_flux_configuration" {
   parent_id = module.aks.resource_id
   type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
   body      = each.value
-  sensitive_body = length(local.flux_protected_settings) == 0 ? null : {
-    properties = {
-      configurationProtectedSettings = local.flux_protected_settings
-    }
-  }
-  sensitive_body_version = {
-    for setting, value in local.flux_protected_settings :
-    "properties.configurationProtectedSettings.${setting}" => sha256("${value}${jsonencode(each.value)}")
-  }
 
   # The namespace is there before a binding is put into it.
   depends_on = [azapi_resource.flux_extension, azapi_resource.managed_namespace]
@@ -821,22 +603,17 @@ resource "azapi_resource" "managed_namespace" {
   depends_on = [module.aks]
 }
 
-# Namespace-scoped access, granted on the namespace resource rather than on the cluster: a group or
-# a service principal listed here reaches that one namespace and has no way into the one next door.
-# `Azure Kubernetes Service Namespace User` is what lets a principal fetch a kubeconfig for the
-# namespace - `az aks namespace get-credentials` - so a team that is only meant to work in its own
-# namespace needs no cluster-wide grant at all, which is the point of managing namespaces here.
-#
-# The three data plane roles are enforced by Azure RBAC for Kubernetes authorization and grant
-# nothing without it; the check further up says so rather than leaving it to be discovered.
+# A kubeconfig for the namespace alone, for the groups of `managed_namespaces[*].groups`: `Azure
+# Kubernetes Service Namespace User` on the namespace resource lets a member run `az aks namespace
+# get-credentials` and reach that one namespace, with the rights the group's RoleBinding gives it there
+# - no cluster-wide grant at all, which is the point of managing namespaces here.
 resource "azurerm_role_assignment" "managed_namespace" {
-  for_each = local.managed_namespace_role_assignments
+  for_each = local.managed_namespace_user_grants
 
-  principal_id         = each.value.principal_id
+  principal_id         = each.value.group_object_id
   scope                = azapi_resource.managed_namespace[each.value.namespace].id
-  role_definition_name = local.managed_namespace_role_definition_names[each.value.role]
-  # Stated for the same reason it is on the cluster grants: a group or service principal created
-  # moments ago has not replicated everywhere yet, and Azure fails an assignment to a principal it
-  # cannot look up.
-  principal_type = each.value.principal_type
+  role_definition_name = "Azure Kubernetes Service Namespace User"
+  # Stated for the same reason it is on the cluster grants: a group created moments ago has not
+  # replicated everywhere yet, and Azure fails an assignment to a principal it cannot look up.
+  principal_type = "Group"
 }

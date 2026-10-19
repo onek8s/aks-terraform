@@ -5,11 +5,11 @@ data "azurerm_container_registry" "this" {
   count = var.container_registry_name == null ? 0 : 1
 
   name                = var.container_registry_name
-  resource_group_name = coalesce(var.container_registry_resource_group_name, var.resource_group_name)
+  resource_group_name = var.resource_group_name
 }
 
 resource "azurerm_role_assignment" "kubelet_container_registry_pull" {
-  count = var.container_registry_name != null && var.create_role_assignments ? 1 : 0
+  count = var.container_registry_name == null ? 0 : 1
 
   principal_id         = module.aks.kubelet_identity.objectId
   scope                = data.azurerm_container_registry.this[0].id

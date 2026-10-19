@@ -63,7 +63,7 @@ resource "azurerm_user_assigned_identity" "image_verification" {
 }
 
 locals {
-  image_verification_grants = var.image_signing == null || local.names.container_registry == null || !var.create_role_assignments ? {} : {
+  image_verification_grants = var.image_signing == null || local.names.container_registry == null ? {} : {
     # The images' signatures, which are artifacts in the registry next to the images.
     registry = { scope = azurerm_container_registry.this[0].id, role = "AcrPull" }
     # The signing certificate, through its secret - only that one.

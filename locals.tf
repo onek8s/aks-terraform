@@ -6,6 +6,11 @@ locals {
   # API version of the Kubernetes Configuration resource provider, which owns cluster extensions.
   kubernetes_configuration_api_version = "2024-11-01"
 
+  # How long to wait after creating the role assignments before creating the cluster: Azure RBAC is
+  # eventually consistent, and a cluster created the moment the assignment returns is regularly refused
+  # the subnet it is supposed to join.
+  role_assignment_propagation_delay = "60s"
+
   # Flux is installed only for a cluster that names a repository for it to sync: its own, or a
   # tenant namespace's.
   flux_enabled           = var.flux_git_repository != null
@@ -54,15 +59,6 @@ locals {
     } if namespace.flux != null
   }
 
-  # The credential Flux reads a private repository with. Azure takes protected settings base64
-  # encoded, and the HTTPS user in the open next to the repository URL.
-  flux_protected_settings = var.flux_git_credentials == null ? {} : (
-    var.flux_git_credentials.https_key != null
-    ? { httpsKey = base64encode(var.flux_git_credentials.https_key) }
-    : { sshPrivateKey = base64encode(var.flux_git_credentials.ssh_private_key) }
-  )
-  flux_https_user = try(nonsensitive(var.flux_git_credentials.https_key != null ? var.flux_git_credentials.https_user : null), null)
-
   # What the cluster's Flux repository is told about the Azure side of the cluster, as post-build
   # variables of the `platform` Kustomization: the facts it cannot know on its own and should not
   # have copied into it by hand. clusters/<cluster>/ in the repository passes them on to whatever
@@ -80,32 +76,32 @@ locals {
       # "Post build substitution of numbers and booleans").
       quote = "\""
     },
-    # The cluster's Key Vault, and for each namespace with a share of it the identity that reads
-    # that share: `key_vault_client_id_<namespace>`, the namespace's hyphens as underscores, since a
-    # Flux variable name has no hyphens.
+    # The environment's platform vault, and for each namespace with a share of a vault the identity
+    # that reads that share: `key_vault_client_id_<namespace>`, the namespace's hyphens as
+    # underscores, since a Flux variable name has no hyphens.
     local.key_vault_enabled ? { key_vault_url = local.key_vault_uri } : {},
     {
       for namespace in local.key_vault_namespaces :
-      "key_vault_client_id_${replace(namespace, "-", "_")}" => local.key_vault_identities[namespace].client_id
+      "key_vault_client_id_${replace(namespace, "-", "_")}" => data.azurerm_user_assigned_identity.key_vault[namespace].client_id
     },
     # The DNS zones the listener hostnames are published in, and the identity that writes them.
-    var.dns_zone_name == null ? {} : {
+    local.external_dns_enabled ? {
       dns_zone_name                = var.dns_zone_name
       dns_zone_resource_group_name = local.dns_zone_resource_group_name
       dns_zone_subscription_id     = split("/", local.dns_zone_id)[2]
       # Whether the zone is public or private, and the external-dns provider that writes it.
-      dns_zone_private = tostring(var.dns_zone_private)
-      dns_provider     = var.dns_zone_private ? "azure-private-dns" : "azure"
-    },
-    local.external_dns_enabled ? { dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id } : {},
+      dns_zone_private       = tostring(var.dns_zone_private)
+      dns_provider           = var.dns_zone_private ? "azure-private-dns" : "azure"
+      dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id
+    } : {},
     # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
     # portable_disks_enabled.
     var.portable_disks_enabled ? { portable_disk_resource_group_name = var.resource_group_name } : {},
     # Where node auto provisioning puts the zone nodes: the subnet of every zone's AKSNodeClass, and
     # the availability zone of the cell - its system pool's one zone, as Kubernetes spells it
     # (`swedencentral-1`) - that every zone NodePool requires. See node_auto_provisioning_enabled.
-    local.node_auto_provisioning && local.byo_network ? { nap_subnet_id = data.azurerm_subnet.node[0].id } : {},
-    local.node_auto_provisioning && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
+    var.node_auto_provisioning_enabled ? { nap_subnet_id = data.azurerm_subnet.node.id } : {},
+    var.node_auto_provisioning_enabled && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
       nap_availability_zone = "${var.location}-${var.default_node_pool.availability_zones[0]}"
     } : {},
     # The image signature verifier's identity, the signing certificate in the platform vault and the
@@ -123,19 +119,17 @@ locals {
     local.flux_gateway_settings,
   )
 
-  # The Flux configuration as sent to Azure, apart from the credential: a local rather than written
-  # into the resource, because the credential's version has to hash it - see flux_configuration. Its
-  # shape is known even before the inputs are, which the provider needs from a write-only body; a
-  # cluster without Flux builds it from nulls and has no configuration to send it with.
+  # The Flux configuration as sent to Azure. A local, because the namespace access configurations
+  # below are made from it.
   flux_configuration_body = {
     properties = {
-      gitRepository = merge({
+      gitRepository = {
         repositoryRef = {
           branch = try(var.flux_git_repository.branch, null)
         }
         syncIntervalInSeconds = try(var.flux_git_repository.sync_interval_seconds, null)
         url                   = try(var.flux_git_repository.url, null)
-      }, local.flux_https_user == null ? {} : { httpsUser = local.flux_https_user })
+      }
       kustomizations = {
         platform = {
           path                  = try(var.flux_git_repository.path, null)
@@ -157,7 +151,6 @@ locals {
       sourceKind = "GitRepository"
     }
   }
-
 
   # The role bindings of managed_namespaces[*].groups, as one Flux configuration per namespace that
   # names a group: cluster scope in flux-system, reading the cluster's own repository, with one
@@ -195,134 +188,34 @@ locals {
   key_vault_service_account    = "key-vault"
   external_dns_service_account = "system:serviceaccount:external-dns:external-dns"
 
-  # The DNS zone, public or private, whether looked up or created here. Null when no zone is named.
+  # The DNS zone, public or private. Null when no zone is named.
   dns_zone_resource_group_name = coalesce(var.dns_zone_resource_group_name, var.resource_group_name)
-  dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, azurerm_dns_zone.this[*].id, data.azurerm_private_dns_zone.zone[*].id))
+  dns_zone_id                  = one(concat(data.azurerm_dns_zone.this[*].id, data.azurerm_private_dns_zone.zone[*].id))
 
   # external-dns, and the identity it writes as, are there for the zone.
   external_dns_enabled = var.dns_zone_name != null
 
-  # The Key Vault is there for a cluster that names one: its own, created here, or the environment's
-  # shared one, created by shared/ and looked up - see key_vault_create.
+  # The environment's platform vault, created by shared/ and looked up for a cluster that names it -
+  # see key_vault.tf.
   key_vault_enabled = var.key_vault_name != null
-  key_vault_owned   = local.key_vault_enabled && var.key_vault_create
-  key_vault_shared  = local.key_vault_enabled && !var.key_vault_create
-  key_vault_id      = one(concat(data.azurerm_key_vault.this[*].id, azurerm_key_vault.this[*].id))
-  key_vault_uri     = one(concat(data.azurerm_key_vault.this[*].vault_uri, azurerm_key_vault.this[*].vault_uri))
+  key_vault_id      = one(data.azurerm_key_vault.this[*].id)
+  key_vault_uri     = one(data.azurerm_key_vault.this[*].vault_uri)
 
-  # The identity each namespace reads the vault as: the cluster's own beside its own vault, the
-  # environment's shared one beside the shared vault - see key_vault.tf.
-  key_vault_identities = merge(data.azurerm_user_assigned_identity.key_vault, azurerm_user_assigned_identity.key_vault)
-
-  # The namespaces with a share of the vault: every managed namespace, and the ones the platform
+  # The namespaces with a share of a vault: every managed namespace, and the ones the platform
   # creates itself that key_vault_namespaces names. None without a vault.
-  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces), local.flux_github_webhook_enabled ? ["flux-system"] : [])) : toset([])
-
-  # The Flux GitHub webhook's token lives in the vault, for the Receiver in flux-system to read.
-  flux_github_webhook_enabled = var.flux_github_webhook && local.flux_enabled && local.key_vault_enabled
-
-  # Each namespace's share of the vault, as the ABAC conditions that hold a role assignment to it -
-  # the estate's conventions, shared with shared/ - see modules/conventions.
-  key_vault_read_conditions  = module.conventions.key_vault_read_conditions
-  key_vault_write_conditions = module.conventions.key_vault_write_conditions
-
-  # The namespace grants that come with the namespace's secrets: whoever may write in the namespace
-  # manages its share of the vault as well. Keyed like the grants they come from.
-  # The groups of `groups` get the same as their Kubernetes role (design section 2.6): `admin` manages
-  # the namespace's secrets, by name; `edit` writes and updates them without reading a value (the
-  # Secrets Editor role, D51) unless it is also the admin group or a writer; `view` gets nothing, as
-  # Kubernetes' `view` sees no Secret.
-  key_vault_writer_role_assignments = var.create_role_assignments && local.key_vault_owned ? merge({
-    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/writer/${binding.group_object_id}" => {
-      namespace      = binding.namespace
-      principal_id   = binding.group_object_id
-      principal_type = "Group"
-    } if binding.role == "admin"
-    }, {
-    for key, grant in local.managed_namespace_access_grants : key => grant
-    if contains(["admin", "writer"], grant.role)
-  }) : {}
-  key_vault_writer_principals = toset([for grant in values(local.key_vault_writer_role_assignments) : "${grant.namespace}/${lower(grant.principal_id)}"])
-  key_vault_editor_role_assignments = var.create_role_assignments && local.key_vault_owned ? {
-    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/editor/${binding.group_object_id}" => {
-      namespace    = binding.namespace
-      principal_id = binding.group_object_id
-    } if binding.role == "edit" && !contains(local.key_vault_writer_principals, "${binding.namespace}/${binding.group_object_id}")
-  } : {}
-
-  # Authorized IP ranges only apply to a public API server; an empty list means "no restriction".
-  api_server_authorized_ip_ranges = var.private_cluster_enabled || length(var.api_server_authorized_ip_ranges) == 0 ? null : var.api_server_authorized_ip_ranges
-
-  # Whether the cluster is attached to a network that already exists. Without one, AKS creates and
-  # manages a virtual network for it inside the node resource group: no subnet is looked up, there
-  # is nothing to grant the cluster identity, and every bring-your-own network field stays null.
-  byo_network = var.virtual_network_name != null
-
-  # Azure refuses an Automatic cluster on the network AKS manages unless the cluster runs on a
-  # system assigned identity: `Managed cluster 'Automatic' SKU should use SAMI when using managed
-  # vnet`. That works out, because the user assigned identity below exists precisely to be granted
-  # access to resources that already exist - and a cluster that brings no network has none of those
-  # to be granted. The identity is not created at all in that case; the cluster's own is used.
-  system_assigned_identity = local.is_automatic && !local.byo_network
+  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces))) : toset([])
 
   # The environment a cluster belongs to, for the names of the environment's shared resources: the
   # variable, or else from the cluster's name - <what it is>-<environment>-<which one> -
   # `aks-dev-ext-stateless-az1` is in `dev`.
   environment = coalesce(var.environment, length(local.name_segments) < 2 ? var.name : local.name_segments[1])
 
-  # The principal the cluster acts as towards Azure: the identity created here, or its own.
-  cluster_identity_principal_id = local.system_assigned_identity ? module.aks.identity_principal_id : one(azurerm_user_assigned_identity.this[*].principal_id)
-
-  # Whether the API server is joined to the existing network. It takes both halves: the integration
-  # turned on and a subnet to inject the API server into. Either one missing leaves the API server
-  # where AKS puts it by default, and nothing about the subnet reaches Azure.
-  api_server_vnet_integration = var.api_server_vnet_integration_enabled && var.api_server_subnet_name != null
-
-  # How the cluster authorizes calls to the Kubernetes API. With Azure RBAC - "Microsoft Entra ID
-  # authentication with Azure RBAC" - AKS decides every call from Azure role assignments on the
-  # cluster; without it the cluster falls back to Kubernetes RBAC, where the only Entra ID groups
-  # that get anything are the admin groups of the cluster's own Entra ID profile. AKS Automatic is
-  # preconfigured with Azure RBAC and cannot be moved off it, so the SKU overrides the variable
-  # rather than sending Azure a request it would ignore.
-  azure_rbac_enabled = local.is_automatic || var.azure_rbac_enabled
-
-  # The admin groups sent in the cluster's Entra ID profile. Under Azure RBAC they are not honored -
-  # authorization comes from the role assignments below instead - so nothing is sent there, which is
-  # also what Azure itself reports for such a cluster: `"adminGroupObjectIds": null`.
-  kubernetes_rbac_admin_group_object_ids = local.azure_rbac_enabled ? null : var.entra_admin_group_object_ids
-
-  # Whether the group grants on the cluster are made here. They only exist under Azure RBAC, and
-  # they are role assignments like any other, so an estate that has role assignments managed
-  # elsewhere gets these from there too.
-  create_entra_group_role_assignments = local.azure_rbac_enabled && var.create_role_assignments
-
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
   # Feeding them back keeps the tags out of the plan instead of having Terraform delete them.
   cluster_tags = try(data.azapi_resource_list.managed_clusters.output.tags, null)
 
-  # The VPA add-on, which resizes the applications' pods in place - see
-  # vertical_pod_autoscaler_enabled. Not sent for AKS Automatic, which manages it. KEDA is left to
-  # AKS (null is not sent).
-  workload_auto_scaler_profile = local.is_automatic ? null : {
-    vertical_pod_autoscaler = {
-      enabled = var.vertical_pod_autoscaler_enabled
-    }
-  }
-
-  # Cost analysis breaks the cluster spend down by namespace and deployment in Azure Cost
-  # Management. Azure sells it with the paid tiers only and refuses the request on Free.
-  cost_analysis_enabled = var.cost_analysis_enabled == null ? null : var.cost_analysis_enabled
-
-  # What of `default_node_pool` reaches Azure. A Base cluster gets all of it. An AKS Automatic
-  # cluster sizes, scales and rolls its own node pools, so it gets only the name and the node
-  # subnet - what the module's own Automatic example sends - and the count falls back to the three
-  # nodes the module defaults to, rather than a number written for a Base cluster.
-  #
-  # Leaving the rest set and relying on the module to drop it does not work. The module filters the
-  # create request down to what Automatic accepts, but the follow-up request it sends straight to
-  # the agent pool afterwards - the one that exists because the cluster resource ignores changes to
-  # `agentPoolProfiles` - is not filtered at all, so a VM size, an autoscaler setting and a set of
-  # upgrade settings reach an Automatic cluster that has no place to put them.
+  # The system pool as sent. The upgrade settings belong to the pool: the cluster level
+  # upgrade_settings of the module only carries the force-upgrade override.
   default_agent_pool = {
     availability_zones  = var.default_node_pool.availability_zones
     count_of            = var.default_node_pool.node_count
@@ -334,16 +227,13 @@ locals {
     os_disk_size_gb     = var.default_node_pool.os_disk_size_gb
     os_disk_type        = var.default_node_pool.os_disk_type
     type                = "VirtualMachineScaleSets"
-    # How the pool is rolled during an upgrade. These belong to the pool: the cluster level
-    # upgrade_settings of the module only carries the force-upgrade override, and silently drops
-    # anything else, because Terraform discards object attributes a type constraint does not declare.
     upgrade_settings = {
       drain_timeout_in_minutes      = var.default_node_pool.drain_timeout_minutes
       max_surge                     = var.default_node_pool.max_surge
       node_soak_duration_in_minutes = var.default_node_pool.node_soak_duration_minutes
     }
     vm_size        = var.default_node_pool.vm_size
-    vnet_subnet_id = one(data.azurerm_subnet.node[*].id)
+    vnet_subnet_id = data.azurerm_subnet.node.id
     # A pod-subnet cell (design D74): the system pool's pods in their own subnet
     pod_subnet_id = one(data.azurerm_subnet.system_pods[*].id)
 
@@ -354,20 +244,6 @@ locals {
       ssh_access = var.default_node_pool.ssh_access
     }
   }
-
-  # The pod and service ranges Azure assigns by itself when the create request carries no network
-  # profile of its own. This is a RECORD OF WHAT AKS DOES, not a setting: editing it changes nothing
-  # about the cluster, only what the overlap check below compares against. Change it only if Azure's
-  # own defaults change. To choose the ranges a cluster runs on, set network_profile.pod_cidr and
-  # network_profile.service_cidr - and note that they only reach Azure when the module sends the
-  # network profile at all, which the README's AKS Automatic section explains.
-  azure_assigned_cluster_cidrs = ["10.244.0.0/16", "10.0.0.0/16"]
-
-  # The ranges the cluster will actually run on, whichever of the two they came from.
-  effective_cluster_cidrs = local.network_profile_is_sent ? compact([
-    local.pod_overlay ? var.network_profile.pod_cidr : null,
-    var.network_profile.service_cidr,
-  ]) : local.azure_assigned_cluster_cidrs
 
   # The cluster's identity, by the naming policy's `user_assigned_identity` (modules/conventions) -
   # `id-<region code>-<environment>-<function>` by default - worked out from the cluster name and the
@@ -543,50 +419,6 @@ locals {
     }
   }
 
-  # Azure role names behind the short forms `managed_namespaces[*].access` uses. Only the roles that
-  # mean something at the scope of a single namespace are here: `Azure Kubernetes Service Namespace
-  # Contributor` creates and deletes managed namespaces on a cluster, which is what Terraform does,
-  # and the cluster-wide roles belong to entra_admin_group_object_ids.
-  managed_namespace_role_definition_names = {
-    admin          = "Azure Kubernetes Service RBAC Admin"
-    namespace_user = "Azure Kubernetes Service Namespace User"
-    reader         = "Azure Kubernetes Service RBAC Reader"
-    writer         = "Azure Kubernetes Service RBAC Writer"
-  }
-
-  # The roles the Kubernetes API enforces through Azure RBAC, and which therefore grant nothing at
-  # all on a cluster authorizing through Kubernetes RBAC. `namespace_user` is not one of them: it is
-  # a control plane role on the Azure resource, and works whichever mode the cluster runs in.
-  managed_namespace_data_plane_roles = ["admin", "reader", "writer"]
-
-  # Every grant asked for, keyed by what it grants rather than by its position in the list: an entry
-  # removed from the middle of `access` must not renumber the assignments after it and have Azure
-  # drop and recreate them.
-  #
-  # Every group of `groups` comes with `namespace_user`, so that its members can fetch a kubeconfig
-  # for the namespace; merged rather than listed twice, since `access` may grant the same.
-  managed_namespace_access_grants = merge({
-    for binding in values(local.managed_namespace_role_bindings) : "${binding.namespace}/namespace_user/${binding.group_object_id}" => {
-      key            = "${binding.namespace}/namespace_user/${binding.group_object_id}"
-      namespace      = binding.namespace
-      principal_id   = binding.group_object_id
-      principal_type = "Group"
-      role           = "namespace_user"
-    }
-    }, {
-    for grant in flatten([
-      for name, namespace in var.managed_namespaces : [
-        for access in namespace.access : {
-          key            = "${name}/${access.role}/${access.principal_id}"
-          namespace      = name
-          principal_id   = access.principal_id
-          principal_type = access.principal_type
-          role           = access.role
-        }
-      ]
-    ]) : grant.key => grant
-  })
-
   # The Kubernetes RoleBindings of `managed_namespaces[*].groups`: one per namespace and role that
   # names a group, keyed `<namespace>-<role>`. Which ones there are follows from the inputs alone.
   managed_namespace_role_bindings = {
@@ -601,15 +433,14 @@ locals {
     ]) : "${binding.namespace}-${binding.role}" => binding
   }
 
-  # ... and the ones made here. An estate with role assignments managed elsewhere gets these from
-  # there too, like every other assignment in this configuration.
-  managed_namespace_role_assignments = var.create_role_assignments ? local.managed_namespace_access_grants : {}
-
-  # Grants that need Azure RBAC to mean anything, for the check that says so.
-  managed_namespace_data_plane_grants = [
-    for key, grant in local.managed_namespace_access_grants : key
-    if contains(local.managed_namespace_data_plane_roles, grant.role)
-  ]
+  # Every group of `groups` gets `Azure Kubernetes Service Namespace User` on its namespace, so that
+  # its members can fetch a kubeconfig for the namespace. Keyed by what it grants rather than by
+  # position, so that a group removed from one role does not renumber the rest.
+  managed_namespace_user_grants = {
+    for grant in distinct([
+      for binding in values(local.managed_namespace_role_bindings) : { namespace = binding.namespace, group_object_id = binding.group_object_id }
+    ]) : "${grant.namespace}/namespace_user/${grant.group_object_id}" => grant
+  }
 
   # Namespaces whose default policies actually restrict something, which is what needs a network
   # policy engine in the cluster to be worth anything. A namespace left wide open in both
@@ -619,67 +450,39 @@ locals {
     if properties.defaultNetworkPolicy.egress != "AllowAll" || properties.defaultNetworkPolicy.ingress != "AllowAll"
   ]
 
-  # Whether the cluster runs something that enforces Kubernetes network policies at all. AKS
-  # Automatic always runs Cilium, so it does regardless of what network_profile says - and the
-  # profile is not even sent for an Automatic cluster on loadBalancer egress.
-  network_policy_engine_enabled = local.is_automatic || var.network_profile.network_policy != "none"
-
-  # Azure rejects a dnsPrefix when a custom private DNS zone is used and requires an fqdnSubdomain
-  # instead. AKS Automatic derives both itself.
-  fqdn_subdomain = local.is_automatic ? null : (local.use_byo_private_dns_zone ? coalesce(var.fqdn_subdomain, var.name) : var.fqdn_subdomain)
-  is_automatic   = var.sku_name == "Automatic"
-
-  # Node auto provisioning on a Base cluster - AKS Automatic runs it regardless and is sent nothing.
-  node_auto_provisioning = var.node_auto_provisioning_enabled && !local.is_automatic
-
-  # AKS Automatic provisions its own node pools through node autoprovisioning, which Microsoft
-  # documents as needing Network Contributor on the whole virtual network - an assignment on the
-  # subnets the cluster was handed is not enough, because the pools it creates are not limited to
-  # them. So does a Base cluster with node auto provisioning turned on. Any other Base cluster joins
-  # only the subnets named here, so it keeps the narrower grant.
-  # The zones' classic node pools (zone_node_pools) join the zones' node, pod and load balancer subnets
-  # alike, so they get the same.
-  network_role_assignment_scope = coalesce(var.network_role_assignment_scope, local.is_automatic || local.node_auto_provisioning || var.zone_node_pools != null ? "virtual_network" : "subnet")
+  # Node auto provisioning and the zones' classic node pools create nodes outside the system pool's
+  # subnet, so Microsoft documents the whole virtual network as the scope they need. A cluster without
+  # zones joins only the system pool's subnet, so it keeps the narrower grant.
+  network_role_assignment_scope = var.node_auto_provisioning_enabled || var.zone_node_pools != null ? "virtual_network" : "subnet"
 
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
-  network_role_assignment_scopes = !var.create_role_assignments || !local.byo_network ? {} : merge(
+  network_role_assignment_scopes = merge(
     local.network_role_assignment_scope == "virtual_network"
-    ? { virtual_network = data.azurerm_virtual_network.this[0].id }
-    # One entry per distinct subnet: the same subnet can carry more than one of these roles, and
-    # Azure refuses a second assignment of the same role to the same principal at the same scope.
-    : { for key, id in local.network_role_assignment_subnet_scopes : key => id
-      if key == sort([for other_key, other_id in local.network_role_assignment_subnet_scopes : other_key if other_id == id])[0]
-    },
+    ? { virtual_network = data.azurerm_virtual_network.this.id }
+    : { node_subnet = data.azurerm_subnet.node.id },
     # The node subnet's route table - a cell routed through the hub's firewall (`userDefinedRouting`):
     # AKS reads and joins it, and the table is a resource of its own, outside the network's scope.
-    startswith(lower(try(data.azurerm_subnet.node[0].route_table_id, "")), "/subscriptions/") ? { route_table = data.azurerm_subnet.node[0].route_table_id } : {},
+    startswith(lower(try(data.azurerm_subnet.node.route_table_id, "")), "/subscriptions/") ? { route_table = data.azurerm_subnet.node.route_table_id } : {},
     # The zones' route tables, for the same reason: a zone's node subnet has a table of its own, with
     # the other zones' slots routed to the hub's firewall (design D73). A zone whose subnet shares the
     # node subnet's table is covered above.
     { for zone, subnet in data.azurerm_subnet.zone : "route_table_${zone}" => subnet.route_table_id
-      if startswith(lower(try(subnet.route_table_id, "")), "/subscriptions/") && lower(try(subnet.route_table_id, "")) != lower(try(data.azurerm_subnet.node[0].route_table_id, ""))
+      if startswith(lower(try(subnet.route_table_id, "")), "/subscriptions/") && lower(try(subnet.route_table_id, "")) != lower(try(data.azurerm_subnet.node.route_table_id, ""))
     },
   )
-  network_role_assignment_subnet_scopes = merge(
-    { node_subnet = one(data.azurerm_subnet.node[*].id) },
-    var.system_node_subnet_name == null ? {} : { system_node_subnet = data.azurerm_subnet.system_node[0].id },
-    !local.api_server_vnet_integration ? {} : { api_server_subnet = data.azurerm_subnet.api_server[0].id },
-  )
 
-  # Whether the module sends a `network_profile` at all. It drops the whole profile - the pod and
-  # service ranges with it - for an Automatic cluster left on the default `loadBalancer` egress,
-  # even though podCidr, serviceCidr and dnsServiceIP are on the short list of properties the
-  # Automatic SKU does accept. Anything else, and the profile is sent.
-  network_profile_is_sent = !(local.is_automatic && var.network_profile.outbound_type == "loadBalancer")
-
-  # Cluster-internal ranges that collide with the address space of the existing network. Two CIDRs
+  # Cluster-internal ranges that collide with the address space of the cell's network. Two CIDRs
   # overlap when they share a network address at the shorter of their two prefix lengths. IPv6
   # ranges are skipped rather than compared against IPv4 ones.
+  cluster_cidrs = compact([
+    local.pod_overlay ? var.network_profile.pod_cidr : null,
+    var.network_profile.service_cidr,
+  ])
   overlapping_cluster_cidrs = [
     for pair in setproduct(
-      [for range in local.virtual_network_address_space : range if !strcontains(range, ":")],
-      local.effective_cluster_cidrs
+      [for range in data.azurerm_virtual_network.this.address_space : range if !strcontains(range, ":")],
+      local.cluster_cidrs
     ) : "${pair[1]} overlaps ${pair[0]}"
     if try(
       cidrhost(format("%s/%d", cidrhost(pair[0], 0), min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))), 0)
@@ -688,15 +491,16 @@ locals {
       false
     )
   ]
+}
 
-  # The grant on a bring-your-own private DNS zone needs a principal that exists before the cluster,
-  # which a system assigned identity is not.
-  create_private_dns_zone_assignment   = var.create_role_assignments && local.use_byo_private_dns_zone && !local.system_assigned_identity
-  private_dns_zone                     = var.private_cluster_enabled ? (local.use_byo_private_dns_zone ? one(data.azurerm_private_dns_zone.this[*].id) : var.private_dns_zone_mode) : null
-  private_dns_zone_resource_group_name = coalesce(var.private_dns_zone_resource_group_name, var.resource_group_name)
-  use_byo_private_dns_zone             = var.private_cluster_enabled && var.private_dns_zone_name != null
+# The cluster identity and its propagation wait were conditional while a cluster could bring no
+# network or run as an AKS Automatic cluster on a system assigned identity; neither is a cell.
+moved {
+  from = azurerm_user_assigned_identity.this[0]
+  to   = azurerm_user_assigned_identity.this
+}
 
-  # Address space of the existing network, or nothing to collide with when AKS brings the network.
-  virtual_network_address_space       = local.byo_network ? data.azurerm_virtual_network.this[0].address_space : []
-  virtual_network_resource_group_name = coalesce(var.virtual_network_resource_group_name, var.resource_group_name)
+moved {
+  from = time_sleep.role_assignment_propagation[0]
+  to   = time_sleep.role_assignment_propagation
 }

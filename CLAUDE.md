@@ -32,7 +32,6 @@ reads; job logs via `get_job_logs`).
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only** (2026-10-14, the user's choice to speed up testing: no schedule, no Deploy stage). |
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault (azure-kv plugin, deploy identity); skips what already verifies. Runs after every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (5 certs, matrix, max-parallel 1). |
-| `flux-webhooks.yml` | (Re)registers GitHub webhooks to the clusters' Flux receivers - run after a cluster is rebuilt. |
 | `vcpu-quota.yml` | Raises the subscription's compute quotas via the Quota REST API, signed in as the org secret `AZURE_OWNER` (owner SPN JSON). `gpu` input: `StandardNCadsH100v5Family` (40 per GPU node, default 0 = leave). |
 | `store-secret.yml` (Store secret) | Puts a secret into `kv-onek8s-gwc-platform` (over the VPN) without its value in Git, inputs or logs: `public-key` prints the vault RSA key `secret-transport`'s public key; encrypt the value with it (RSA-OAEP-256, `openssl pkeyutl`, ≤ 446 bytes) and run `store` with the name and base64 ciphertext. Use it for any credential the user hands over in chat. |
 | `pr.yml` | CI: fmt, validate, `terraform test`. |
@@ -45,11 +44,11 @@ reads; job logs via `get_job_logs`).
 **Owner credentials (lab only, last option, allowed whenever needed):** `AZURE_OWNER` - org secret, `az ad sp
 create-for-rbac` JSON of an SPN that is Owner on the lab subscriptions and **Global Administrator** of the lab
 tenant (so Graph works: groups, apps, role assignments); `GH_OWNER` - org secret, a GitHub admin token of the
-onek8s organization (also the fallback of `flux-webhooks.yml`). Use them through `lab-admin.yml`,
+onek8s organization. Use them through `lab-admin.yml`,
 `entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
-Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
-tests) and in `shared/` (24+), `kustomize build` for changed fleet directories; for a policy change in
+Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (151
+runs) and in `shared/` (65), `kustomize build` for changed fleet directories; for a policy change in
 azure-landing-zone, `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and
 `terraform test` there. The fleet and example
 repos' CI does not run on GitHub, so validate them locally.
@@ -61,6 +60,25 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 
 ## Current state of dev (2026-10-15)
 
+- **The root module is the OneK8s cell and nothing else (2026-10-19, the user's ask: simplify the code like the design):**
+  removed the paths no environment used and the design rules out - AKS Automatic (`sku_name`, system-assigned identity,
+  hosted system profile, Azure's default-CIDR overlap case), clusters without a network (`virtual_network_name` and
+  `node_subnet_name` are required), Kubernetes RBAC mode (`azure_rbac_enabled`), public API servers
+  (`private_cluster_enabled`, `api_server_authorized_ip_ranges`), API Server VNet Integration (root `api_server_*`, shared
+  `cells.<cell>.api_server_subnet` and `snet-apiserver`; H14), a bring-your-own private DNS zone (`private_dns_zone_name`,
+  `fqdn_subdomain`), `dns_zone_create` in the root, `lock_kind`, `cluster_timeouts` (90 min, fixed), `enable_telemetry`,
+  `create_role_assignments` (root and shared: every grant is made here), `role_assignment_propagation_delay` (60 s, fixed),
+  `network_role_assignment_scope` (derived: the VNet with NAP or zone pools, the system subnet otherwise), the
+  `*_resource_group_name` of what shared/ creates (always `resource_group_name`), `cost_analysis_enabled` (D46: off),
+  Flux credentials for private repositories (`flux_git_credentials`; every repo is public), `managed_namespaces[*].access`
+  (Azure RBAC per namespace; `groups` since D49 - the `namespace_user` grant of each group stays, same state keys),
+  the root's own-vault path (`key_vault_create`: every cluster uses shared/'s vaults - key_vault.tf is the lookup and the
+  federated credentials), the Flux GitHub webhook and the platform gateway (`flux_github_webhook`, `platform_gateway_enabled`,
+  shared's `flux_github_webhook_namespaces`, the Flux webhooks workflow; D70) and the Dapr extension (`dapr.tf`, D65).
+  `moved` blocks keep the identity and the propagation sleep at their state addresses; the `random` provider is gone.
+  The stateful tfvars now states a private API server (D58) instead of a public one. Verified: Deploy plans of
+  dev-shared, az2 and az3 on the branch - see the PR. The design's option E (D75, AKS Automatic per zone) is a path, not
+  code: a cluster per zone with its own spoke would be a module of its own when decided (D64).
 - **Lab results 2026-10-18 (all verified with Cluster status, which now checks the edge per route as a VPN client and lists
   each constraint's excluded namespaces):** **D73 applied** (zone route tables `rt-<cell>-<zone>` + Network Contributor on
   them in az2/az3): routes 200, `/weather` 200 through labfw on both cells, Flux all Ready - cross-zone denial (V31) not tested
@@ -90,8 +108,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   AKS's `kubernetes.azure.com/scalesetpriority=spot`. Lab Power's start skips NAP for a cluster with autoscaled pools.
   Quotas: Daldv6 8 (system node 4 + two D2alds_v6), low-priority 3 (one spot D2alds_v6). V32 (spot fallback, labfw's log
   naming the pod) still to verify.
-- **Dapr trial: off (2026-10-18, the user's ask)** - removed from az3's tfvars and the fleet's az3 directory; `dapr.tf`,
-  the fleet's unused `infrastructure/dapr` and the landing zone's `dapr-system` platform namespace stay for a later trial.
+- **Dapr trial: off (2026-10-18, the user's ask)** - removed from az3's tfvars and the fleet's az3 directory; `dapr.tf` went
+  with the simplification below (2026-10-19); the fleet's unused `infrastructure/dapr` and the landing zone's `dapr-system`
+  platform namespace stay for a later trial.
 - **Zone-to-zone traffic through the hub firewall (2026-10-18, design D73, the user's ask): applied 2026-10-18** (#193; traffic verified, V31 cross-zone denial not tested yet).
   Until now `rt-<cell>` (0.0.0.0/0 -> firewall) sat on the system and every zone's node subnet, and traffic between
   the slots of one cell took the VNet's own system route (more specific than /0), so the firewall never saw it and
@@ -121,7 +140,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   (`log_analytics_workspace_create = true`) or `ai_foundry.name`; every enabled isolation zone gets its vault. A variable that
   names a resource still wins. The real estate's policy stays out of Git: `dev` environment secret `NAMING_POLICY` (JSON
   `{"templates": ..., "location_codes": ...}`) - Deploy writes it to `naming.auto.tfvars.json` and masks the templates' fixed
-  parts; Renew certificate / Flux webhooks resolve unstated names with `scripts/policy-name.sh`. Not on the policy: a
+  parts; Renew certificate resolves unstated names with `scripts/policy-name.sh`. Not on the policy: a
   cluster's own name, subnets, child resources, the landing zone's resources; the other lab workflows still hard-code the lab's
   names. The cluster stack has `environment` for cluster names without it in the second segment.
 - **TLS 1.3 only at the edge (2026-10-18, design D71, the user's decision): in the lab, V30 holds (see the results above).** The same ConfigMap sets
@@ -136,8 +155,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `traefik-<gateway>` Flux configurations at the next Lab power start. Verify over the VPN: `curl --http1.1 -sv https://hello.int-fi.dev.onek8s.lol/`
   must fail with `no application protocol`; plain `curl` (h2) must answer 200. If routes stop answering, the Gateway API provider
   did not take the `default` option - check Traefik's log for the file provider and the option name. Consequence recorded in the
-  design: Traefik in every environment until App Routing can refuse HTTP/1.1; `platform_gateway_enabled` / `flux_github_webhook`
-  stay false everywhere and their code goes with the external exposure (backlog item 7). Policy `h2c-upstream` (azure-landing-zone)
+  design: Traefik in every environment until App Routing can refuse HTTP/1.1; the platform gateway and the Flux webhook
+  code is gone from this repo since 2026-10-19 (the simplification below; the fleet's `platform-gateway/`, `flux-webhook/`
+  go with backlog item 7). Policy `h2c-upstream` (azure-landing-zone)
   holds every application Service port to `appProtocol: kubernetes.io/h2c`, audit first.
 - **HTTP/2 upstream (2026-10-18, design D69, "HTTP/1.1 must die"): in the lab with aks-hello 0.5.2, V28 holds (the steps below are done).** aks-fluxcd-example's aks-hello Service
   carries `appProtocol: kubernetes.io/h2c` (merged, #37; reaches az2/az3 at the next Lab power start). aks-hello **0.5.1**
@@ -265,8 +285,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   `platform_source_fqdns` = chart/image sources) + child `rcg-aks-dev` (vaults, ACR, Grafana, zone lists). A denied
   flow shows in labfw's logs (azure-lab-fw view-logs or `labfw logs --action deny` via Run Command).
 - **No public entry point in the internal cell**: a public LB cannot answer behind labfw (asymmetric routing), so
-  `platform_gateway_enabled = false`, `flux_github_webhook = false` (Flux polls every minute; the Flux webhooks workflow
-  removes the hooks). The fleet's `flux-system-key-vault` Kustomization gives flux-system its SecretStore.
+  no platform gateway and no Flux webhook (Flux polls every minute; the code for both was removed 2026-10-19). The fleet's `flux-system-key-vault` Kustomization gives flux-system its SecretStore.
   Traffic Manager: only for a deployed external zone (`global_hostnames.<name>.zone`), so none now.
 - **Vaults `kv-onek8s-gwc-platform` and `kv-onek8s-gwc-int-fi`** (kv-onek8s-dev-platform is soft-deleted with purge
   protection in swedencentral until 2027-01). Store secret / Sign images use the new one. ACR `acronek8sdev` kept its name.
@@ -300,7 +319,7 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
 - `aks-dev-ext-stateless-az2`: **destroyed on purpose** (the config is proven; no need to keep it
   running). Its tfvars, fleet directory and Traffic Manager endpoint stay; Traffic Manager just sees
   the endpoint as down. To bring it back: Deploy `dev-ext-stateless-az2` apply with `allow_empty_state`,
-  then Flux webhooks and Cluster status on it (Isolation tests only if the user asks). Do not rebuild it unless asked.
+  then Cluster status on it (Isolation tests only if the user asks). Do not rebuild it unless asked.
 - **VPA add-on off in the dev cells** (2026-10-14, lab cost exception, the user's choice): `vertical_pod_autoscaler_enabled
   = false` in the stateless tfvars (default stays true, design section 2.3) - its ~2.4 GiB of requests (2 recommenders,
   2 updaters, 2 admission controllers) kept a cell off one 8 GiB system node. aks-hello's `VerticalPodAutoscaler`

@@ -212,7 +212,7 @@ resource "azurerm_user_assigned_identity" "key_vault" {
 # Reading the namespace's own secrets, by name. Listing the vault is refused - see the README, "Key
 # Vault" - and left to the platform viewers.
 resource "azurerm_role_assignment" "key_vault_namespace_reader" {
-  for_each = var.create_role_assignments ? var.key_vault_namespaces : {}
+  for_each = var.key_vault_namespaces
 
   principal_id         = azurerm_user_assigned_identity.key_vault[each.key].principal_id
   scope                = local.namespace_key_vault_ids[each.key]
@@ -224,7 +224,7 @@ resource "azurerm_role_assignment" "key_vault_namespace_reader" {
 
 # Managing the namespace's own secrets, and no others.
 resource "azurerm_role_assignment" "key_vault_namespace_writer" {
-  for_each = var.create_role_assignments ? local.key_vault_group_writers : {}
+  for_each = local.key_vault_group_writers
 
   principal_id         = each.value.principal_id
   scope                = local.namespace_key_vault_ids[each.value.namespace]
@@ -255,7 +255,7 @@ resource "azurerm_role_definition" "key_vault_secrets_editor" {
 
 # Writing the namespace's own secrets without reading them, and no others.
 resource "azurerm_role_assignment" "key_vault_namespace_editor" {
-  for_each = var.create_role_assignments ? local.key_vault_group_editors : {}
+  for_each = local.key_vault_group_editors
 
   principal_id       = each.value.principal_id
   scope              = local.namespace_key_vault_ids[each.value.namespace]
@@ -268,57 +268,14 @@ resource "azurerm_role_assignment" "key_vault_namespace_editor" {
 # Every vault, whole: the platform's secrets and certificates - the gateways' listener certificates
 # - are put there by them.
 resource "azurerm_role_assignment" "key_vault_admin" {
-  for_each = var.create_role_assignments ? {
+  for_each = {
     for pair in setproduct(var.key_vault_admin_group_object_ids, keys(local.key_vault_ids)) : "${pair[0]}/${pair[1]}" => { group = pair[0], vault = pair[1] }
-  } : {}
+  }
 
   principal_id         = each.value.group
   scope                = local.key_vault_ids[each.value.vault]
   role_definition_name = "Key Vault Administrator"
   principal_type       = "Group"
-}
-
-# The token GitHub signs the Flux webhook's deliveries with, in flux-system's share of the vault - and
-# in the share of every team namespace of flux_github_webhook_namespaces, whose own Receiver
-# reconciles the team's repository. The Flux webhooks workflow sets it as the secret of the
-# repositories' webhooks - one per cluster, each to its own hostname, all with this token.
-resource "random_password" "flux_github_webhook" {
-  count = var.flux_github_webhook ? 1 : 0
-
-  length  = 40
-  special = false
-}
-
-resource "azurerm_key_vault_secret" "flux_github_webhook" {
-  count = var.flux_github_webhook ? 1 : 0
-
-  key_vault_id = azurerm_key_vault.this.id
-  name         = "flux-system--github-webhook-token"
-  value        = random_password.flux_github_webhook[0].result
-  content_type = "text/plain"
-
-  lifecycle {
-    precondition {
-      condition     = contains(keys(var.key_vault_namespaces), "flux-system")
-      error_message = "The Flux webhook's token is flux-system's secret, and flux-system has no share in key_vault_namespaces to read it with."
-    }
-  }
-}
-
-resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
-  for_each = var.flux_github_webhook ? toset(var.flux_github_webhook_namespaces) : toset([])
-
-  key_vault_id = lookup(local.namespace_key_vault_ids, each.key, azurerm_key_vault.this.id)
-  name         = "${each.key}--github-webhook-token"
-  value        = random_password.flux_github_webhook[0].result
-  content_type = "text/plain"
-
-  lifecycle {
-    precondition {
-      condition     = contains(keys(var.key_vault_namespaces), each.key)
-      error_message = "${each.key} has no share in key_vault_namespaces to read its webhook token with."
-    }
-  }
 }
 
 # The one zone every cluster of the environment publishes in - public (Azure DNS) or private (Azure
@@ -385,8 +342,8 @@ locals {
   dns_zone = one(concat(azurerm_dns_zone.this, azurerm_private_dns_zone.this, data.azurerm_dns_zone.this, data.azurerm_private_dns_zone.this))
 }
 
-# Hostnames every cluster of the environment serves at once - hello.onek8s.lol on every stateless
-# cluster - behind an Azure Traffic Manager profile each: DNS answers with one cluster's public
+# Hostnames every external cell of the environment serves at once - hello.ext-fi.dev.onek8s.lol -
+# behind an Azure Traffic Manager profile each: DNS answers with one cluster's public
 # address or another's, weighted alike, and leaves out a cluster whose health probe fails. Each
 # cluster's own public hostname (`public-<cluster>.<zone>`, published by its external-dns) is an
 # endpoint, and the global hostname is a CNAME to the profile. The clusters' external-dns leave the

@@ -15,8 +15,6 @@
 name     = "aks-dev-int-stateless-az3"
 location = "germanywestcentral"
 
-sku_name = "Base"
-
 # ---------------------------------------------------------------------------------------------------
 # Non-production cost savings
 #
@@ -128,17 +126,11 @@ network_profile = {
   network_plugin_mode = "none"
 }
 
-# No platform gateway: a public load balancer cannot answer behind the hub firewall (its replies would
-# leave by the default route), and an internal cell has no public entry point. So no Flux webhook
-# either: Flux polls every minute.
-platform_gateway_enabled = false
-
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here: the gateways'
 # certificates, the Grafana Cloud credentials - and this cluster's customer-managed keys, created here
 # in it (design section 4.2): key-aks-dev-int-stateless-az3-kms for the secrets in etcd, key-...-disk for
 # every node's OS disk (encryption at host covers the ephemeral one).
-key_vault_name   = "kv-onek8s-gwc-platform"
-key_vault_create = false
+key_vault_name = "kv-onek8s-gwc-platform"
 # KMS data encryption (preview): the vault has no public network access, and AKS reaches it as a trusted
 # service - classic KMS would need API Server VNet Integration, which the encrypted cell network refuses (D58)
 customer_managed_keys = {
@@ -187,16 +179,12 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# A private API server (design section 2.2, D58) over Private Link: its private endpoint is in snet-system,
-# reached by the nodes directly and by the management network, the labfw VPN and the GitHub runners
-# (which join that VPN) through the hub. Not API Server VNet Integration: Azure refuses it on an
-# encrypted network with v4+ VM sizes (VNetEncryptionNotCompatibleWithAPIServerVNetIntegration). No
-# private DNS zone: the cell resolves through labfw's DNS proxy in the hub, so the public FQDN names
-# the private address.
-private_cluster_enabled             = true
+# The private API server (design D58) over Private Link: its private endpoint is in snet-system, reached
+# by the nodes directly and by the management network, the labfw VPN and the GitHub runners (which join
+# that VPN) through the hub. No private DNS zone: the cell resolves through labfw's DNS proxy in the hub,
+# so the public FQDN names the private address.
 private_cluster_public_fqdn_enabled = true
 private_dns_zone_mode               = "none"
-api_server_vnet_integration_enabled = false
 
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster. None yet in the build tenant.
@@ -268,6 +256,3 @@ flux_git_repository = {
   # Read every minute rather than every five, so a merged change reaches the cluster within one.
   sync_interval_seconds = 60
 }
-
-# No Flux webhook: no platform gateway for GitHub to reach (platform_gateway_enabled above).
-flux_github_webhook = false
