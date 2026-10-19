@@ -131,7 +131,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `[h2]` and `minVersion: VersionTLS13`; aks-hello serves h2c on port 8081 (Service `appProtocol: kubernetes.io/h2c`).
   V28 (HTTP/2 upstream) and V30 (TLS 1.2 refused) hold; **V29 fails**: Go lets an `http/1.1` client in without ALPN
   (golang/go#46310) - a new D70 option is the user's decision, not taken. Policies `h2c-upstream` and `gateway-tls`
-  (azure-landing-zone) are in audit.
+  (azure-landing-zone) deny (2026-10-19).
 - **Flux GitHub webhook** (D78): root `flux_github_webhook` brings the platform gateway and flux-system's vault share;
   token in shared/. **Off in the lab** (no public entry point behind labfw; Flux polls every minute). GitHub delivers
   over HTTP/1.1: the receiver is the one exemption of `h2c-upstream` (`flux-system/webhook-receiver`).
@@ -155,9 +155,14 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `kubernetes.azure.com/scalesetpriority=spot` + preference, GPU toleration). Deny: storage, `app-egress` (application policies inside the cluster only, D80), Gateway only,
   placement labels, `secrets-via-eso`, `eso-objects`, `service-accounts`, `rollout-guardrails`,
   `vertical-pod-autoscalers`, `namespace-ownership`, no-Ingress, read-only root filesystem, zone placement, internal LBs,
-  `gateway-tls`, vault public access, ACR admin (2026-10-19, D82). Audit (reasons in policy.tfvars): PSS restricted,
-  deployment safeguards, allowed images, automount, `h2c-upstream`; Image Integrity and the cluster-setting built-ins
-  have no Deny effect (`audit_only`). Promote a rule only after Cluster status shows 0 violations for it.
+  `gateway-tls`, vault public access, ACR admin, PSS restricted, deployment safeguards, allowed images (registry by
+  digest), automount, `h2c-upstream` (2026-10-19, D82: every rule with 0 violations). Audit only: Image Integrity and
+  the cluster-setting built-ins (no Deny effect, `audit_only`). The application rules leave out every platform
+  namespace (`kubernetes_excluded_namespaces`, design 2.7). Promote a rule only after Cluster status shows 0
+  violations for it. 2026-10-19: 0 violations in the cluster (Gatekeeper), CIS 0 failed, Isolation tests 0 failed;
+  Azure Policy 31 compliant, 11 exempt, and 2 stale results of what is no longer evaluated (the deleted
+  Deploy-MCSB2-Monitoring's Key Vault data plane, safeguards' disabled printMutationsAnnotations) that Azure's
+  clean-up removes within a day.
 - **Access**: namespace groups (D49) `managed_namespaces.<ns>.groups = { view, edit, admin }` -> a Flux configuration
   `<ns>-access` with a RoleBinding per role + `Azure Kubernetes Service Namespace User`; on the vault `admin` Secrets
   Officer, `edit` custom `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51), both under the `<ns>--` ABAC condition.
@@ -274,6 +279,15 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   kube-bench. Microsoft.Security is not registered (Defender plan unreadable = off).
 - **A failing `check` block fails `terraform test` runs**. `merge()` of maps with conditional `{}` yields an object:
   wrap in `tomap()`.
+- **`az aks command invoke` fails with "Operation returned an invalid status 'OK'"** (Lab admin, 2026-10-19) and Run
+  Command over `az rest` needs an Entra ID cluster token: change the cluster through Git or a workflow on the VPN.
+- **AKS creates the StorageClasses `default` and `managed-csi-premium-v2` even with every CSI driver off**: Deploy deletes
+  them from a stateless cluster after every apply; `no-persistent-storage` refuses them back.
+- **Deployment safeguards' `allowedVolumeTypes` defaults to `[]`** (every volume refused) and its warn-only
+  `printMutationsAnnotations` reports every mutated pod: the assignment sets the restricted types and
+  `effectForWarnOnlyPolicies = Disabled`. Behind labfw a denied TLS flow is reset at its SNI (curl 35) and a denied HTTP
+  request gets 470, which the Isolation tests count as blocked; zone pods reach neither IMDS nor 168.63.129.16 (fleet
+  `firewall-egress` egressDeny).
 - `kubectl debug` has no `-o`; `az aks install-cli` can hit GitHub's rate limit - re-run. Renew Certificate's DNS-01
   can fail once - re-run.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml`, never into Git or a workflow input.
