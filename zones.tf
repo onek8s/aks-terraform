@@ -2,7 +2,7 @@
 # the internal zones' DNS - what a stateless cell of the OneK8s design needs beyond a plain cluster.
 
 locals {
-  # The network profile as sent: the variable's, with ACNS (design section 5.1) where it is asked for.
+  # The network profile as sent: the variable's, with ACNS where it is asked for (off by default, D80).
   # No plugin mode and no pod range: the pods take addresses of their pools' pod subnets.
   network_profile = merge(var.network_profile, var.advanced_networking == null ? {} : {
     advanced_networking = {
@@ -16,7 +16,7 @@ locals {
       }
       # eBPF host routing. Sent with the cluster's create request: AKS refuses to turn it on for a
       # running cluster ("User-installed iptables rules found"), even one whose only iptables rules
-      # are its own - so changing it means building the cell again (section 5.1: drain, rebuild).
+      # are its own - so changing it means building the cell again (design section 7.4).
       performance = {
         acceleration_mode = var.advanced_networking.ebpf_host_routing ? "BpfVeth" : "None"
       }

@@ -24,12 +24,6 @@ exposure = "int"
 # AKS Free tier: no uptime SLA. Production: "Standard" (design D31).
 sku_tier = "Free"
 
-# ACNS without container network observability (Hubble), as in the dev cells (design D56). FQDN
-# network policies and eBPF host routing stay on. Production: advanced_networking = {} (the default).
-advanced_networking = {
-  observability = false
-}
-
 # The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
 # the environment and what they share. What is this cluster's own carries its name (`aks-dev-int-stateful`,
 # `id-sec-dev-aks-...`); what is shared carries `shared` (`id-sec-dev-shared-kv-...`).

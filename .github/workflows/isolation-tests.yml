@@ -5,7 +5,7 @@ name: Isolation tests
 # held up the work as an automatic stage): no Deploy stage, no schedule - run it when the user asks for
 # it. Each check names the requirement it covers; the run's summary is the table of them.
 #
-#   - Cluster settings (R1, R19, R21): local accounts and SSH off, eBPF host routing, FQDN policies,
+#   - Cluster settings (R1, R19, R21): local accounts and SSH off, no ACNS (design D80),
 #     customer-managed keys, no Secrets Store CSI driver; and `az aks get-credentials --admin` is
 #     refused.
 #   - Policies in the cluster (R14): the platform's constraint templates and mutations from Azure
@@ -15,8 +15,8 @@ name: Isolation tests
 #   - Isolation from that pod (R2, R3, R5, R6, R7b): the other zones' gateway and External Secrets
 #     pods and load balancers, another application of the same zone, the node, every zone's and the
 #     platform's Key Vault, and the instance metadata service are unreachable; the cluster DNS works.
-#   - Egress (R20): with only the zone baseline nothing leaves the cluster; an FQDN policy opens
-#     exactly its name and port.
+#   - Egress (R20): what leaves the cluster meets the hub firewall, which denies what no rule file
+#     names (design D61, D80).
 #   - Forbidden manifests (R7, R7b, R8, R9b, R11, R12, R14, R17, R20): each manifest of the policy table is
 #     sent as a server-side dry run. Rules in effect `deny` must refuse it; rules still in audit (the
 #     build tenant, until phase 3) are reported as AUDIT, and must at least be in the cluster.
@@ -153,9 +153,8 @@ jobs:
           check R21 "KMS with the cluster's key" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
           check R21 "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
           check R19 "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
-          check R19 "ACNS" "$(jq -r '.networkProfile.advancedNetworking.enabled' <<<"$c")" true
-          check R19 "eBPF host routing" "$(jq -r '.networkProfile.advancedNetworking.performance.accelerationMode' <<<"$c")" BpfVeth
-          check R20 "FQDN policies" "$(jq -r '.networkProfile.advancedNetworking.security.advancedNetworkPolicies' <<<"$c")" FQDN
+          # ACNS is not used (design D80): no Hubble, FQDN policies or eBPF host routing - the hub firewall decides egress.
+          check R19 "no ACNS (D80)" "$(jq -r '.networkProfile.advancedNetworking.enabled // false' <<<"$c")" false
           check R7b "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
           check R14 "Azure Policy add-on" "$(jq -r '.addonProfiles.azurepolicy.enabled // false' <<<"$c")" true
           # A preview property: the Azure CLI's API version leaves it out, the cluster's preview API has it.
@@ -498,38 +497,7 @@ jobs:
           node_ip="$(kubectl get nodes -l kubernetes.azure.com/mode=system -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
           [ -z "$node_ip" ] || blocked R5 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
           blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
-          blocked R20 "an outside name in DNS" "nslookup -timeout=3 www.microsoft.com | grep -q 'Address: [0-9]'"
           blocked R20 "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
-
-      - name: An application's FQDN policy opens exactly its names
-        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
-        run: |
-          . "$RUNNER_TEMP/lib.sh"
-          kubectl apply -f - <<EOF
-          apiVersion: cilium.io/v2
-          kind: CiliumNetworkPolicy
-          metadata:
-            name: egress
-            namespace: $NAMESPACE
-          spec:
-            endpointSelector: {}
-            egress:
-              - toEndpoints:
-                  - matchLabels: {k8s:io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
-                toPorts:
-                  - ports: [{port: "53", protocol: ANY}]
-                    rules:
-                      dns:
-                        - matchName: api.github.com
-              - toFQDNs:
-                  - matchName: api.github.com
-                toPorts:
-                  - ports: [{port: "443", protocol: TCP}]
-          EOF
-          sleep 10
-          reachable R20 "the declared name (api.github.com:443)" "curl -sS -m 10 -o /dev/null https://api.github.com/zen"
-          blocked R20 "an undeclared name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
-          blocked R20 "an undeclared port of the declared name" "curl -sS -m 5 -o /dev/null http://api.github.com"
 
       - name: Forbidden manifests
         if: ${{ !cancelled() }}

@@ -1926,7 +1926,7 @@ run "a_private_zone_is_looked_up_and_written_with_the_private_provider" {
   }
 }
 
-run "a_cell_gets_acns_with_fqdn_policies_and_ebpf_host_routing" {
+run "acns_can_be_turned_on_with_fqdn_policies_and_ebpf_host_routing" {
   command = plan
 
   variables {
@@ -1947,30 +1947,6 @@ run "a_cell_gets_acns_with_fqdn_policies_and_ebpf_host_routing" {
   assert {
     condition     = local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
     error_message = "eBPF host routing should be in the cluster's create request."
-  }
-}
-
-run "a_lab_cell_keeps_fqdn_policies_without_hubble" {
-  command = plan
-
-  variables {
-    advanced_networking = {
-      observability = false
-    }
-    default_node_pool = {
-      os_sku = "AzureLinux"
-    }
-  }
-
-  assert {
-    condition = (
-      local.network_profile.advanced_networking.enabled &&
-      !local.network_profile.advanced_networking.observability.enabled &&
-      local.network_profile.advanced_networking.security.enabled &&
-      local.network_profile.advanced_networking.security.advanced_network_policies == "FQDN" &&
-      local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
-    )
-    error_message = "Without Hubble, ACNS should still carry FQDN policies and eBPF host routing."
   }
 }
 
@@ -2008,12 +1984,8 @@ run "defaults_are_production_settings" {
     error_message = "The VPA add-on should be on by default."
   }
   assert {
-    condition = (
-      local.network_profile.advanced_networking.observability.enabled &&
-      local.network_profile.advanced_networking.security.advanced_network_policies == "FQDN" &&
-      local.network_profile.advanced_networking.performance.acceleration_mode == "BpfVeth"
-    )
-    error_message = "ACNS should be on by default, with Hubble, FQDN policies and eBPF host routing."
+    condition     = var.advanced_networking == null && !can(local.network_profile.advanced_networking)
+    error_message = "ACNS should be off by default (design D80): no Hubble, no FQDN policies, no eBPF host routing."
   }
 }
 
