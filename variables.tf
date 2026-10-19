@@ -139,34 +139,13 @@ variable "gateway_implementation" {
   type        = string
   default     = "approuting-istio"
   description = <<DESCRIPTION
-The Gateway API implementation that serves the cluster's Gateways - one per isolation zone, which
-the Flux repository deploys (OneK8s design section 4.1). Defaults to
-`approuting-istio`, the production setting (D55: the Azure standard offering, upgraded by AKS);
-`traefik` is a non-production cost saving. Null for a cluster without Gateways: the stateful
-cluster has no Gateway API implementation (R9a).
-
-- `traefik`: [Traefik Proxy][traefik], one Helm release per Gateway on the system pool, each with a
-  GatewayClass of its own (`traefik-<gateway>`), deployed from this repository's `gateways/traefik`
-  by a Flux configuration per Gateway, `traefik-<gateway>` (see `traefik_flux_repository`). No
-  control plane: a few dozen MiB per Gateway.
-- `approuting-istio`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less
-  Istio control plane (`istiod` in `aks-istio-system`) that serves the GatewayClass
-  `approuting-istio` and creates a Deployment, `LoadBalancer` Service, autoscaler and disruption
-  budget for every Gateway of that class - no service mesh, no sidecars, no Istio CRDs. AKS upgrades
-  it in place with the cluster. It cannot run beside the Istio service mesh add-on, which this
-  configuration never enables. Its istiod requests 500m CPU and 2 GiB memory per replica, at least
-  two replicas, and the requests are not customizable ([Azure/AKS#5939][aks5939]): 1 CPU and 4 GiB
-  before the first Gateway - a second system node in every lab cell.
-
-The Flux repository is told the class each Gateway names as `gateway_class_name_<gateway>` (the
-zone's hyphens as underscores). Switching
-re-creates the Gateways under the new class (they carry Flux `force`), so a cell's gateways are
-down for the minutes it takes - drain the cell in Traffic Manager first where that matters. Both
-need the managed Gateway API CRDs, which every cluster has.
-
-[traefik]: https://doc.traefik.io/traefik/providers/kubernetes-gateway/
-[approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
-[aks5939]: https://github.com/Azure/AKS/issues/5939
+The Gateway API implementation that serves the cluster's Gateways, one per isolation zone, deployed by the
+Flux repository (design section 4.1): `approuting-istio` (the default, production: App Routing's Gateway
+API, the Azure standard offering, upgraded by AKS - D55) or `traefik` (Traefik Proxy, one small Deployment
+per Gateway from this repository's `gateways/traefik`, a non-production cost saving: istiod's untunable
+1 CPU and 4 GiB, Azure/AKS#5939, is what it saves); null for a cluster without Gateways (the stateful
+cluster, R9a). The Flux repository is told each Gateway's class as `gateway_class_name_<zone>`; switching
+re-creates the Gateways. See the README, "Ingress through the Gateway API".
 DESCRIPTION
 
   validation {
@@ -263,39 +242,15 @@ variable "default_node_pool" {
   })
   default     = {}
   description = <<DESCRIPTION
-System node pool of the cluster.
-
-The defaults are the production setting (OneK8s design section 2.3): two `Standard_D4ds_v5` nodes
-(4 vCPU, 16 GiB), room for App Routing's istiod, the VPA add-on and the platform's controllers, and
-a second node while one is upgraded or lost. One smaller node (the dev lab's single 8 GiB
-`Standard_D4als_v6`) is a non-production cost saving that only fits with `gateway_implementation =
-"traefik"` and `vertical_pod_autoscaler_enabled = false`.
-
-- `os_sku` - The node OS. Defaults to `AzureLinux` (Azure Linux 3.0, the design's node OS, which
-  eBPF host routing needs on every node); null leaves the AKS default.
-- `os_disk_type` - `Ephemeral` (on the VM size's local disk: no managed disk to pay for, and no
-  Premium SSD, which AKS picks for a managed OS disk wherever the size supports it) or `Managed`.
-  Null lets AKS choose: ephemeral when the size's local storage fits the OS disk, managed otherwise.
-  It cannot change on a running pool.
-- `encryption_at_host` - Encrypts the node's temporary disk and caches with the disk encryption set's
-  key too. The subscription needs the `Microsoft.Compute/EncryptionAtHost` feature registered.
-- `ssh_access` - `Disabled` turns off SSH to the nodes; null leaves the AKS default (`LocalUser`).
-- `pod_subnet_name` - A pod-subnet cell (design D74): the subnet of virtual_network_name the system
-  pool's pods take their addresses from (Azure CNI Pod Subnet, dynamic IP allocation; shared/'s
-  `snet-system-pods`), with `network_profile.network_plugin_mode = "none"`. Every node pool of such a
-  cluster names one - the zones' in isolation_zones. Cannot change on a running pool.
-- `node_taints` - Taints on the system pool, such as `CriticalAddonsOnly=true:NoSchedule`, which
-  keeps every pod off it that does not tolerate them - the platform's own controllers do; the
-  isolation zones' workloads run on their zones' NAP nodes.
-
-The last three govern how the pool is rolled during an upgrade:
-
-- `max_surge` - Extra capacity added while upgrading, as a node count or a percentage of the pool.
-  AKS itself defaults to a single node, which upgrades a large pool one node at a time.
-- `drain_timeout_minutes` - How long to wait for a node to drain before moving on. Defaults to the
-  AKS default of 30 minutes. A pod with a restrictive disruption budget can hold a node here.
-- `node_soak_duration_minutes` - How long to wait after a node comes back before draining the next
-  one. Defaults to the AKS default of no wait.
+The system node pool. The defaults are the production setting (design section 2.3): two `Standard_D4ds_v5`
+nodes on Azure Linux 3.0; the dev lab's one 8 GiB node is a cost saving (README, "Production defaults and
+non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed` (null: AKS chooses),
+`encryption_at_host`, `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `node_taints`
+(`CriticalAddonsOnly=true:NoSchedule` keeps every pod but the platform's off it), `pod_subnet_name` for a
+pod-subnet cell (design D74, with `network_profile.network_plugin_mode = "none"`; every pool of such a
+cluster names one), `max_pods`, and the upgrade roll: `max_surge`, `drain_timeout_minutes`,
+`node_soak_duration_minutes` (README, "Node pool upgrades"). The size, OS, disk type and pod subnet
+cannot change on a running pool.
 DESCRIPTION
   nullable    = false
 
@@ -582,49 +537,14 @@ variable "managed_namespace_defaults" {
   })
   default     = {}
   description = <<DESCRIPTION
-What every entry in `managed_namespaces` gets unless it says otherwise. Change it here to move a
-whole cluster at once; change it on the namespace to move one.
-
-- `network_policy.ingress` - Who may open a connection to a pod in the namespace. Defaults to
-  `AllowSameNamespace`: only pods of the same namespace, which is what makes a namespace a boundary
-  rather than a label. `AllowAll` lets any pod in the cluster in, `DenyAll` nothing at all - not
-  even the namespace itself.
-- `network_policy.egress` - Where a pod in the namespace may open a connection to. Defaults to
-  `AllowAll`, so that a workload reaches the API server, DNS, the internet and the rest of the
-  cluster without further ado. `AllowSameNamespace` confines it to its own namespace and `DenyAll`
-  cuts it off entirely - both of which take a deliberate look at what the workload actually talks
-  to before they are turned on.
-- `pod_security` - The [Pod Security Standard][pss] the namespace is held to, applied as the
-  `pod-security.kubernetes.io/*` labels the API server's Pod Security Admission controller reads.
-  `enforce` rejects a pod that breaks the standard, `audit` records it in the audit log and `warn`
-  returns a warning to whoever applied it; all three default to `restricted`, the hardened standard.
-  Each takes `restricted`, `baseline`, `privileged` - the level that permits everything, and so the
-  way an exception is stated - or `none`, which leaves that label off entirely.
-  `version` pins the standard to a Kubernetes version, for example `"v1.31"`; the default `latest`
-  follows the cluster, which means an upgrade can tighten the standard under a running workload.
-- `adoption_policy` - What AKS does when a Kubernetes namespace of that name already exists.
-  `Never` refuses and fails the apply, which is the default and what keeps this from taking over a
-  namespace somebody else owns. `IfIdentical` adopts one whose labels and annotations already
-  match, `Always` adopts and overwrites.
-- `delete_policy` - What happens to the Kubernetes namespace when the managed namespace is removed
-  from here. `Keep` leaves it and whatever runs in it standing, which is the default: dropping a
-  line from a variables file should not delete a running workload. `Delete` removes the namespace
-  with it.
-- `resource_quota` - The `ResourceQuota` every namespace gets, defaulting to 2 cores and 4Gi of
-  limits against 500m and 1Gi of requests. Azure requires all four figures on a managed namespace -
-  the API spec has the quota optional, the service refuses a namespace without one - so this is a
-  ceiling to be raised or lowered rather than something that can be switched off. Its four figures
-  cap the *sum* of what the pods in the namespace request and are limited to, which also means a pod
-  that declares neither is refused; a `LimitRange` in the namespace is what gives those pods a
-  figure. CPU is in Kubernetes CPU units (`"500m"`, `"0.5"`, `"2"`) and is sent to Azure as
-  milliCPU, the only form it takes, so nothing finer than a milliCPU can be asked for; memory is in
-  the power-of-two forms (`"512Mi"`, `"4Gi"`).
-
-The network policies are the *default* ones AKS puts in the namespace, not the only ones allowed in
-it: Kubernetes network policies are additive, so a policy applied inside the namespace can only
-widen what these permit, never narrow it.
-
-[pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+What every entry in `managed_namespaces` gets unless it says otherwise: the default `NetworkPolicy`
+(`ingress` `AllowSameNamespace`, `egress` `AllowAll`; each `AllowAll`, `AllowSameNamespace` or `DenyAll` -
+Kubernetes network policies are additive, so a policy in the namespace can only widen these), the Pod
+Security Standard (`enforce`, `audit` and `warn`: `restricted`, `baseline`, `privileged` or `none`; `version`
+`latest` or `v1.NN`), the `ResourceQuota` Azure requires on every managed namespace (CPU in Kubernetes
+units, sent as milliCPU; memory as `Mi`/`Gi`), `adoption_policy` (`Never`, `IfIdentical`, `Always`),
+`delete_policy` (`Keep`, `Delete`), and `labels` and `annotations` for all. See the README, "Managed
+namespaces".
 DESCRIPTION
   nullable    = false
 
@@ -720,158 +640,26 @@ variable "managed_namespaces" {
   }))
   default     = {}
   description = <<DESCRIPTION
-Namespaces AKS creates and keeps inside the cluster, keyed by namespace name. Listing the names is
-the whole of it - everything a namespace needs comes from `managed_namespace_defaults`, so an
-environment that wants nothing special writes only this:
+Namespaces AKS creates and keeps inside the cluster, keyed by namespace name - Azure resources, so a
+namespace survives being deleted by hand and `groups` can be granted on it. Each entry overrides only
+what it names of `managed_namespace_defaults`; `labels` and `annotations` merge with the defaults.
 
-```hcl
-managed_namespaces = {
-  team-payments = {}
-  team-search   = {}
-}
-```
+- `owner` - who runs the application and pays for it: labels `platform/team` and `platform/cost-center`,
+  annotation `platform/contact` (design section 2.6; Azure Policy `namespace-ownership` requires them).
+- `groups` - an Entra ID group (object ID) per Kubernetes role, `view`, `edit` and `admin`: a RoleBinding
+  `platform-<role>` applied by the cluster's Flux configuration (`<namespace>-access`, one Kustomization
+  per role from `namespace_access_path`), and `Azure Kubernetes Service Namespace User` on the namespace
+  for a kubeconfig of its own. The same groups get the matching rights on the namespace's secrets in
+  shared/.
+- `flux` - a tenant: a namespace-scoped Flux configuration named after the namespace syncs `path` on
+  `branch` of the public `url` every `sync_interval_seconds` (at least 60) with `substitute` as post-build
+  variables (`cluster_name` is always there); `secret_name` names a Secret in the namespace for a
+  private repository, synced from the namespace's share of the vault.
+- `pod_security` - the Pod Security Standard the namespace is held to where it departs from the defaults;
+  `labels` must not set `pod-security.kubernetes.io/*` keys itself.
+- `network_policy`, `resource_quota`, `adoption_policy`, `delete_policy` - as in `managed_namespace_defaults`.
 
-Each entry may then override any of the defaults for itself, and only what it names changes:
-
-```hcl
-managed_namespaces = {
-  # Reachable from the ingress controller in another namespace, so it opens ingress up.
-  team-payments = {
-    network_policy = { ingress = "AllowAll" }
-  }
-  # Batch jobs that must not reach anything outside their own namespace.
-  team-search = {
-    network_policy = { egress = "AllowSameNamespace" }
-    resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
-  }
-}
-```
-
-`labels` and `annotations` are merged with the ones in `managed_namespace_defaults` key by key, so
-a namespace adds to the estate-wide set rather than replacing it. Everything else is a plain
-override of the default.
-
-`resource_quota` raises or lowers the ceiling for one namespace. Azure requires every managed
-namespace to carry all four figures, so a namespace that names none of them gets the four in
-`managed_namespace_defaults` rather than no quota at all.
-
-`pod_security` is where an exception to the estate-wide Pod Security Standard is stated. Every
-namespace is held to `restricted` unless it says otherwise, and a workload that cannot meet it says
-so on the namespace rather than having the standard lowered for the cluster:
-
-```hcl
-managed_namespaces = {
-  # A monitoring agent that needs the host network and a privileged container.
-  observability = {
-    pod_security = { enforce = "privileged" }
-  }
-}
-```
-
-Relaxing `enforce` on its own leaves `audit` and `warn` where they were, so the pods that break the
-standard are still recorded in the audit log and still warn whoever applies them - the exception is
-visible rather than silent, and Terraform warns when an exception turns that off as well.
-
-`labels` must not carry `pod-security.kubernetes.io/*` keys of its own; `pod_security` is the one
-place those are set.
-
-`owner` says who owns what runs in the namespace and who pays for it (OneK8s design section 2.6):
-
-```hcl
-managed_namespaces = {
-  ext-fi-payments = {
-    owner = {
-      team        = "payments"                   # label platform/team
-      cost_center = "cc-4711"                    # label platform/cost-center
-      contact     = "payments-team@example.com"  # annotation platform/contact
-    }
-  }
-}
-```
-
-The team and cost centre become labels - OpenCost and the telemetry group cost and usage by them -
-and the contact an annotation, since a mailbox is not a valid label value; a namespace with `flux`
-also gets its repository as the annotation `platform/repository`. Azure Policy
-(`namespace-ownership`, azure-landing-zone) expects all three on every namespace - the one place
-that is enforced, for namespaces made here and anywhere else alike. `labels` must not set the
-`platform/team` or `platform/cost-center` keys itself.
-
-`groups` binds an Entra ID security group to each of Kubernetes' built-in user-facing roles in the
-namespace (OneK8s design section 2.6: Kubernetes RBAC is namespace-scoped, Entra ID groups per
-application team). Each role is optional; a role without a group gets no binding at all:
-
-```hcl
-managed_namespaces = {
-  ext-fi-payments = {
-    groups = {
-      view  = "00000000-0000-0000-0000-000000000000" # the team's readers
-      edit  = "11111111-1111-1111-1111-111111111111" # the team's developers
-      admin = "22222222-2222-2222-2222-222222222222" # the team's leads
-    }
-  }
-}
-```
-
-- `view` - ClusterRole `view`: reads most objects in the namespace, but not `Secrets`, roles or role
-  bindings.
-- `edit` - ClusterRole `edit`: reads and writes most objects, `Secrets` included (where Azure Policy
-  lets anyone write them: in a zone's namespaces only External Secrets Operator does), but not roles
-  or role bindings.
-- `admin` - ClusterRole `admin`: `edit`, plus roles and role bindings inside the namespace. Not the
-  namespace itself, its quota or its default network policies - those come from here.
-
-Each group gets a Kubernetes `RoleBinding` named `platform-<role>` in the namespace, subject the
-group's object ID (AKS puts the Entra ID group object IDs of the caller into its Kubernetes groups),
-and `Azure Kubernetes Service Namespace User` on the namespace resource, so that its members can
-fetch a kubeconfig for the namespace - `az aks namespace get-credentials` - and nothing else. The
-binding is Kubernetes RBAC, evaluated side by side with Azure RBAC: either may allow a call.
-
-The role bindings are objects inside the cluster, so they are delivered the way everything inside the
-cluster is: by Flux. A namespace with groups gets a Flux configuration of its own, `<namespace>-access`
-(cluster scope, in flux-system, reading `flux_git_repository`), with one Kustomization per role that
-applies `<namespace_access_path>/<role>` with the namespace, the role and the group as post-build
-variables. Removing a group removes its Kustomization, and Flux deletes the binding with it. It takes
-`flux_git_repository`; without one nothing is bound and Terraform says so on every plan.
-
-`flux` makes the namespace a tenant that deploys itself from a Git repository of its own: a
-namespace-scoped Flux configuration, named after the namespace, that syncs `path` on `branch` into
-it. It is an Azure resource like the cluster's `platform` configuration, so whether the team's
-repository is in sync - and why not - shows in the portal's GitOps view of the cluster:
-
-```hcl
-managed_namespaces = {
-  team-payments = {
-    flux = {
-      url         = "https://github.com/contoso/team-payments-deploy"
-      path        = "./apps"
-      secret_name = "team-payments-deploy-git"
-    }
-  }
-}
-```
-
-- `url` - `https://` URL of the repository.
-- `branch` - Branch to sync. Defaults to `main`.
-- `path` - Directory in the repository to apply. Defaults to the top.
-- `secret_name` - For a private repository: a Secret in the namespace that Flux reads it with -
-  `username` and `password` for HTTPS, `identity` and `known_hosts` for SSH. Nothing secret passes
-  through Terraform or Azure: the Flux repository syncs it from the namespace's share of the Key
-  Vault. Leave it unset for a public repository.
-- `sync_interval_seconds` - How often the repository is read and applied, and how soon a failed
-  apply is retried. Defaults to 300; at least 60.
-- `substitute` - Further `$${...}` post-build variables the team's manifests may use, such as the
-  isolation zone's domain (`zone_domain`). `cluster_name` is always there and cannot be overridden.
-
-The repository is applied by the extension's `flux-applier` service account in the namespace, and
-the AKS Flux extension refuses references across namespaces: its manifests land in this namespace
-and nowhere else. The configuration has no `targetNamespace` to put an object that names no
-namespace into this one, so the repository's `kustomization.yaml` sets `namespace:` itself. Setting `flux` needs nothing else of the
-cluster: the Flux extension is installed for it whether or not `flux_git_repository` is set.
-
-These are Azure resources rather than plain Kubernetes namespaces: AKS creates the namespace, the
-default `NetworkPolicy` and the default `ResourceQuota` in the cluster and reconciles them, and
-Azure RBAC can be scoped to the namespace. Removing an entry deletes the Azure resource; whether
-the Kubernetes namespace goes with it is `delete_policy`.
+See the README, "Managed namespaces".
 DESCRIPTION
   nullable    = false
 
@@ -1047,15 +835,12 @@ variable "network_profile" {
   })
   default     = {}
   description = <<DESCRIPTION
-Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal
-ranges and must not overlap with the address space of the existing virtual network.
-`network_plugin_mode = "none"` turns the overlay off, and `pod_cidr` is not used: every pod takes a VNet
-address, so a firewall outside the cluster sees the pod's own address (design D59) - of its pool's pod
-subnet (Azure CNI Pod Subnet with dynamic IP allocation, design D74: default_node_pool.pod_subnet_name
-and the zones' in isolation_zones), or of its node's subnet when no pool names one (Azure CNI node
-subnet, which Microsoft lists as legacy). Use
-`outbound_type = "userDefinedRouting"` when the existing subnet routes egress through a firewall,
-which also avoids creating a public load balancer.
+Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal ranges
+and must not overlap the cell's address space. `network_plugin_mode = "none"` turns the overlay off and
+`pod_cidr` is not used: every pod takes a VNet address of its pool's pod subnet (Azure CNI Pod Subnet,
+design D74: `default_node_pool.pod_subnet_name` and the zones' `pod_subnet_name`).
+`outbound_type = "userDefinedRouting"` when the cell's subnets route egress through the hub firewall - no
+public load balancer is then created.
 DESCRIPTION
   nullable    = false
 
@@ -1112,19 +897,12 @@ variable "node_auto_provisioning_enabled" {
   type        = bool
   default     = false
   description = <<DESCRIPTION
-Whether the cluster runs [node auto provisioning][nap] (NAP, the AKS-managed Karpenter) for the
-nodes of its isolation zones (OneK8s design section 2.3). AKS installs Karpenter and its `NodePool`
-and `AKSNodeClass` CRDs; the `NodePool`s themselves - two per zone, on-demand and spot, amd64 and
-arm64 - are the Flux repository's, so AKS's own default `NodePool`s are turned off
-(`defaultNodePools = None`) and no node is created until a `NodePool` there asks for one. The
-system node pool stays a classic node pool, sized by `default_node_pool`.
-
-Needs Azure CNI Overlay with the Cilium dataplane and no cluster autoscaler on any node pool. The
-cluster identity is granted Network Contributor on the whole virtual network, and the Flux repository is told the node subnet and
-the system pool's availability zone (`nap_subnet_id`, `nap_availability_zone`) for its
-`AKSNodeClass`es and `NodePool`s.
-
-[nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
+Node auto provisioning (NAP, the AKS-managed Karpenter) for the isolation zones' nodes (design section
+2.3): the Flux repository's NodePools per zone - on-demand and spot, amd64 and arm64 - create the nodes,
+AKS's own default NodePools are off. Needs Azure CNI Overlay powered by Cilium and no cluster autoscaler
+on any pool; refused with a pod subnet (use `zone_node_pools`). The cluster identity is granted the whole
+virtual network, and the Flux repository is told `nap_subnet_id`, `nap_subnet_id_<zone>` and
+`nap_availability_zone`. See the README, "Node auto provisioning".
 DESCRIPTION
   nullable    = false
 
@@ -1379,22 +1157,12 @@ variable "zone_node_pools" {
   })
   default     = null
   description = <<DESCRIPTION
-Classic node pools for the isolation zones, scaled by the cluster autoscaler - the nodes of a
-pod-subnet cell (design D74, section 2.3), where node auto provisioning is refused, until NAP supports
-Azure CNI Pod Subnet (Azure/karpenter-provider-azure issue 1351). Per zone four pools, one per
-capacity type and architecture: `<zone>` (on-demand amd64), `<zone>spot`, `<zone>arm`, `<zone>armspot`
-(the zone without its hyphen, `intse`, `intsespot`, ...), each from 0 to `max_count` (`spot_max_count`
-for the spot pools) nodes in the system pool's availability zone, in the zone's node subnet with its
-pods in the zone's pod subnet (isolation_zones), labelled and tainted `platform/zone=<zone>` - what
-the zone's NodePools say under NAP; the spot pools also `platform/capacity=spot` (and AKS's own
-`kubernetes.azure.com/scalesetpriority=spot`). `max_pods` 250 by default (dynamic IP allocation hands a node its
-pod addresses in batches of 16, so the limit reserves nothing). Same OS, encryption at host and SSH setting as the
-system pool; the sizes support VNet encryption. The cluster autoscaler takes the priority expander:
-the Flux repository's `cluster-autoscaler-priority-expander` ConfigMap puts the spot pools first, so a
-pod that tolerates spot gets a spot node and an on-demand one when Azure has none.
-
-Null (the default) for no zone pools: a NAP cell (node_auto_provisioning_enabled) or a cluster without
-zones. Cannot be combined with node auto provisioning.
+Classic node pools for the isolation zones, scaled by the cluster autoscaler - the nodes of a pod-subnet
+cell (design D74), where node auto provisioning is refused: per zone `<zone>`, `<zone>spot`, `<zone>arm`
+and `<zone>armspot` (the zone without its hyphen), each from 0 to `max_count` (`spot_max_count` for spot)
+nodes in the system pool's availability zone, labelled and tainted like the zone's NodePools under NAP.
+The priority expander (the Flux repository's ConfigMap) takes the spot pools first. Null for a NAP cell or
+a cluster without zones. See the README, "Pod-subnet cells: classic zone pools".
 DESCRIPTION
 
   validation {

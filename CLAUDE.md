@@ -26,7 +26,7 @@ reads; job logs via `get_job_logs`).
 
 | Workflow | Use |
 |---|---|
-| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-ext-stateless-az1` / `dev-ext-stateless-az2` / `dev-ext-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. |
+| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-int-stateless-az2` / `dev-int-stateless-az3` / `dev-int-stateless-az1` / `dev-int-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. A stateless cell is planned with two var files: `envs/dev-int-stateless.tfvars` (what every cell shares, since 2026-10-19) then the cell's own. |
 | `cluster-status.yml` | Read-only status of one cluster: nodes, pods, Flux, DNS, vCPU quota, every policy constraint's violations per object, and who wrote each Secret of the zone namespaces (managed fields). `node_iptables` option for eBPF debugging. Read it before promoting a policy to deny. |
 | `isolation-tests.yml` | The negative requirement and isolation tests of design section 7.1 on one cell, each tagged with its R-number (summary table): cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / every vault blocked, FQDN egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), external HTTPS, supply chain (ACR admin/anonymous off, kubelet only AcrPull, Ratify healthy and federated, every ACR image and running app image signed, the policy reports the unsigned probe, Flux webhook refuses a bad signature), Resource Graph public endpoints and local auth against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC with a token for the namespace's own `key-vault` identity (own secret 200, others 403) and every role of the application identities (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`: RoleBindings match the tfvars' `groups`, each role's rights by impersonating a group member and signed in as a tester app from `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, NAP, VPA), R13 sync (Kubernetes version of the tfvars, Flux at the head of Git, `check-cells-in-sync.py`), R15 certificates vault -> Secret -> listener -> served, R16 every zone complete, R2 one exposure per cluster and subscription. **Only when the user asks for it** (2026-10-14: runs take 10-30 min and slowed progress) - no Deploy stage, no schedule; do not dispatch it on your own after a change. |
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node in kube-system, section 3), Kubescape `cis-aks-t1.8.0` from the runner (section 4), the cluster's Azure settings (sections 2 and 5). `tests/cis/report.py` gives one row per recommendation and a score; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only** (2026-10-14, the user's choice to speed up testing: no schedule, no Deploy stage). |
@@ -76,8 +76,13 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   federated credentials), the Flux GitHub webhook and the platform gateway (`flux_github_webhook`, `platform_gateway_enabled`,
   shared's `flux_github_webhook_namespaces`, the Flux webhooks workflow; D70) and the Dapr extension (`dapr.tf`, D65).
   `moved` blocks keep the identity and the propagation sleep at their state addresses; the `random` provider is gone.
-  The stateful tfvars now states a private API server (D58) instead of a public one. Verified: Deploy plans of
-  dev-shared, az2 and az3 on the branch - see the PR. The design's option E (D75, AKS Automatic per zone) is a path, not
+  The stateful tfvars now states a private API server (D58) instead of a public one. #199, applied to dev-shared (no
+  changes), az2 and az3 on 2026-10-19 (the state moves, the propagation sleep replaced, the Flux configurations' null
+  `sensitive_body_version` dropped - the first apply of a cell failed with azapi's "Provider produced inconsistent result
+  after apply" on those Flux configurations, whose `output` timestamps Azure moved while the body did not change; the
+  re-run applied cleanly); the `moved` blocks went with the follow-up PR, which also split the cells' tfvars
+  into `envs/dev-int-stateless.tfvars` (shared by every cell, applied first) + a short file per cell, and cut the
+  variable descriptions that repeated the README. The design's option E (D75, AKS Automatic per zone) is a path, not
   code: a cluster per zone with its own spoke would be a module of its own when decided (D64).
 - **Lab results 2026-10-18 (all verified with Cluster status, which now checks the edge per route as a VPN client and lists
   each constraint's excluded namespaces):** **D73 applied** (zone route tables `rt-<cell>-<zone>` + Network Contributor on
@@ -328,8 +333,9 @@ merge + apply `dev-shared` before merging a fleet change that depends on it.
   the VPA dry runs are AUDIT without the CRD. To bring it back: tfvars true, drop the patch, `node_count = 2`.
 - **Production defaults, lab savings in one block** (2026-10-15, the user's ask): variables.tf defaults are the
   production settings (`sku_tier = "Standard"`, `gateway_implementation = "approuting-istio"`, VPA on,
-  `advanced_networking = {}`, system pool 2 x Standard_D4ds_v5 on `AzureLinux`); the dev tfvars state every
-  departure in a "Non-production cost savings" block at the top (Free, traefik, VPA off, Hubble off, 1 x D4als_v6).
+  `advanced_networking = {}`, system pool 2 x Standard_D4ds_v5 on `AzureLinux`); the dev cells' shared tfvars
+  (`envs/dev-int-stateless.tfvars`, since 2026-10-19) states every departure in a "Non-production cost savings" block at
+  the top (Free, traefik, VPA off), each cell's file its 1 x D4alds_v6 system pool and its ACNS setting.
   README "Production defaults and non-production cost savings". The stateful tfvars state `gateway_implementation =
   null` (R9a, not a saving). A non-Cilium cluster must now say `advanced_networking = null`.
 - **Hubble off in the dev cells** (2026-10-15, D56, the user's choice, lab cost exception): `advanced_networking =

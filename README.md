@@ -32,7 +32,7 @@ creates - its resource group, its own network, the vaults, the registry - with a
 | --- | --- |
 | `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, wires up private or public API server access, and creates the managed namespaces. |
 | `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-int-stateless-az1.tfvars`, `envs/dev-int-stateless-az2.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters (since 2026-10-15, in germanywestcentral), `aks-dev-int-stateless-az1` (disabled in `shared/`: zone 1 is not available to the subscription), `aks-dev-int-stateless-az2` (running) and `aks-dev-int-stateful`, on the **Free** tier: one system node, no uptime SLA. Internal (`exposure = "int"`: Finland's zone `int-fi` only; Sweden's `int-se` is disabled in `shared/`). The stateless clusters are the design's cells - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone (1, 2) and a network of its own peered with the landing zone's hub, egress through labfw (`userDefinedRouting`), with the isolation zone's nodes from [node auto provisioning](#node-auto-provisioning), ACNS with eBPF host routing, customer-managed keys, an ephemeral OS disk and no persistent storage; no public entry point, so Flux polls (D70). The running one serves `hello-aks-dev-int-stateless-az2.int-fi.dev.onek8s.lol` on its zone's internal load balancer. The stateful one is defined but not deployed for now. |
+| `envs/dev-int-stateless.tfvars`, `envs/dev-int-stateless-az{1,2,3}.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters (since 2026-10-15, in germanywestcentral): the stateless cells `aks-dev-int-stateless-az2` (Finland's zone, overlay, running), `aks-dev-int-stateless-az3` (Sweden's zone, pod subnet, running) and `aks-dev-int-stateless-az1` (disabled in `shared/`: zone 1 is not available to the subscription), and `aks-dev-int-stateful` (defined, not deployed). `dev-int-stateless.tfvars` holds what every cell shares - the Free tier and the other cost savings, the environment's resources, the private API server - and is applied before a cell's own file, which holds the cell's name, network, zone, namespaces and network mode. The cells are the design's - see [Cells of the OneK8s design](#cells-of-the-onek8s-design): each in an availability zone and a network of its own peered with the landing zone's hub, egress through labfw (`userDefinedRouting`), customer-managed keys, an ephemeral OS disk, no persistent storage, no public entry point (Flux polls, D70). |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
@@ -95,9 +95,12 @@ Edit the environment's variables file to name your existing resources, then appl
 az login
 terraform init
 
-terraform workspace select -or-create dev-int-stateless-az1
-terraform apply -var-file=envs/dev-ext-stateful.tfvars
+terraform workspace select -or-create dev-int-stateless-az2
+terraform apply -var-file=envs/dev-int-stateless.tfvars -var-file=envs/dev-int-stateless-az2.tfvars
 ```
+
+A stateless cell takes two files: what every cell of the environment shares, then its own (a later file
+wins where both set a variable). The stateful cluster takes its file alone.
 
 An environment with [shared resources](#shared-resources) applies them first, from `shared/`:
 
@@ -788,8 +791,9 @@ Kubernetes Secrets from External Secrets Operator (design section 2.5).
 Every variable defaults to the **production setting** of the OneK8s design, so an acceptance or
 production environment states what is its own (names, networks, zones, namespaces) and nothing
 about how big or how managed the cluster is. A non-production environment that wants to spend less
-turns on, by name, the cost savings below; the dev lab's tfvars keep them together in one block,
-"Non-production cost savings", at the top of each file.
+turns on, by name, the cost savings below; the dev lab keeps them together in one block,
+"Non-production cost savings", at the top of `envs/dev-int-stateless.tfvars` - with the one-node system
+pool in each cell's file.
 
 | Variable | Production default | Non-production cost saving (dev lab) | What the saving gives up |
 | --- | --- | --- | --- |

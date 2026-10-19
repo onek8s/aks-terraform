@@ -492,15 +492,3 @@ locals {
     )
   ]
 }
-
-# The cluster identity and its propagation wait were conditional while a cluster could bring no
-# network or run as an AKS Automatic cluster on a system assigned identity; neither is a cell.
-moved {
-  from = azurerm_user_assigned_identity.this[0]
-  to   = azurerm_user_assigned_identity.this
-}
-
-moved {
-  from = time_sleep.role_assignment_propagation[0]
-  to   = time_sleep.role_assignment_propagation
-}
