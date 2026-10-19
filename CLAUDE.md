@@ -207,6 +207,12 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   Free tier only as a lab saving.
 - **A hub VNet and Azure Firewall Premium per exposure, no route between them** (D53, plan only; the lab runs labfw).
 - **IPv4 only** (D54).
+- **No Microsoft Defender** (D81): the company's third-party security tool instead. azure-landing-zone assigns only the
+  ALZ policies for what the platform runs on, none of Defender's; Defender for Cloud's own `SecurityCenterBuiltIn`
+  assignment was deleted on sub-mgmt and sub-hub with Lab admin (2026-10-19) - delete it again if it reappears.
+- **Every policy goes to Deny once it reports 0 non-compliant resources** (D82, the user): ALZ assignments in
+  azure-landing-zone, `kubernetes_deny` in its `environments/dev/policy.tfvars`. Key Vault purge protection is a policy
+  in prd only (D83).
 - **Stateful cluster OS channel is unverified** (V13): `SecurityPatch` tried first, `NodeImage` if refused.
 
 ## Lessons learned (gotchas)

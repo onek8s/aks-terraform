@@ -399,7 +399,7 @@ otherwise duplicate them are off on every cluster, with no variable to turn them
 | [Container Insights][insights] (`omsagent`) | Ships node and pod telemetry to a Log Analytics workspace. |
 | [Azure Monitor managed Prometheus][prometheus] | Scrapes cluster metrics into an Azure Monitor workspace. |
 | Control plane [diagnostic setting][diagnostics] | Ships the API server, audit and autoscaler logs to a Log Analytics workspace. |
-| [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. |
+| [Defender for Containers][defender] | Runs the Defender security agent on the nodes for threat detection. Microsoft Defender is not used: the company's third-party security tool is (design D81). |
 | [Application Routing][approuting]'s NGINX (`webAppRouting.enabled`, `nginx`) | Installs and manages the NGINX ingress controller for the Ingress API, which the platform does not use. App Routing's Gateway API implementation is separate, see below. |
 | [Application Gateway for Containers][agcaddon] (`applicationLoadBalancer`) | Runs the ALB Controller add-on, which programs an Azure-hosted, public Gateway API load balancer. |
 
