@@ -1,8 +1,8 @@
 name: Egress agent
 
 # The egress agent of onek8s/aks-ai-agents (design D59) on the dev environment: it reads the connections the hub
-# firewall denied from the cells, finds the pod behind each source address - the firewall-egress cell (az3) has no
-# overlay, so a pod keeps its own address up to the firewall - and opens one pull request per application namespace
+# firewall denied from the cells, finds the pod behind each source address - a pod keeps its own address (pod subnet)
+# up to the firewall - and opens one pull request per application namespace
 # to onek8s/azure-landing-zone, adding the destinations to that application's firewall rules
 # (stacks/platform-extensions/firewall-applications/dev-int/<namespace>.yaml). A human reviews and merges it; the
 # landing zone's Platform workflow applies it, and labfw enforces it within minutes. The agent never allows anything

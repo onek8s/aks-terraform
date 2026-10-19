@@ -11,13 +11,9 @@ name: Deploy
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
 #                        internal zones' private DNS, the container registry and its images and the
 #                        external zones' Traffic Manager profiles. Applied first.
-#   dev-int-stateless-az2    the repository root with envs/dev-int-stateless.tfvars + envs/dev-int-stateless-az2.tfvars: aks-dev-int-stateless-az2,
-#                        the lab's running cell (internal, int-fi, germanywestcentral, behind labfw).
-#   dev-int-stateless-az3    the same in availability zone 3 without an overlay (design D59, D74): Azure CNI Pod
-#                        Subnet, pods in 100.64.0.0/16, nodes in 10.100.0.0/16, classic zone pools with the
-#                        cluster autoscaler (no NAP), every egress decided by labfw; int-se.
-#   dev-int-stateless-az1    the same in availability zone 1: disabled in shared/ (zone 1 is not available
-#                        to sub-aks-dev in germanywestcentral).
+#   dev-int-stateless-az3    the repository root with envs/dev-int-stateless.tfvars + envs/dev-int-stateless-az3.tfvars:
+#                        aks-dev-int-stateless-az3, the lab's one cell (internal, int-se, germanywestcentral,
+#                        availability zone 3, behind labfw; Azure CNI Pod Subnet, classic zone pools).
 #   dev-int-stateful         the repository root with envs/dev-int-stateful.tfvars: aks-dev-int-stateful (defined,
 #                        not deployed for now).
 #
@@ -51,11 +47,11 @@ on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az2 (running), dev-int-stateless-az3 (firewall egress, no overlay), dev-int-stateless-az1 (disabled), dev-int-stateful"
+        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az3 (the lab's cell), dev-int-stateful"
         required: true
         default: "dev-shared"
         type: choice
-        options: [dev-shared, dev-int-stateless-az2, dev-int-stateless-az3, dev-int-stateless-az1, dev-int-stateful]
+        options: [dev-shared, dev-int-stateless-az3, dev-int-stateful]
       action:
         description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true
@@ -166,10 +162,10 @@ jobs:
           for p in $providers; do
             [ "$(az provider show -n "$p" --query registrationState -o tsv)" = Registered ] || az provider register -n "$p" -o none
           done
-          # The managed Gateway API CRDs, encryption at host on the nodes (design section 4.2), Image
-          # Integrity (section 2.7), and AKS's managed GPU stack on the zones' GPU nodes (section 2.3).
+          # The managed Gateway API CRDs, encryption at host on the nodes (design section 4.2) and Image
+          # Integrity (section 2.7).
           for pair in Microsoft.ContainerService/ManagedGatewayAPIPreview Microsoft.Compute/EncryptionAtHost \
-            Microsoft.ContainerService/EnableImageIntegrityPreview Microsoft.ContainerService/ManagedGPUExperiencePreview; do
+            Microsoft.ContainerService/EnableImageIntegrityPreview; do
             namespace="${pair%/*}"; feature="${pair#*/}"
             if [ "$(az feature show --namespace "$namespace" --name "$feature" --query properties.state -o tsv)" != Registered ]; then
               az feature register --namespace "$namespace" --name "$feature" -o none

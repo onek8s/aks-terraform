@@ -80,8 +80,8 @@ module "conventions" {
 
 # The names of what this configuration creates, from the naming policy (var.naming, see
 # modules/conventions) - a variable that names a resource itself wins. A cell's network, NSGs and
-# route table take the cell's key (`dev-int-stateless-az2`) as their `{name}`, a zone's route table the cell and
-# the zone (`dev-int-stateless-az2-int-fi`), a zone's vault the zone.
+# route table take the cell's key (`dev-int-stateless-az3`) as their `{name}`, a zone's route table the cell and
+# the zone (`dev-int-stateless-az3-int-se`), a zone's vault the zone.
 locals {
   name_requests = merge(
     # Only the names no variable gives: a resource named in its variable needs nothing of the policy.

@@ -203,7 +203,7 @@ locals {
 
   # The environment a cluster belongs to, for the names of the environment's shared resources: the
   # variable, or else from the cluster's name - <what it is>-<environment>-<which one> -
-  # `aks-dev-ext-stateless-az1` is in `dev`.
+  # `aks-dev-int-stateless-az3` is in `dev`.
   environment = coalesce(var.environment, length(local.name_segments) < 2 ? var.name : local.name_segments[1])
 
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
@@ -244,8 +244,8 @@ locals {
   # The cluster's identity, by the naming policy's `user_assigned_identity` (modules/conventions) -
   # `id-<region code>-<environment>-<function>` by default - worked out from the cluster name and the
   # region rather than stated per environment. Its `{name}` is the cluster's name without the
-  # environment's segment, so `aks-dev-ext-stateless-az1` in swedencentral is run by
-  # `id-sec-dev-aks-stateless-az1`: the environment moves to the front of the function, and everything
+  # environment's segment, so `aks-dev-int-stateless-az3` in germanywestcentral is run by
+  # `id-gwc-dev-aks-int-stateless-az3`: the environment moves to the front of the function, and everything
   # past it distinguishes the cluster from its siblings in the same environment. A name with nothing to
   # split is its own environment and becomes `id-<region code>-<name>`. The policy refuses a region
   # with no code rather than name the identity with a guess.

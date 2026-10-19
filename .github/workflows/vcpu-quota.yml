@@ -3,10 +3,9 @@ name: vCPU quota
 # Raises the dev subscription's compute quotas in a region to what the dev cells need, through the
 # Azure Quota API. Started by hand. A stateless cell takes a 4-vCPU system node (Daldv6 family,
 # Standard_D4alds_v6: its local
-# NVMe disk holds the ephemeral OS disk) and a 2-vCPU node per isolation zone (Dpsv6, or spot), plus a
-# surge node while it upgrades. A zone's
-# GPU node (aks-fluxcd-platform `<zone>gpu`) is a 40-vCPU Standard_NC40ads_H100_v5, in a family
-# whose quota Azure starts at 0; `gpu` stays 0 unless GPU nodes are wanted.
+# NVMe disk holds the ephemeral OS disk) and a 2-vCPU node per isolation zone (Daldv6 or Dpsv6, or spot),
+# plus a surge node while it upgrades. A zone's GPU node (a `<zone>gpu` pool, design D42) is a 40-vCPU
+# Standard_NC40ads_H100_v5, in a family whose quota Azure starts at 0; `gpu` stays 0 unless GPU nodes are wanted.
 #
 # A quota only ever goes up here: a limit already at or above its target is left as it is. Azure
 # approves small vCPU increases itself; one it does not approve is reported as failed, with the
