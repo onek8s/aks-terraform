@@ -201,7 +201,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . "$RUNNER_TEMP/lib.sh"
-          templates="k8splatformnopersistentstorage k8splatformzoneplacement k8splatformplacementlabels k8splatformfqdnegress k8splatformgatewayonly
+          templates="k8splatformnopersistentstorage k8splatformzoneplacement k8splatformplacementlabels k8splatformappegress k8splatformgatewayonly
             k8splatformsecretsviaeso k8splatformesoobjects k8splatformserviceaccounts k8splatformrolloutguardrails k8splatformverticalpodautoscalers
             k8splatformnamespaceownership"
           # The mutations of the subscription's exposure (azure-landing-zone stacks/aks-policy): five for
@@ -564,14 +564,16 @@ jobs:
           printf 'apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: other-zone}\nspec: {parentRefs: [{namespace: %s-gateway, name: %s}], hostnames: [x.%s.dev.onek8s.lol], rules: [{backendRefs: [{name: x, port: 80}]}]}\n' "$OTHER_ZONE" "$OTHER_ZONE" "$OTHER_ZONE" \
             | forbidden "R3, R9b" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: cidr}\nspec: {endpointSelector: {}, egress: [{toCIDR: [1.1.1.1/32]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy toCIDR" k8splatformfqdnegress
+            | forbidden R20 "CiliumNetworkPolicy toCIDR" k8splatformappegress
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: world}\nspec: {endpointSelector: {}, egress: [{toEntities: [world]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy toEntities world" k8splatformfqdnegress
-          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: wildcard}\nspec: {endpointSelector: {}, egress: [{toFQDNs: [{matchPattern: "*.blob.core.windows.net"}], toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy cloud-wide wildcard" k8splatformfqdnegress
+            | forbidden R20 "CiliumNetworkPolicy toEntities world" k8splatformappegress
+          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: fqdn}\nspec: {endpointSelector: {}, egress: [{toFQDNs: [{matchName: api.github.com}], toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
+            | forbidden R20 "CiliumNetworkPolicy toFQDNs (the firewall decides, D80)" k8splatformappegress
+          printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: ports-only}\nspec: {endpointSelector: {}, egress: [{toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
+            | forbidden R20 "CiliumNetworkPolicy egress rule without a peer" k8splatformappegress
           printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata: {name: ipblock}\nspec: {podSelector: {}, policyTypes: [Egress], egress: [{to: [{ipBlock: {cidr: 0.0.0.0/0}}]}]}\n' \
-            | forbidden R20 "NetworkPolicy egress ipBlock" k8splatformfqdnegress
-          pod own-dns "dnsPolicy: Default" | forbidden R20 "pod with its own DNS (dnsPolicy Default)" k8splatformfqdnegress
+            | forbidden R20 "NetworkPolicy egress ipBlock" k8splatformappegress
+          pod own-dns "dnsPolicy: Default" | forbidden R20 "pod with its own DNS (dnsPolicy Default)" k8splatformappegress
           pod system-pool "nodeSelector: {kubernetes.azure.com/mode: system}, tolerations: [{key: CriticalAddonsOnly, operator: Exists}]" \
             | forbidden R4 "zone pod on the system pool" k8splatformzoneplacement
           pod other-zone "nodeSelector: {platform/zone: $OTHER_ZONE}" | forbidden "R3, R4" "zone pod selecting another zone's nodes" k8splatformzoneplacement
