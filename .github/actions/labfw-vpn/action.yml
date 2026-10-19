@@ -45,6 +45,11 @@ inputs:
       ais-onek8s-dev-agents.cognitiveservices.azure.com ais-onek8s-dev-agents.openai.azure.com
       ais-onek8s-dev-agents.services.ai.azure.com stonek8sdevtfstate.blob.core.windows.net
       api.loganalytics.io api.loganalytics.azure.com
+  extra_private_names:
+    description: >-
+      More names looked up at labfw's DNS proxy, appended to private_names: e.g. an internal zone's application
+      names, which only the hub's private DNS zones answer.
+    default: ""
 runs:
   using: composite
   steps:
@@ -55,7 +60,7 @@ runs:
         VAULT: ${{ inputs.vault }}
         SECRET: ${{ inputs.secret }}
         EXTRA_ALLOWED_IPS: ${{ inputs.extra_allowed_ips }}
-        PRIVATE_NAMES: ${{ inputs.private_names }}
+        PRIVATE_NAMES: ${{ inputs.private_names }} ${{ inputs.extra_private_names }}
       run: |
         set -euo pipefail
         command -v wg-quick >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools >/dev/null; }
@@ -78,7 +83,7 @@ runs:
         # The private endpoints' names as labfw's DNS proxy answers them (the hub's private link zones), pinned in
         # /etc/hosts for this job: the runner's own resolver keeps answering everything else - systemd-resolved's
         # routing domains did not take effect on the runner
-        if [ -n "$PRIVATE_NAMES" ]; then
+        if [ -n "${PRIVATE_NAMES// /}" ]; then
           for name in $PRIVATE_NAMES; do
             address="$(dig +short +time=3 +tries=2 @10.0.12.1 "$name" | grep -E '^[0-9.]+$' | tail -1 || true)"
             if [[ "$address" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; then

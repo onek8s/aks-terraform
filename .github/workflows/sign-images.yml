@@ -65,6 +65,8 @@ jobs:
           printf '| Image | Digest | Result |\n|---|---|---|\n' > "$summary"
           failed=0
           for repository in $(az acr repository list -n "$REGISTRY" -o tsv); do
+            # isolation/: the Isolation tests' own test image, deliberately unsigned - Azure Policy must report it
+            case "$repository" in isolation/*) continue ;; esac
             # Without the referrers API a signature is also kept under a tag `sha256-<digest>`: not an
             # image, and not to be signed.
             for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv | grep -v '^sha256-'); do

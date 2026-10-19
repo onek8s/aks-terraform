@@ -27,8 +27,9 @@ name: Isolation tests
 #     aks-terraform federates and its configuration is healthy; every image in the registry and every
 #     image an application runs carries a signature by the platform's certificate that verifies (the
 #     same trust policy as Ratify's); Azure Policy reports the probe pod's unsigned image and not the
-#     signed application; and the Flux webhook receiver refuses a delivery without GitHub's signature
-#     but takes a signed one.
+#     signed application; and, in a cell with the Flux webhook (design D78), its receiver refuses a delivery
+#     without GitHub's signature but takes a signed one. The test pods run curl imported into the registry
+#     as `isolation/curl` by digest - every rule in deny admits nothing else - deliberately unsigned.
 #   - Azure Resource Graph (R1, R5, R7a): public IPs, public PaaS endpoints and local authentication -
 #     none but the designed ones and the recorded lab exceptions (tests/isolation/).
 #   - Namespace access (R6, R7): each Entra ID group of managed_namespaces[*].groups has its RoleBinding
@@ -47,7 +48,8 @@ name: Isolation tests
 #   - Zones (R16): every isolation zone is the complete pattern - namespaces, Gateway, ESO, Cilium
 #     baseline, node pools, subnet with NSG, vault - so adding one is adding the same again.
 #
-# It creates a test namespace in the cell's zone, runs one pod there (the cluster autoscaler adds a zone node
+# It imports its test image into the registry (isolation/curl), creates a test namespace in the cell's zone,
+# runs one pod there (the cluster autoscaler adds a zone node
 # for a few minutes) and deletes both afterwards; the dry runs create nothing. It changes nothing else.
 #
 # Credentials: the same Azure identity and GitHub environment as Deploy; it needs a Kubernetes RBAC
@@ -187,6 +189,8 @@ jobs:
       - uses: ./.github/actions/labfw-vpn
         with:
           config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
+          # The zone's application names (R15, R24): an internal zone's resolve only in the hub's private DNS zones
+          extra_private_names: hello-${{ env.CLUSTER }}.${{ env.ZONE_DOMAIN }} hello.${{ env.ZONE_DOMAIN }}
 
       - name: Credentials
         run: |
@@ -260,7 +264,7 @@ jobs:
           # in the same vault (ABAC refuses by name, whether it exists or not); the platform vault.
           if token="$(vault_token "$ZONE-example")" && [ -n "$token" ]; then
             echo "::add-mask::$token"
-            read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--github-webhook-token" 200
+            read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 200
             read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-other--isolation-test" 403
             read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
             # Soft multi-tenancy: it reads its own by name and lists nothing - no other namespace's names.
@@ -277,7 +281,7 @@ jobs:
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$ZONE-gateway--wildcard" 200
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$OTHER_ZONE-gateway--wildcard" 403
             read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--github-webhook-token" 403
+            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 403
           else
             result FAIL R7 "$ZONE-gateway's Key Vault identity signs in" "no token for its key-vault service account"
           fi
@@ -315,7 +319,11 @@ jobs:
             openssl s_client -connect "$1:443" -servername "$1" </dev/null 2>/dev/null | fingerprint
           }
           external_host() { case $1 in platform) kubectl -n flux-system get configmap cluster-settings -o jsonpath='{.data.flux_webhook_hostname}' ;; "$ZONE") echo "hello-$CLUSTER.$ZONE_DOMAIN" ;; esac; }
-          for zone in $ZONES platform; do
+          # The platform gateway exists only in a cell with the Flux webhook (flux_github_webhook, design D78)
+          gateways="$ZONES"
+          if kubectl get namespace platform-gateway >/dev/null 2>&1; then gateways="$gateways platform"
+          else result PASS R15 "no platform gateway: the Flux webhook is off in this cell (design D78)"; fi
+          for zone in $gateways; do
             ns="$zone-gateway"
             cert="$(az keyvault certificate show --vault-name "$VAULT_PREFIX-platform" -n "$ns--wildcard" --query '{t: x509ThumbprintHex, e: attributes.expires}' -o json 2>/dev/null)"
             if [ -z "$cert" ]; then result FAIL R15 "$ns--wildcard in the platform vault" "missing"; continue; fi
@@ -414,6 +422,17 @@ jobs:
             | jq -r '.items[] | select(([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length) == 0) | "\(.kind)/\(.metadata.namespace)/\(.metadata.name)"' | paste -sd, -)"
           if [ -z "$stale" ]; then result PASS R13 "every Flux Kustomization and HelmRelease Ready"; else result FAIL R13 "every Flux Kustomization and HelmRelease Ready" "$stale"; fi
 
+      # The test pods' image: curl, imported into the environment's registry and named by digest - the platform
+      # admits nothing else in an application namespace (k8s-allowed-images, in deny). Deliberately unsigned:
+      # Azure Policy must report it (Image Integrity, below), and the signature checks leave `isolation/` out.
+      - name: Test image in the registry
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          az acr import -n "$REGISTRY" --source docker.io/curlimages/curl:8.10.1 --image isolation/curl:8.10.1 --force --only-show-errors
+          digest="$(az acr repository show -n "$REGISTRY" --image isolation/curl:8.10.1 --query digest -o tsv)"
+          echo "PROBE_IMAGE=$REGISTRY.azurecr.io/isolation/curl:8.10.1@$digest" >> "$GITHUB_ENV"
+
       - name: Probe pod placed by the mutations
         id: probe
         if: ${{ !cancelled() }}
@@ -447,10 +466,13 @@ jobs:
             securityContext:
               runAsNonRoot: true
               runAsUser: 100
+              runAsGroup: 100
+              fsGroup: 100
+              supplementalGroups: [100]
               seccompProfile: {type: RuntimeDefault}
             containers:
               - name: probe
-                image: docker.io/curlimages/curl:8.10.1
+                image: $PROBE_IMAGE
                 command: ["sleep", "3600"]
                 securityContext:
                   allowPrivilegeEscalation: false
@@ -459,6 +481,8 @@ jobs:
                 resources:
                   requests: {cpu: 10m, memory: 16Mi}
                   limits: {memory: 64Mi}
+                readinessProbe: {exec: {command: ["true"]}}
+                livenessProbe: {exec: {command: ["true"]}}
           EOF
           pod="$(kubectl -n "$NAMESPACE" get pod probe -o json)"
           check() { if [ "$3" = "$4" ]; then result PASS "$1" "$2" "$3"; else result FAIL "$1" "$2" "$3, expected $4"; fi; }
@@ -541,9 +565,16 @@ jobs:
           # the one thing it adds: name, extra pod spec (YAML flow mapping entries), container
           # securityContext.
           restricted='{allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}'
+          # What every rule in deny asks of a pod: the restricted standard's user and groups, no token, and a
+          # container from the registry by digest with requests and probes (deployment safeguards).
+          pod_security='automountServiceAccountToken: false, securityContext: {runAsNonRoot: true, runAsUser: 100, runAsGroup: 100, fsGroup: 100, supplementalGroups: [100], seccompProfile: {type: RuntimeDefault}}'
+          container() { # image container-securityContext [extra limits]
+            printf '{name: c, image: "%s", command: [sleep, "3600"], resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi%s}}, readinessProbe: {exec: {command: ["true"]}}, livenessProbe: {exec: {command: ["true"]}}, securityContext: %s}' \
+              "$1" "${3:+, $3}" "$2"
+          }
           pod() {
-            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, securityContext: %s}]}\n' \
-              "$1" "${2:+$2,}" "${3:-$restricted}"
+            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s %s, containers: [%s]}\n' \
+              "$1" "${2:+$2,}" "$pod_security" "$(container "$PROBE_IMAGE" "${3:-$restricted}")"
           }
           pod privileged "" "{privileged: true}" | forbidden R5 "privileged pod" always
           pod host-path "volumes: [{name: h, hostPath: {path: /}}]" | forbidden R5 "hostPath volume" always
@@ -584,11 +615,11 @@ jobs:
           # nvidia-gpu, which the mutation turns into the GPU pool's toleration. A dry run of such
           # a pod shows the toleration added; the request alone, the label alone and the toleration
           # alone are refused.
-          gpu_pod() { # name labels resources tolerations
-            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: gpu%s}}\nspec: {%s securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, resources: {%s}, securityContext: %s}]}\n' \
-              "$1" "${2:+, $2}" "${4:+$4,}" "$3" "$restricted"
+          gpu_pod() { # name labels GPU-limits tolerations
+            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: gpu%s}}\nspec: {%s %s, containers: [%s]}\n' \
+              "$1" "${2:+, $2}" "${4:+$4,}" "$pod_security" "$(container "$PROBE_IMAGE" "$restricted" "$3")"
           }
-          if out="$(gpu_pod gpu "platform/accelerator: nvidia-gpu" "limits: {nvidia.com/gpu: 1}" | kubectl create --dry-run=server -n "$NAMESPACE" -o json -f - 2>&1)"; then
+          if out="$(gpu_pod gpu "platform/accelerator: nvidia-gpu" "nvidia.com/gpu: 1" | kubectl create --dry-run=server -n "$NAMESPACE" -o json -f - 2>&1)"; then
             if jq -e '.spec.tolerations[]? | select(.key == "platform/accelerator" and .value == "nvidia-gpu")' <<<"$out" >/dev/null; then
               result PASS R17 "GPU pod admitted with the GPU toleration from the mutation" "$(jq -c '[.spec.nodeSelector, [.spec.tolerations[] | .key]]' <<<"$out")"
             else
@@ -597,7 +628,7 @@ jobs:
           else
             result FAIL R17 "GPU pod admitted with the GPU toleration from the mutation" "$(tail -1 <<<"$out" | head -c 300)"
           fi
-          gpu_pod gpu-unlabelled "" "limits: {nvidia.com/gpu: 1}" | forbidden R17 "GPU request without platform/accelerator" k8splatformplacementlabels
+          gpu_pod gpu-unlabelled "" "nvidia.com/gpu: 1" | forbidden R17 "GPU request without platform/accelerator" k8splatformplacementlabels
           gpu_pod gpu-idle "platform/accelerator: nvidia-gpu" "" | forbidden R17 "platform/accelerator without a GPU request" k8splatformplacementlabels
           gpu_pod gpu-sneaky "" "" "tolerations: [{key: platform/accelerator, operator: Equal, value: nvidia-gpu, effect: NoSchedule}]" \
             | forbidden R17 "GPU toleration without platform/accelerator" k8splatformplacementlabels
@@ -606,8 +637,8 @@ jobs:
             | forbidden R25 "namespace without owner, cost centre and contact" k8splatformnamespaceownership
           # Images by digest from the environment's registry only (built-in, k8s-allowed-images).
           image_pod() {
-            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: "%s", securityContext: %s}]}\n' \
-              "$1" "$2" "$restricted"
+            printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s, containers: [%s]}\n' \
+              "$1" "$pod_security" "$(container "$2" "$restricted")"
           }
           image_pod other-registry docker.io/library/nginx:1.27 | forbidden R14 "image from outside the environment's registry" builtin
           image_pod by-tag "$REGISTRY.azurecr.io/aks-hello:0.3.0" | forbidden R14 "image from the registry by tag, not by digest" builtin
@@ -633,8 +664,8 @@ jobs:
             | forbidden R14 "ServiceAccount with imagePullSecrets" k8splatformserviceaccounts
           # Replica and rollout guardrails (R11, R12).
           deployment() { # name replicas maxUnavailable
-            printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: %s}\nspec: {replicas: %s, strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: %s, maxSurge: 1}}, selector: {matchLabels: {app: %s}}, template: {metadata: {labels: {app: %s}}, spec: {topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: %s}}}], securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}, containers: [{name: c, image: docker.io/curlimages/curl:8.10.1, securityContext: %s}]}}}\n' \
-              "$1" "$2" "$3" "$1" "$1" "$1" "$restricted"
+            printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: %s}\nspec: {replicas: %s, strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: %s, maxSurge: 1}}, selector: {matchLabels: {app: %s}}, template: {metadata: {labels: {app: %s}}, spec: {topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: %s}}}], %s, containers: [%s]}}}\n' \
+              "$1" "$2" "$3" "$1" "$1" "$1" "$pod_security" "$(container "$PROBE_IMAGE" "$restricted")"
           }
           deployment one-replica 1 0 | forbidden R11 "Deployment with one replica" k8splatformrolloutguardrails
           deployment drops-capacity 2 1 | forbidden R12 "Deployment rolling out with maxUnavailable 1" k8splatformrolloutguardrails
@@ -713,13 +744,15 @@ jobs:
               else result FAIL "$1" "$2 signed by the platform" "$(tail -1 <<<"$out" | head -c 200)"; fi
             }
             for repository in $(az acr repository list -n "$REGISTRY" -o tsv); do
+              # isolation/: this workflow's own test image, deliberately unsigned (Test image in the registry)
+              case "$repository" in isolation/*) continue ;; esac
               # Without the referrers API a signature is also kept under a tag `sha256-<digest>`: not an image.
               for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv | grep -v '^sha256-'); do
                 verify R14 "registry image $repository:$tag" "$REGISTRY.azurecr.io/$repository@$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
               done
             done
             kubectl get pods -A -o json \
-              | jq -r --arg server "$REGISTRY.azurecr.io/" '.items[] | select(.metadata.namespace | test("^(int|ext)-(fi|se)-")) | .metadata.namespace as $ns
+              | jq -r --arg server "$REGISTRY.azurecr.io/" --arg test "$NAMESPACE" '.items[] | select((.metadata.namespace | test("^(int|ext)-(fi|se)-")) and .metadata.namespace != $test) | .metadata.namespace as $ns
                   | .status.containerStatuses[]? | select(.image | startswith($server)) | "\($ns) \(.image) \(.imageID | sub("^.*@"; ""))"' \
               | sort -u | while read -r ns image digest; do
                   verify R14 "running in $ns: $image" "${image%%[:@]*}@$digest"
@@ -747,9 +780,9 @@ jobs:
             result PASS R14 "Image Integrity constraint in the cluster" "$(jq -r 'map(.metadata.name + " (" + (.spec.enforcementAction // "deny") + ")") | join(", ")' <<<"$constraints")"
             if [ "${{ steps.probe.outcome }}" = success ]; then
               if probe_reported; then
-                result PASS R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.[].status.violations[]? | select(.namespace == $ns)][0].message' <<<"$constraints" | head -c 160)"
+                result PASS R14 "an unsigned image is reported (probe pod, isolation/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.[].status.violations[]? | select(.namespace == $ns)][0].message' <<<"$constraints" | head -c 160)"
               else
-                result FAIL R14 "an unsigned image is reported (probe pod, docker.io/curlimages/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
+                result FAIL R14 "an unsigned image is reported (probe pod, isolation/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
               fi
             fi
             reported="$(jq -r --arg ns "$ZONE-example" '[.[].status.violations[]? | select(.namespace == $ns)] | length' <<<"$constraints")"
@@ -759,7 +792,9 @@ jobs:
           # The Flux webhook receiver: a delivery must carry GitHub's signature with the shared token.
           host="$(kubectl -n flux-system get configmap cluster-settings -o jsonpath='{.data.flux_webhook_hostname}')"
           path="$(kubectl -n flux-system get receiver github -o jsonpath='{.status.webhookPath}' 2>/dev/null)"
-          if [ -z "$host" ] || [ -z "$path" ]; then
+          if [ -z "$host" ] && [ -z "$path" ]; then
+            result PASS R14 "no Flux webhook receiver: the webhook is off in this cell (design D78)"
+          elif [ -z "$host" ] || [ -z "$path" ]; then
             result FAIL R14 "Flux webhook receiver" "no hostname ($host) or receiver path ($path)"
           else
             body='{"zen":"isolation test","hook_id":0}'

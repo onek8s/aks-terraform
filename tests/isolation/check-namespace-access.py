@@ -34,6 +34,7 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
 Prints one line per check and a Markdown table to $RESULTS; exits 1 when a check failed.
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -260,8 +261,15 @@ def unquoted(value):
 
 def resource_group(shared_tfvars, tfvars):
     """The environment's resource group: shared/'s resource_group_name, or - when the naming policy names
-    it there - the cell's, which is the same group (the clusters live beside what they share)."""
-    return unquoted(parse(shared_tfvars).get("resource_group_name")) or unquoted(parse(tfvars).get("resource_group_name"))
+    it there - the cell's, which is the same group (the clusters live beside what they share). A stateless
+    cell's file (envs/<env>-stateless-az<N>.tfvars) is planned after what every cell shares
+    (envs/<env>-stateless.tfvars), which names it."""
+    common = re.sub(r"-az[0-9]+\.tfvars$", ".tfvars", tfvars)
+    for path in (shared_tfvars, tfvars, common if common != tfvars and os.path.exists(common) else None):
+        name = unquoted(parse(path).get("resource_group_name")) if path else None
+        if name:
+            return name
+    return None
 
 
 def shared_groups(shared_tfvars):
