@@ -129,13 +129,18 @@ jobs:
           # Run a command in the probe pod; its output in /tmp/out.
           probe() { timeout 30 kubectl -n "$NAMESPACE" exec probe -- sh -c "$1" >/tmp/out 2>&1; }
           # Cilium drops what a policy denies, so a blocked connection times out (curl 28) or its
-          # name does not resolve (curl 6, nslookup 1). A refused connection (7) or a TLS error
-          # reached the other end: that is not blocked.
+          # name does not resolve (curl 6, nslookup 1). The hub firewall denies as Azure Firewall does
+          # (design D61): a TLS connection reset at its SNI ("Connection reset by peer", curl 35 or 56)
+          # and HTTP status 470 (the command prints it with -w '%{http_code}'). A refused connection (7),
+          # any other TLS error or HTTP status reached the other end: that is not blocked.
           blocked() {
             probe "$3"; local rc=$?
             case $rc in
               1|6|28|124) result PASS "$1" "$2 is blocked" "exit $rc" ;;
-              0) result FAIL "$1" "$2 is blocked" "reachable: $(head -c 300 /tmp/out)" ;;
+              35|56) if grep -q 'Connection reset by peer' /tmp/out; then result PASS "$1" "$2 is blocked" "reset by the hub firewall (exit $rc)"
+                     else result FAIL "$1" "$2 is blocked" "the connection got through (exit $rc): $(head -c 300 /tmp/out)"; fi ;;
+              0) if [ "$(cat /tmp/out)" = 470 ]; then result PASS "$1" "$2 is blocked" "HTTP 470 from the hub firewall"
+                 else result FAIL "$1" "$2 is blocked" "reachable: $(head -c 300 /tmp/out)"; fi ;;
               *) result FAIL "$1" "$2 is blocked" "the connection got through (exit $rc): $(head -c 300 /tmp/out)" ;;
             esac
           }
@@ -520,7 +525,7 @@ jobs:
           [ -z "$app_pod" ] || blocked R6 "another application of the same zone ($ZONE-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
           node_ip="$(kubectl get nodes -l kubernetes.azure.com/mode=system -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
           [ -z "$node_ip" ] || blocked R5 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
-          blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null http://1.1.1.1"
+          blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://1.1.1.1"
           blocked R20 "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
 
       - name: Forbidden manifests
@@ -815,7 +820,9 @@ jobs:
           for host in "hello-$CLUSTER.$ZONE_DOMAIN" "hello.$ZONE_DOMAIN"; do
             code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$host/healthz" || true)"
             if [ "$code" = 200 ]; then result PASS R24 "https://$host/healthz" 200; else result FAIL R24 "https://$host/healthz" "$code"; fi
-            if curl -sS -m 5 -o /dev/null "http://$host/"; then result FAIL R9b "no plain HTTP on $host" "answers"; else result PASS R9b "no plain HTTP on $host"; fi
+            # Nothing listens on 80; from this VPN client the hub firewall answers a plain HTTP request itself with 470
+            code="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://$host/" 2>/dev/null || true)"
+            case "$code" in 000|470) result PASS R9b "no plain HTTP on $host" "${code/000/no connection}" ;; *) result FAIL R9b "no plain HTTP on $host" "HTTP $code" ;; esac
           done
 
       - name: Azure Resource Graph - public endpoints and local authentication
