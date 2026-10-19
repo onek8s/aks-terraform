@@ -334,6 +334,18 @@ jobs:
                 serviceaccount/"${gateway}-approuting-istio"
             done
 
+      # A stateless cluster (persistent_storage_enabled = false) runs no CSI driver, yet AKS still creates
+      # its StorageClasses `default` and `managed-csi-premium-v2`. The landing zone's no-persistent-storage
+      # policy reports them and refuses them back once they are gone (design section 3.1: a stateless
+      # cluster has no persistent storage). Idempotent; runs on every apply of a cluster.
+      - name: Remove AKS's StorageClasses from a stateless cluster
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        run: |
+          set -euo pipefail
+          [ "$(terraform output -raw persistent_storage_enabled)" = "false" ] || { echo "persistent storage: kept"; exit 0; }
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          kubectl delete storageclass --ignore-not-found default managed-csi-premium-v2
+
       - name: Summary
         if: always() && steps.plan.outcome != 'skipped'
         env:

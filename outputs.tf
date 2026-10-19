@@ -38,6 +38,11 @@ output "name" {
   value       = module.aks.name
 }
 
+output "persistent_storage_enabled" {
+  description = "Whether the cluster has persistent storage; Deploy deletes AKS's own StorageClasses from a stateless one."
+  value       = var.persistent_storage_enabled
+}
+
 output "node_resource_group_id" {
   description = "Resource ID of the resource group holding the cluster infrastructure."
   value       = module.aks.node_resource_group_id
