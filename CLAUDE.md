@@ -154,9 +154,10 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `platform/arch`, `platform/capacity: spot` -> toleration of `platform/capacity` and AKS's
   `kubernetes.azure.com/scalesetpriority=spot` + preference, GPU toleration). Deny: storage, `app-egress` (application policies inside the cluster only, D80), Gateway only,
   placement labels, `secrets-via-eso`, `eso-objects`, `service-accounts`, `rollout-guardrails`,
-  `vertical-pod-autoscalers`, `namespace-ownership`, no-Ingress, read-only root filesystem. Audit (reasons in
-  policy.tfvars): zone placement, PSS restricted, deployment safeguards, allowed images, automount, internal LBs, Image
-  Integrity, `h2c-upstream`, `gateway-tls`. Promote a rule only after Cluster status shows 0 violations for it.
+  `vertical-pod-autoscalers`, `namespace-ownership`, no-Ingress, read-only root filesystem, zone placement, internal LBs,
+  `gateway-tls`, vault public access, ACR admin (2026-10-19, D82). Audit (reasons in policy.tfvars): PSS restricted,
+  deployment safeguards, allowed images, automount, `h2c-upstream`; Image Integrity and the cluster-setting built-ins
+  have no Deny effect (`audit_only`). Promote a rule only after Cluster status shows 0 violations for it.
 - **Access**: namespace groups (D49) `managed_namespaces.<ns>.groups = { view, edit, admin }` -> a Flux configuration
   `<ns>-access` with a RoleBinding per role + `Azure Kubernetes Service Namespace User`; on the vault `admin` Secrets
   Officer, `edit` custom `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51), both under the `<ns>--` ABAC condition.
