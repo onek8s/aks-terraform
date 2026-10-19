@@ -1,0 +1,46 @@
+name: Design tags
+
+# Tags the code of every repository of the onek8s organization with the design's version: `v<version>`
+# of onek8s.github.io's `_config.yml` (the newest entry of its release notes) on the head of each
+# repository's default branch, as it stands when the version is first seen. A tag that exists is never
+# moved, so a run changes nothing until the design's version changes. Merge a round's code pull requests
+# before the design's, then run this (or wait for the hourly run).
+#
+# GH_OWNER (an admin token of the organization) creates the tags, so tag workflows run: azure-lab-fw's
+# release builds a labfw release of each tag (azure-landing-zone pins the one labfw runs).
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Tag every repository
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 10
+    steps:
+      - name: Tag
+        env:
+          GH_TOKEN: ${{ secrets.GH_OWNER }}
+        run: |
+          set -euo pipefail
+          version="$(gh api repos/onek8s/onek8s.github.io/contents/_config.yml -H 'Accept: application/vnd.github.raw' \
+            | sed -n 's/^version: *"\{0,1\}\([0-9][0-9.]*\)"\{0,1\}.*/\1/p')"
+          [ -n "$version" ] || { echo "::error::No version in onek8s.github.io's _config.yml"; exit 1; }
+          tag="v$version"
+          echo "Design version: $tag" >> "$GITHUB_STEP_SUMMARY"
+          for repo in $(gh repo list onek8s --no-archived --limit 100 --json name --jq '.[].name'); do
+            if gh api "repos/onek8s/$repo/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "$repo: $tag exists"
+              continue
+            fi
+            branch="$(gh api "repos/onek8s/$repo" --jq .default_branch)"
+            sha="$(gh api "repos/onek8s/$repo/commits/$branch" --jq .sha)"
+            gh api "repos/onek8s/$repo/git/refs" -f ref="refs/tags/$tag" -f sha="$sha" >/dev/null
+            echo "$repo: $tag -> $sha" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
