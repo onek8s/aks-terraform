@@ -164,15 +164,17 @@ jobs:
           check R8 "stateless: no CSI drivers" "$(jq -r '[.storageProfile.diskCsiDriver.enabled, .storageProfile.fileCsiDriver.enabled] | map(. // false) | any' <<<"$c")" false
           check R12 "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
           # One cell per availability zone, NAP and the VPA add-on (R11); the cell as its tfvars say (R13).
+          # The cell's file, and the file every stateless cell shares (envs/dev-int-stateless.tfvars).
           tfvars="envs/${CLUSTER#aks-}.tfvars"
+          tfvars_common="envs/${CLUSTER#aks-}.tfvars"; tfvars_common="${tfvars_common%-az[0-9].tfvars}.tfvars"
           az_wanted="$(sed -nE 's/^[[:space:]]*availability_zones[[:space:]]*=[[:space:]]*\["([0-9])"\].*/\1/p' "$tfvars" | head -1)"
           check R11 "system pool in one availability zone, the cell's ($tfvars)" "$(jq -r '.agentPoolProfiles[0].availabilityZones | join(",")' <<<"$c")" "$az_wanted"
           check R11 "node auto provisioning" "$(jq -r '.nodeProvisioningProfile.mode' <<<"$c")" Auto
           # The VPA add-on as the tfvars say: on unless vertical_pod_autoscaler_enabled = false (the dev
           # cells' lab cost exception).
-          vpa_wanted="$(sed -nE 's/^vertical_pod_autoscaler_enabled[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$tfvars")"
+          vpa_wanted="$(sed -nE 's/^vertical_pod_autoscaler_enabled[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$tfvars" "$tfvars_common" | head -1)"
           check R11 "VPA add-on (in-place right-sizing) as $tfvars says" "$(jq -r '.workloadAutoScalerProfile.verticalPodAutoscaler.enabled // false' <<<"$c")" "${vpa_wanted:-true}"
-          version_wanted="$(sed -nE 's/^kubernetes_version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars")"
+          version_wanted="$(sed -nE 's/^kubernetes_version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" "$tfvars_common" | head -1)"
           version="$(jq -r .currentKubernetesVersion <<<"$c")"
           case "$version" in "$version_wanted"|"$version_wanted".*) result PASS R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; *) result FAIL R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; esac
           if out="$(az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --admin --file "$RUNNER_TEMP/admin.kubeconfig" 2>&1)"; then

@@ -11,7 +11,7 @@ name: Deploy
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
 #                        internal zones' private DNS, the container registry and its images and the
 #                        external zones' Traffic Manager profiles. Applied first.
-#   dev-int-stateless-az2    the repository root with envs/dev-int-stateless-az2.tfvars: aks-dev-int-stateless-az2,
+#   dev-int-stateless-az2    the repository root with envs/dev-int-stateless.tfvars + envs/dev-int-stateless-az2.tfvars: aks-dev-int-stateless-az2,
 #                        the lab's running cell (internal, int-fi, germanywestcentral, behind labfw).
 #   dev-int-stateless-az3    the same in availability zone 3 without an overlay (design D59, D74): Azure CNI Pod
 #                        Subnet, pods in 100.64.0.0/16, nodes in 10.100.0.0/16, classic zone pools with the
@@ -108,8 +108,10 @@ jobs:
         working-directory: ${{ endsWith(inputs.stack, '-shared') && 'shared' || '.' }}
     env:
       TF_STACK: ${{ inputs.stack }}
-      # The variables file, relative to the stack's directory.
+      # The variables file, relative to the stack's directory - and, for a stateless cell, the file every cell
+      # shares before it (envs/dev-int-stateless.tfvars; a later file wins where both set a variable).
       VAR_FILE: ${{ inputs.stack == 'dev-shared' && 'envs/dev.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
+      VAR_FILE_COMMON: ${{ startsWith(inputs.stack, 'dev-int-stateless-') && 'envs/dev-int-stateless.tfvars' || '' }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -206,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! az storage account show -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" -o none 2>/dev/null; then
-            location="$(sed -nE 's/^location[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$VAR_FILE" | head -n 1)"
+            location="$(sed -nE 's/^location[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' $VAR_FILE_COMMON "$VAR_FILE" | head -n 1)"
             az group create -n "$TF_STATE_RESOURCE_GROUP" -l "$location" -o none
             az storage account create -g "$TF_STATE_RESOURCE_GROUP" -n "$TF_STATE_STORAGE_ACCOUNT" -l "$location" \
               --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false \
@@ -279,7 +281,10 @@ jobs:
           set +e
           destroy=()
           if [ "${{ inputs.action }}" = destroy ]; then destroy=(-destroy); fi
-          terraform plan -var-file="$VAR_FILE" "${destroy[@]}" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
+          var_files=()
+          if [ -n "$VAR_FILE_COMMON" ]; then var_files+=(-var-file="$VAR_FILE_COMMON"); fi
+          var_files+=(-var-file="$VAR_FILE")
+          terraform plan "${var_files[@]}" "${destroy[@]}" -out=tfplan -detailed-exitcode -no-color | tee plan.txt
           code=${PIPESTATUS[0]}
           set -e
           # 0: no changes, 2: changes, anything else: an error.
@@ -315,7 +320,7 @@ jobs:
         run: |
           set -euo pipefail
           cluster=$(terraform output -raw name)
-          resource_group=$(sed -n 's/^resource_group_name *= *"\(.*\)"/\1/p' "$VAR_FILE")
+          resource_group=$(sed -n 's/^resource_group_name *= *"\(.*\)"/\1/p' $VAR_FILE_COMMON "$VAR_FILE" | head -n 1)
           sudo az aks install-cli --only-show-errors >/dev/null
           az aks get-credentials -g "$resource_group" -n "$cluster" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"

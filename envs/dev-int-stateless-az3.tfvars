@@ -1,68 +1,29 @@
-# Internal cell `int-stateless-az3` of the OneK8s dev environment - a stateless cluster in availability zone 3
-# (OneK8s design section 3.1), on a lab budget - see "Non-production cost savings" below - and the lab's
-# POD-SUBNET cell (design D59, D74; rebuilt 2026-10-18): no overlay network. Azure CNI Pod Subnet with dynamic
-# IP allocation: its pods take addresses of their pool's pod subnet in 100.64.0.0/16 (shared/: pod_network =
-# "pod-subnet") and keep them up to the hub's firewall (labfw), which decides every flow that leaves the
-# cluster - by zone (the subnet) and by application (the pod's address, which the egress agent of
-# onek8s/aks-ai-agents maps to its namespace). Nodes and load balancers are in /24 slots of 10.100.0.0/16.
-# Node auto provisioning does not support a pod subnet, so the zone's nodes come from classic node pools with
-# the cluster autoscaler (zone_node_pools). Cilium keeps only the policies inside the cluster. It runs
-# Sweden's zone, int-se, only; az2 runs Finland's. shared/envs/dev.tfvars is applied first.
+# Internal cell `int-stateless-az3` of the OneK8s dev environment (design section 3.1): availability
+# zone 3, Sweden's zone, the lab's POD-SUBNET cell (design D74, D76 - C in 5.2; rebuilt 2026-10-18): no
+# overlay. Azure CNI Pod Subnet with dynamic IP allocation - the pods take addresses of their pool's pod
+# subnet in 100.64.0.0/16 (shared/: pod_network = "pod-subnet") and keep them up to the hub's firewall
+# (labfw), which decides every flow that leaves the cluster by zone (the subnet) and by application (the
+# pod's address, which the egress agent of onek8s/aks-ai-agents maps to its namespace). Node auto
+# provisioning does not support a pod subnet, so the zone's nodes come from classic node pools with the
+# cluster autoscaler. Its sibling az2 is the overlay cell; the two stay for the security discussion (H15).
+# envs/dev-int-stateless.tfvars holds what every cell shares and is applied with this file:
 #
 #   terraform workspace select -or-create dev-int-stateless-az3
-#   terraform apply -var-file=envs/dev-int-stateless-az3.tfvars
+#   terraform apply -var-file=envs/dev-int-stateless.tfvars -var-file=envs/dev-int-stateless-az3.tfvars
 
-name     = "aks-dev-int-stateless-az3"
-location = "germanywestcentral"
-
-# ---------------------------------------------------------------------------------------------------
-# Non-production cost savings
-#
-# Every setting in this block departs from the module's defaults, which are the production settings
-# of the OneK8s design (acc and prd use the defaults). Together they let a lab cell run on ONE small
-# system node instead of two larger ones, at the price of an SLA, of Azure's standard gateway and of
-# pod right-sizing. Do not copy this block to an acceptance or production environment.
-#
-# They depend on each other: the single 8 GiB system node (~5.8 GiB allocatable) holds the platform
-# only with Traefik and without the VPA add-on. Going back to production means all of them together:
-# delete the block (or set each to its production value below) and apply.
-# ---------------------------------------------------------------------------------------------------
-
-# AKS Free tier: no uptime SLA, API server not scaled for load. Production: "Standard" (design D31).
-sku_tier = "Free"
-
-# Gateway API implementation: Traefik Proxy, one small Deployment per Gateway (2 x 25m/64Mi), no
-# control plane (gateways/traefik of this repository, deployed by Flux). Production:
-# "approuting-istio" - App Routing's Gateway API, the Azure standard offering, upgraded by AKS - whose
-# istiod alone requests 1 CPU and 4 GiB that cannot be tuned (https://github.com/Azure/AKS/issues/5939;
-# design D55). Switching re-creates the cell's Gateways (minutes without them).
-gateway_implementation = "traefik"
-
-# No Vertical Pod Autoscaler add-on: its recommender, updater and admission controller request
-# ~2.4 GiB on the system pool. aks-hello's VerticalPodAutoscaler is left out with it
-# (aks-fluxcd-example, stateless/). Production: true - pod right-sizing (design section 2.3).
-vertical_pod_autoscaler_enabled = false
-
-# ACNS without container network observability (Hubble): no hubble-relay, flow logs or Hubble metrics
-# (design D56). FQDN network policies and eBPF host routing stay on - the isolation zones' egress
-# needs them, so they are never a cost saving. Production: advanced_networking = {} (all on, the
-# default); turning Hubble back on is an in-place update.
-advanced_networking = {
-  observability = false
-}
+name                 = "aks-dev-int-stateless-az3"
+virtual_network_name = "vnet-dev-int-stateless-az3"
 
 # The system pool: ONE amd64 node in availability zone 3, Standard_D4alds_v6 (4 vCPU, 8 GiB, VNet
-# encryption) - fits only with the two savings above - on an ephemeral OS disk on the size's local
-# NVMe disk: no managed OS disk, so no Premium SSD (AKS gives a managed OS disk Premium SSD wherever
-# the size supports it; the lab avoids Premium disks where it can).
-# Production: node_count = 2 on the default Standard_D4ds_v5 (16 GiB) - room for istiod and the VPA
-# add-on, and a node to spare during an upgrade (design section 2.3). AKS's cilium-operator runs two
-# replicas on different nodes, so with one system node its second replica brings up one small zone
-# spot node.
-# The other attributes are the design's in every environment: Azure Linux 3.0 (eBPF host routing needs
-# it on every node), encryption at host, SSH off, and the CriticalAddonsOnly taint - only the
-# platform's own controllers run here, every isolation zone's pods on that zone's NAP nodes. A system
-# node pool cannot run on Spot VMs, and a node pool cannot change its architecture or OS in place.
+# encryption) - fits only with the cost savings of the shared file - on an ephemeral OS disk on the size's
+# local NVMe disk: no managed OS disk, so no Premium SSD. Production: node_count = 2 on the default
+# Standard_D4ds_v5 (16 GiB) - room for istiod and the VPA add-on, and a node to spare during an upgrade
+# (design section 2.3). The other attributes are the design's in every environment: Azure Linux 3.0 (eBPF
+# host routing needs it on every node), encryption at host, SSH off, and the CriticalAddonsOnly taint - only
+# the platform's own controllers run here, every isolation zone's pods on that zone's nodes.
+# No overlay: the system pool's pods take addresses of snet-system-pods (100.64.0.0/20), handed to the node
+# in batches of 16 as it needs them (dynamic IP allocation), so a high limit reserves nothing. 250 pods a
+# node, the overlay cells' AKS default and the most AKS allows; it cannot change on a running pool.
 default_node_pool = {
   vm_size             = "Standard_D4alds_v6"
   os_disk_type        = "Ephemeral"
@@ -73,139 +34,48 @@ default_node_pool = {
   encryption_at_host  = true
   ssh_access          = "Disabled"
   node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
-  # No overlay (network_profile below): the system pool's pods take addresses of snet-system-pods (100.64.0.0/20),
-  # handed to the node in batches of 16 as it needs them (dynamic IP allocation), so a high limit reserves nothing.
-  # 250 pods a node, the overlay cells' AKS default and the most AKS allows; it cannot change on a running pool.
-  pod_subnet_name = "snet-system-pods"
-  max_pods        = 250
+  pod_subnet_name     = "snet-system-pods"
+  max_pods            = 250
 }
 
-# ---------------------------------------------------------------------------------------------------
-# End of the non-production cost savings
-# ---------------------------------------------------------------------------------------------------
-# Every cluster starts on 1.36, the platform floor (design R12a). AKS never upgrades a cell on its
-# own: the version pipeline changes it while the cell is drained (section 3.5).
-kubernetes_version = "1.36"
-auto_upgrade = {
-  kubernetes_channel = "none"
-  node_os_channel    = "None"
+# ACNS without container network observability (Hubble): no hubble-relay, flow logs or Hubble metrics
+# (design D56). FQDN network policies and eBPF host routing stay on. Production: advanced_networking = {}
+# (all on, the default); turning Hubble back on is an in-place update.
+advanced_networking = {
+  observability = false
 }
 
-# The dev environment's resource group, created by shared/envs/dev.tfvars. It holds every cluster of
-# the environment and what they share.
-resource_group_name = "rg-aks-dev"
-
-# The cell's own network, created by shared/ (cells): the system pool in snet-system (10.100.0.0/24), each
-# isolation zone's nodes in its own snet-<zone>-nodes and its internal load balancer in snet-<zone>-ilb (the
-# zone's /24 of 10.100.0.0/16), and the pods in snet-system-pods and snet-<zone>-pods (/20s of 100.64.0.0/16),
-# every subnet behind its own NSG, VNet encryption on.
-virtual_network_name = "vnet-dev-int-stateless-az3"
-node_subnet_name     = "snet-system"
-
-# The cell's exposure (OneK8s design, decision D52): internal and external workloads are separate
-# clusters in separate subscriptions; this is an internal cell, so it holds the internal zones only -
-# one per enabled country, each with its own nodes, subnets and Key Vault. sub-aks-dev plays
-# sub-aks-dev-int. This cell runs Sweden's int-se only (Finland's int-fi runs in az2).
-exposure = "int"
-
-isolation_zones = {
-  int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
-}
-
-# Egress through the landing zone's hub firewall (labfw): the cell's subnets send 0.0.0.0/0 there
-# (shared/: hub), so AKS creates no outbound load balancer rule. Cannot change on a running cluster.
-#
-# No overlay (design D59, D74): Azure CNI Pod Subnet with dynamic IP allocation and the Cilium dataplane - the
-# pools name their pod subnets (default_node_pool, isolation_zones). Every pod takes an address of its pool's
-# pod subnet - snet-system-pods, a zone's snet-<zone>-pods, /20s of 100.64.0.0/16 - and keeps it to labfw:
-# the firewall's log names the pod, its rules the zone, and labfw translates every flow that leaves the
-# landing zone (the internet; the corporate network, outside its private ranges). Cannot change on a
-# running cluster.
+# No overlay (design D74): Azure CNI Pod Subnet with dynamic IP allocation and the Cilium dataplane - the
+# pools name their pod subnets (default_node_pool, isolation_zones). Egress through the hub firewall: the
+# cell's subnets send 0.0.0.0/0 there (shared/: hub), so AKS creates no outbound load balancer rule, and
+# labfw translates every flow that leaves the landing zone. Neither can change on a running cluster.
 network_profile = {
   outbound_type       = "userDefinedRouting"
   network_plugin_mode = "none"
 }
 
-# SHARED. The environment's platform Key Vault, created by shared/ and looked up here: the gateways'
-# certificates, the Grafana Cloud credentials - and this cluster's customer-managed keys, created here
-# in it (design section 4.2): key-aks-dev-int-stateless-az3-kms for the secrets in etcd, key-...-disk for
-# every node's OS disk (encryption at host covers the ephemeral one).
-key_vault_name = "kv-onek8s-gwc-platform"
-# KMS data encryption (preview): the vault has no public network access, and AKS reaches it as a trusted
-# service - classic KMS would need API Server VNet Integration, which the encrypted cell network refuses (D58)
-customer_managed_keys = {
-  key_vault_name           = "kv-onek8s-gwc-platform"
-  key_vault_network_access = "Private"
-  kms_data_encryption      = true
-}
-
-# The platform's namespaces with a share of the platform vault: each zone's gateway reads its
-# listener certificate, `<namespace>--wildcard`; flux-system the observability chart's credentials.
-# Every managed namespace below is added on its own.
-key_vault_namespaces = ["flux-system", "int-se-gateway"]
-
-# An application namespace's share is in its zone's vault (design section 2.5).
-key_vault_namespace_vaults = {
-  int-se-example = "kv-onek8s-gwc-int-se"
-}
-
-# SHARED. The public zone onek8s.lol - the external zones' names and the platform gateway's - in
-# rg-onek8s-dns, provisioned outside Terraform. This cluster's external-dns gets an identity of its
-# own, granted on it; an internal cell publishes nothing there. Its zone's names go into shared/'s
-# private zone int-se.dev.onek8s.lol (internal_dns_zones), which external-dns-int keeps.
-dns_zone_name                = "onek8s.lol"
-dns_zone_private             = false
-dns_zone_resource_group_name = "rg-onek8s-dns"
-
-# SHARED. The int-se zone's private DNS, created by shared/ (internal_dns_zones) in rg-aks-dev: this
-# cluster's external-dns-int publishes the zone's routes there.
-internal_dns_zone_names = ["int-se.dev.onek8s.lol"]
-
-# Stateless: no CSI driver - Azure Disk, Azure Files, Azure Blob - and no snapshot controller, so
-# the cluster has no StorageClass and nothing to provision a PersistentVolumeClaim from.
-persistent_storage_enabled = false
-portable_disks_enabled     = false
-
-# SHARED. The environment's container registry, created by shared/. The kubelet pulls the images from
-# it as this cluster's identity, with AcrPull - no image pull secret.
-container_registry_name = "acronek8sdev"
-
-# SHARED. The environment's Log Analytics workspace, created by shared/: this cluster's Kubernetes
-# audit log (kube-audit-admin and guard) - design section 6.2, CIS AKS Benchmark 2.1.1.
-log_analytics_workspace_name = "log-dev-platform"
-
-# AKS Image Integrity (preview): Ratify checks the Notation signature of every image for the Azure
-# Policy add-on, which reports unsigned ones (audit only). Its identity and the signing certificate
-# are shared/'s (image_signing).
-image_integrity_enabled = true
-
-# The private API server (design D58) over Private Link: its private endpoint is in snet-system, reached
-# by the nodes directly and by the management network, the labfw VPN and the GitHub runners (which join
-# that VPN) through the hub. No private DNS zone: the cell resolves through labfw's DNS proxy in the hub,
-# so the public FQDN names the private address.
-private_cluster_public_fqdn_enabled = true
-private_dns_zone_mode               = "none"
-
-# Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
-# the cluster. None yet in the build tenant.
-entra_admin_group_object_ids  = []
-entra_reader_group_object_ids = []
-
-# The Azure Policy add-on (design section 2.7): Gatekeeper evaluates the policies that
-# onek8s/azure-landing-zone assigns to the subscription (stacks/aks-policy).
-azure_policy_enabled = true
-
-# No node auto provisioning: AKS refuses it with a pod subnet (design D74; Azure/karpenter-provider-azure
-# issue 1351). The zone's nodes come from classic node pools instead - intse, intsespot, intsearm,
-# intsearmspot, from zero nodes in availability zone 3 - scaled by the cluster autoscaler, whose priority
-# expander takes the spot pools first (aks-fluxcd-platform, clusters/dev-int-stateless-az3). Sized for the
-# lab's quotas in germanywestcentral: Daldv6 8 vCPUs (the system node takes 4, so two 2-vCPU amd64 nodes),
-# low-priority (spot) 3 vCPUs (one spot node).
+# Sweden's zone: its nodes in snet-int-se-nodes with their pods in snet-int-se-pods, from classic node
+# pools - intse, intsespot, intsearm, intsearmspot, from zero nodes in availability zone 3 - scaled by the
+# cluster autoscaler, whose priority expander takes the spot pools first (aks-fluxcd-platform,
+# clusters/dev-int-stateless-az3); AKS refuses node auto provisioning with a pod subnet
+# (Azure/karpenter-provider-azure issue 1351). Sized for the lab's quotas in germanywestcentral: Daldv6
+# 8 vCPUs (the system node takes 4, so two 2-vCPU amd64 nodes), low-priority (spot) 3 vCPUs (one spot
+# node). Its gateway reads its listener certificate from the platform vault (int-se-gateway--wildcard);
+# flux-system the observability chart's credentials. The application namespace's share is in the zone's
+# vault; the zone's names are in shared/'s private DNS zone.
 node_auto_provisioning_enabled = false
 zone_node_pools = {
   max_count      = 2
   spot_max_count = 1
 }
+isolation_zones = {
+  int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+}
+key_vault_namespaces = ["flux-system", "int-se-gateway"]
+key_vault_namespace_vaults = {
+  int-se-example = "kv-onek8s-gwc-int-se"
+}
+internal_dns_zone_names = ["int-se.dev.onek8s.lol"]
 
 # The `example` team's application, in the int-se zone (design section 2.6: one namespace per
 # application and zone, `<zone>-<app>`). Its own Flux configuration deploys firewall-egress/ of
