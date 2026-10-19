@@ -920,8 +920,10 @@ variable "persistent_storage_enabled" {
   default     = true
   description = <<DESCRIPTION
 Whether the cluster has persistent storage at all. Set to `false` for a stateless cluster: AKS runs
-none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot controller, so the
-cluster has no StorageClass and a PersistentVolumeClaim has nothing to be provisioned from. Pods
+none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot controller, so a
+PersistentVolumeClaim has nothing to be provisioned from. AKS still creates its StorageClasses `default`
+and `managed-csi-premium-v2`; Deploy deletes them after every apply, and the landing zone's
+`no-persistent-storage` policy refuses them back. Pods
 keep `emptyDir` and the other volumes that live and die with them. Cannot be combined with
 `portable_disks_enabled`.
 DESCRIPTION
