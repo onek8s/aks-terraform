@@ -47,8 +47,8 @@ tenant (so Graph works: groups, apps, role assignments); `GH_OWNER` - org secret
 onek8s organization. Use them through `lab-admin.yml`,
 `entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
-Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (178+
-tests) and in `shared/` (24+), `kustomize build` for changed fleet directories; for a policy change in
+Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (151
+runs) and in `shared/` (65), `kustomize build` for changed fleet directories; for a policy change in
 azure-landing-zone, `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and
 `terraform test` there. The fleet and example
 repos' CI does not run on GitHub, so validate them locally.
