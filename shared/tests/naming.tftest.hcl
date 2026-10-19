@@ -55,9 +55,7 @@ variables {
     int-se = { exposure = "int", index = 2 }
   }
   cells = {
-    dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
-    dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-    dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
+    dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_address_space = "100.64.0.0/16" }
   }
   hub = {
     virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
@@ -98,12 +96,12 @@ run "the_default_policy_gives_the_labs_names" {
   }
   assert {
     condition = alltrue([
-      keys(azurerm_virtual_network.cell) == ["dev-int-stateless-az2", "dev-int-stateless-az3"],
-      azurerm_virtual_network.cell["dev-int-stateless-az2"].name == "vnet-dev-int-stateless-az2",
+      keys(azurerm_virtual_network.cell) == ["dev-int-stateless-az3"],
+      azurerm_virtual_network.cell["dev-int-stateless-az3"].name == "vnet-dev-int-stateless-az3",
       azurerm_route_table.cell["dev-int-stateless-az3"].name == "rt-dev-int-stateless-az3",
       azurerm_route_table.zone["dev-int-stateless-az3/int-se"].name == "rt-dev-int-stateless-az3-int-se",
-      azurerm_network_security_group.cell["dev-int-stateless-az2/snet-system"].name == "nsg-dev-int-stateless-az2-system",
-      azurerm_network_security_group.cell["dev-int-stateless-az2/snet-int-fi-nodes"].name == "nsg-dev-int-stateless-az2-int-fi-nodes",
+      azurerm_network_security_group.cell["dev-int-stateless-az3/snet-system"].name == "nsg-dev-int-stateless-az3-system",
+      azurerm_network_security_group.cell["dev-int-stateless-az3/snet-int-fi-nodes"].name == "nsg-dev-int-stateless-az3-int-fi-nodes",
       azurerm_network_security_group.cell["dev-int-stateless-az3/snet-int-se-ilb"].name == "nsg-dev-int-stateless-az3-int-se-ilb",
     ])
     error_message = "The cells' networks keep their names under the default policy."
@@ -153,10 +151,10 @@ run "a_policy_of_its_own_names_everything" {
       azurerm_consumption_budget_subscription.this[0].name == "bud-dev-int",
       azurerm_user_assigned_identity.key_vault["flux-system"].name == "mi-dewc-dev-int-shared-kv-flux-system",
       azurerm_user_assigned_identity.image_verification[0].name == "mi-dewc-dev-int-shared-ratify",
-      azurerm_virtual_network.cell["dev-int-stateless-az2"].name == "vnet-dewc-dev-int-stateless-az2",
-      azurerm_route_table.cell["dev-int-stateless-az2"].name == "udr-dewc-dev-int-stateless-az2",
-      azurerm_route_table.zone["dev-int-stateless-az2/int-fi"].name == "udr-dewc-dev-int-stateless-az2-int-fi",
-      azurerm_network_security_group.cell["dev-int-stateless-az2/snet-system"].name == "nsg-dewc-dev-int-stateless-az2-system",
+      azurerm_virtual_network.cell["dev-int-stateless-az3"].name == "vnet-dewc-dev-int-stateless-az3",
+      azurerm_route_table.cell["dev-int-stateless-az3"].name == "udr-dewc-dev-int-stateless-az3",
+      azurerm_route_table.zone["dev-int-stateless-az3/int-fi"].name == "udr-dewc-dev-int-stateless-az3-int-fi",
+      azurerm_network_security_group.cell["dev-int-stateless-az3/snet-system"].name == "nsg-dewc-dev-int-stateless-az3-system",
       azurerm_private_endpoint.this["kv-platform"].name == "pep-kvx7dewcdev-platform",
     ])
     error_message = "Every name should follow the estate's own templates and region codes."

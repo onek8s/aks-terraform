@@ -49,7 +49,7 @@ variable "virtual_network_address_space" {
 variable "subnets" {
   type        = map(string)
   default     = {}
-  description = "The subnets of the network virtual_network_create creates: name => address prefix. The clusters name theirs in node_subnet_name."
+  description = "The subnets of the network virtual_network_create creates: name => address prefix. The clusters name theirs in node_subnet_name and pod_subnet_name; a name ending in `-pods` is delegated to AKS."
   nullable    = false
 }
 
@@ -399,13 +399,12 @@ DESCRIPTION
 variable "cells" {
   type = map(object({
     address_space     = string
+    pod_address_space = string
     enabled           = optional(bool, true)
-    pod_network       = optional(string, "overlay")
-    pod_address_space = optional(string)
   }))
   default     = {}
   description = <<DESCRIPTION
-The stateless cells' networks, keyed by the cell (`dev-int-stateless-az2`, the cluster's name without
+The stateless cells' networks, keyed by the cell (`dev-int-stateless-az3`, the cluster's name without
 `aks-`): `vnet-<cell>` with `address_space`, a /16 to /20, laid out as cells.tf describes - a /24 slot
 each for `snet-system` (the system pool) and per isolation zone `snet-<zone>-nodes` (the slot's first
 half, a /25) and `snet-<zone>-ilb` (its fifth eighth, a /27).
@@ -414,12 +413,10 @@ half, a /25) and `snet-<zone>-ilb` (its fifth eighth, a /27).
 building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
 cannot be deployed while it is disabled.
 
-`pod_network` is where the cell's cluster gives its pods their addresses: `overlay` (Azure CNI Overlay,
-the default - the pods' range is `cell_pod_cidr`, translated to the node's address when it leaves the
-node) or `pod-subnet` (Azure CNI Pod Subnet with dynamic IP allocation, no overlay, design D74 - every
-pod has an address of its pool's pod subnet, which it keeps up to the hub's firewall: the firewall sees
-which zone, and which pod, a flow comes from). A `pod-subnet` cell names `pod_address_space`, a /16 of
-the shared address space 100.64.0.0/10 (RFC 6598), never routed outside the landing zone - the firewall
+The cell's cluster gives its pods their addresses with Azure CNI Pod Subnet (dynamic IP allocation): every
+pod has an address of its pool's pod subnet, which it keeps up to the hub's firewall, so the firewall sees
+which zone, and which pod, a flow comes from. `pod_address_space` is a /16 of the shared address space
+100.64.0.0/10 (RFC 6598), never routed outside the landing zone - the firewall
 translates every flow that leaves it: `snet-system-pods` and each zone's `snet-<zone>-pods` are the /20
 of their slot's index there. The cell's cluster says the same in its network_profile and node pools.
 DESCRIPTION
@@ -430,25 +427,14 @@ DESCRIPTION
     error_message = "A cell's address_space must be a /16 to /20."
   }
   validation {
-    condition     = alltrue([for cell in values(var.cells) : contains(["overlay", "pod-subnet"], cell.pod_network)])
-    error_message = "A cell's pod_network must be \"overlay\" or \"pod-subnet\"."
-  }
-  validation {
     condition = alltrue([
-      for cell in values(var.cells) : cell.pod_network == "overlay" ? cell.pod_address_space == null : try(
+      for cell in values(var.cells) : try(
         cidrsubnet("${cidrhost(cell.pod_address_space, 0)}/10", 0, 0) == "100.64.0.0/10" && tonumber(split("/", cell.pod_address_space)[1]) == 16,
         false
       )
     ])
-    error_message = "A cell with pod_network = \"pod-subnet\" takes a pod_address_space, a /16 of 100.64.0.0/10 (RFC 6598) such as 100.64.0.0/16; an overlay cell takes none."
+    error_message = "A cell's pod_address_space must be a /16 of 100.64.0.0/10 (RFC 6598), such as 100.64.0.0/16."
   }
-}
-
-variable "cell_pod_cidr" {
-  type        = string
-  default     = "100.201.0.0/16"
-  description = "The clusters' overlay pod range (their network_profile.pod_cidr), which the cells' NSGs let in between nodes."
-  nullable    = false
 }
 
 variable "internal_dns_zones" {

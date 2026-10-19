@@ -97,13 +97,6 @@ locals {
     # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
     # portable_disks_enabled.
     var.portable_disks_enabled ? { portable_disk_resource_group_name = var.resource_group_name } : {},
-    # Where node auto provisioning puts the zone nodes: the subnet of every zone's AKSNodeClass, and
-    # the availability zone of the cell - its system pool's one zone, as Kubernetes spells it
-    # (`swedencentral-1`) - that every zone NodePool requires. See node_auto_provisioning_enabled.
-    var.node_auto_provisioning_enabled ? { nap_subnet_id = data.azurerm_subnet.node.id } : {},
-    var.node_auto_provisioning_enabled && length(coalesce(var.default_node_pool.availability_zones, [])) == 1 ? {
-      nap_availability_zone = "${var.location}-${var.default_node_pool.availability_zones[0]}"
-    } : {},
     # The image signature verifier's identity, the signing certificate in the platform vault and the
     # registry the signatures are in - see image_integrity.tf.
     var.image_integrity_enabled ? {
@@ -210,7 +203,7 @@ locals {
 
   # The environment a cluster belongs to, for the names of the environment's shared resources: the
   # variable, or else from the cluster's name - <what it is>-<environment>-<which one> -
-  # `aks-dev-ext-stateless-az1` is in `dev`.
+  # `aks-dev-int-stateless-az3` is in `dev`.
   environment = coalesce(var.environment, length(local.name_segments) < 2 ? var.name : local.name_segments[1])
 
   # Tags the cluster already carries in Azure, or null while it does not exist yet or carries none.
@@ -237,8 +230,8 @@ locals {
     }
     vm_size        = var.default_node_pool.vm_size
     vnet_subnet_id = data.azurerm_subnet.node.id
-    # A pod-subnet cell (design D74): the system pool's pods in their own subnet
-    pod_subnet_id = one(data.azurerm_subnet.system_pods[*].id)
+    # The system pool's pods in their own subnet (Azure CNI Pod Subnet)
+    pod_subnet_id = data.azurerm_subnet.system_pods.id
 
     os_sku                    = var.default_node_pool.os_sku
     enable_encryption_at_host = var.default_node_pool.encryption_at_host
@@ -251,8 +244,8 @@ locals {
   # The cluster's identity, by the naming policy's `user_assigned_identity` (modules/conventions) -
   # `id-<region code>-<environment>-<function>` by default - worked out from the cluster name and the
   # region rather than stated per environment. Its `{name}` is the cluster's name without the
-  # environment's segment, so `aks-dev-ext-stateless-az1` in swedencentral is run by
-  # `id-sec-dev-aks-stateless-az1`: the environment moves to the front of the function, and everything
+  # environment's segment, so `aks-dev-int-stateless-az3` in germanywestcentral is run by
+  # `id-gwc-dev-aks-int-stateless-az3`: the environment moves to the front of the function, and everything
   # past it distinguishes the cluster from its siblings in the same environment. A name with nothing to
   # split is its own environment and becomes `id-<region code>-<name>`. The policy refuses a region
   # with no code rather than name the identity with a guess.
@@ -453,17 +446,17 @@ locals {
     if properties.defaultNetworkPolicy.egress != "AllowAll" || properties.defaultNetworkPolicy.ingress != "AllowAll"
   ]
 
-  # Node auto provisioning and the zones' classic node pools create nodes outside the system pool's
-  # subnet, so Microsoft documents the whole virtual network as the scope they need. A cluster without
+  # The zones' node pools create nodes outside the system pool's subnet, so Microsoft documents the
+  # whole virtual network as the scope they need. A cluster without
   # zones joins only the system pool's subnet, so it keeps the narrower grant.
-  network_role_assignment_scope = var.node_auto_provisioning_enabled || var.zone_node_pools != null ? "virtual_network" : "subnet"
+  network_role_assignment_scope = var.zone_node_pools != null ? "virtual_network" : "subnet"
 
   # Scopes the cluster identity is granted Network Contributor on. Keyed by role rather than by
   # resource ID, so that renaming a subnet does not churn the state addresses of the assignments.
   network_role_assignment_scopes = merge(
     local.network_role_assignment_scope == "virtual_network"
     ? { virtual_network = data.azurerm_virtual_network.this.id }
-    : { node_subnet = data.azurerm_subnet.node.id },
+    : { node_subnet = data.azurerm_subnet.node.id, pod_subnet = data.azurerm_subnet.system_pods.id },
     # The node subnet's route table - a cell routed through the hub's firewall (`userDefinedRouting`):
     # AKS reads and joins it, and the table is a resource of its own, outside the network's scope.
     startswith(lower(try(data.azurerm_subnet.node.route_table_id, "")), "/subscriptions/") ? { route_table = data.azurerm_subnet.node.route_table_id } : {},
@@ -478,10 +471,7 @@ locals {
   # Cluster-internal ranges that collide with the address space of the cell's network. Two CIDRs
   # overlap when they share a network address at the shorter of their two prefix lengths. IPv6
   # ranges are skipped rather than compared against IPv4 ones.
-  cluster_cidrs = compact([
-    local.pod_overlay ? var.network_profile.pod_cidr : null,
-    var.network_profile.service_cidr,
-  ])
+  cluster_cidrs = [var.network_profile.service_cidr]
   overlapping_cluster_cidrs = [
     for pair in setproduct(
       [for range in data.azurerm_virtual_network.this.address_space : range if !strcontains(range, ":")],

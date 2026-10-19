@@ -448,12 +448,12 @@ run "a_disabled_country_keeps_its_index_and_gets_nothing" {
       int-se = { exposure = "int", index = 2, enabled = false }
     }
     cells = {
-      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", pod_address_space = "100.64.0.0/16" }
     }
   }
 
   assert {
-    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-ilb"])
+    condition     = sort(keys(azurerm_subnet.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-system-pods", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-pods", "dev-int-stateless-az1/snet-int-fi-ilb"])
     error_message = "No subnet for the disabled int-se."
   }
   assert {
@@ -472,7 +472,7 @@ run "a_disabled_country_keeps_its_slot_in_the_other_zones_routes" {
       int-se = { exposure = "int", index = 2, enabled = false }
     }
     cells = {
-      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", pod_address_space = "100.64.0.0/16" }
     }
     hub = {
       virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"
@@ -498,7 +498,7 @@ run "a_cell_behind_the_hub_firewall" {
       int-fi = { exposure = "int", index = 1 }
     }
     cells = {
-      dev-int-stateless-az1 = { address_space = "172.22.0.0/20" }
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", pod_address_space = "100.64.0.0/16" }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
     hub = {
@@ -513,8 +513,8 @@ run "a_cell_behind_the_hub_firewall" {
     error_message = "The cell sends everything else to the hub's firewall."
   }
   assert {
-    condition     = sort(keys(azurerm_subnet_route_table_association.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-int-fi-nodes"])
-    error_message = "Every node subnet - not the load balancer's - takes a route table."
+    condition     = sort(keys(azurerm_subnet_route_table_association.cell)) == sort(["dev-int-stateless-az1/snet-system", "dev-int-stateless-az1/snet-system-pods", "dev-int-stateless-az1/snet-int-fi-nodes", "dev-int-stateless-az1/snet-int-fi-pods"])
+    error_message = "Every node and pod subnet - not the load balancer's - takes a route table."
   }
   assert {
     condition     = length(azurerm_route_table.cell["dev-int-stateless-az1"].route) == 1
@@ -524,7 +524,7 @@ run "a_cell_behind_the_hub_firewall" {
     condition = (
       keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
       !azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].bgp_route_propagation_enabled &&
-      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 14 &&
+      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 1 + 13 + 13 &&
       alltrue([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : r.next_hop_type == "VirtualAppliance" && r.next_hop_in_ip_address == "10.0.1.4"]) &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "default-via-hub-firewall 0.0.0.0/0") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "slot-2-via-hub-firewall 172.22.2.0/24") &&
@@ -543,7 +543,7 @@ run "a_cell_behind_the_hub_firewall" {
     condition = (
       azurerm_network_security_rule.cell_allow["dev-int-stateless-az1/snet-int-fi-nodes/icmp-from-hub-firewall"].source_address_prefix == "10.0.1.4" &&
       azurerm_network_security_rule.cell_allow["dev-int-stateless-az1/snet-system/icmp-from-hub-firewall"].protocol == "Icmp" &&
-      length([for k in keys(azurerm_network_security_rule.cell_allow) : k if endswith(k, "/icmp-from-hub-firewall")]) == 2
+      length([for k in keys(azurerm_network_security_rule.cell_allow) : k if endswith(k, "/icmp-from-hub-firewall")]) == 4
     )
     error_message = "The nodes answer ping from the hub firewall's address, and nothing wider."
   }
@@ -572,13 +572,13 @@ run "an_external_exposure_with_its_zones_plans" {
       ext-se = { exposure = "ext", index = 4 }
     }
     cells = {
-      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20", pod_address_space = "100.64.0.0/16" }
     }
   }
 
   assert {
-    condition     = length(azurerm_network_security_group.cell) == 5
-    error_message = "An external cell has the system pool's subnet and the two external zones' nodes and load balancer subnets."
+    condition     = length(azurerm_network_security_group.cell) == 8
+    error_message = "An external cell has the system pool's subnets and the two external zones' nodes, pods and load balancer subnets."
   }
   assert {
     condition     = output.exposure == "ext"
@@ -596,7 +596,7 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
       ext-fi = { exposure = "ext", index = 3 }
     }
     cells = {
-      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/20", pod_address_space = "100.64.0.0/16" }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
   }
@@ -616,7 +616,7 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
     error_message = "The system pool takes the first /24, each zone the /24 of its index: nodes in the first half, the internal load balancer in a /27 of the second."
   }
   assert {
-    condition     = length(azurerm_network_security_group.cell) == 5 && length(azurerm_network_security_rule.cell_deny) == 5
+    condition     = length(azurerm_network_security_group.cell) == 8 && length(azurerm_network_security_rule.cell_deny) == 8
     error_message = "Every subnet has an NSG of its own that denies what it does not allow."
   }
   assert {
@@ -642,7 +642,7 @@ run "a_cell_has_a_subnet_and_an_nsg_per_zone" {
   }
 }
 
-run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
+run "a_cell_has_pod_subnets_in_a_second_address_space" {
   command = plan
 
   variables {
@@ -652,8 +652,7 @@ run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
       int-se = { exposure = "int", index = 2 }
     }
     cells = {
-      dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
+      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_address_space = "100.64.0.0/16" }
     }
     internal_dns_zones = ["int-fi.test.contoso.com"]
     hub = {
@@ -665,10 +664,9 @@ run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
 
   assert {
     condition = (
-      toset(azurerm_virtual_network.cell["dev-int-stateless-az3"].address_space) == toset(["10.100.0.0/16", "100.64.0.0/16"]) &&
-      toset(azurerm_virtual_network.cell["dev-int-stateless-az2"].address_space) == toset(["172.22.16.0/20"])
+      toset(azurerm_virtual_network.cell["dev-int-stateless-az3"].address_space) == toset(["10.100.0.0/16", "100.64.0.0/16"])
     )
-    error_message = "A pod-subnet cell's network has the pods' address space beside the nodes'."
+    error_message = "A cell's network has the pods' address space beside the nodes'."
   }
   assert {
     condition = (
@@ -678,22 +676,19 @@ run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
       azurerm_subnet.cell["dev-int-stateless-az3/snet-system-pods"].address_prefixes == tolist(["100.64.0.0/20"]) &&
       azurerm_subnet.cell["dev-int-stateless-az3/snet-int-fi-pods"].address_prefixes == tolist(["100.64.16.0/20"]) &&
       azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-pods"].address_prefixes == tolist(["100.64.32.0/20"]) &&
-      azurerm_subnet.cell["dev-int-stateless-az2/snet-int-se-nodes"].address_prefixes == tolist(["172.22.18.0/25"]) &&
-      !contains(keys(azurerm_subnet.cell), "dev-int-stateless-az2/snet-int-se-pods") &&
       one(azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-pods"].delegation).service_delegation[0].name == "Microsoft.ContainerService/managedClusters" &&
       length(azurerm_subnet.cell["dev-int-stateless-az3/snet-int-se-nodes"].delegation) == 0
     )
-    error_message = "Nodes and load balancers keep /24 slots in any address space; a pod-subnet cell's pods take the /20 of the same slot in the pod address space."
+    error_message = "Nodes and load balancers keep /24 slots in any address space; the pods take the /20 of the same slot in the pod address space."
   }
   assert {
     condition = (
       toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-nodes/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/20", "100.64.32.0/20"]) &&
       toset(azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-pods/pods"].source_address_prefixes) == toset(["100.64.0.0/20", "100.64.16.0/20", "100.64.32.0/20"]) &&
       azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-system-pods/https-from-network"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-pods/https"].source_address_prefix == "VirtualNetwork" &&
-      azurerm_network_security_rule.cell_allow["dev-int-stateless-az2/snet-int-se-nodes/pods"].source_address_prefix == "100.201.0.0/16"
+      azurerm_network_security_rule.cell_allow["dev-int-stateless-az3/snet-int-se-pods/https"].source_address_prefix == "VirtualNetwork"
     )
-    error_message = "In a pod-subnet cell the pods are let in from the cell's pod subnets, which take their pool's rules; with an overlay, from the overlay range."
+    error_message = "The pods are let in from the cell's pod subnets, which take their pool's rules."
   }
   assert {
     condition = (
@@ -703,31 +698,18 @@ run "a_pod_subnet_cell_has_pod_subnets_in_a_second_address_space" {
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix}"], "int-fi-pods-via-hub-firewall 100.64.16.0/20") &&
       !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.32.0/20") &&
       !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.0.0/20") &&
-      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 1 + 13 + 13 &&
-      length(azurerm_route_table.zone["dev-int-stateless-az2/int-se"].route) == 1 + 13
+      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 1 + 13 + 13
     )
-    error_message = "A pod subnet takes its pool's route table, and a pod-subnet cell's zone tables route the other zones' pod slots to the firewall too - never the zone's own or the system pool's."
+    error_message = "A pod subnet takes its pool's route table, and the zone tables route the other zones' pod slots to the firewall too - never the zone's own or the system pool's."
   }
 }
 
-run "rejects_a_pod_subnet_cell_outside_the_shared_address_space" {
+run "rejects_a_cell_whose_pods_are_outside_the_shared_address_space" {
   command = plan
 
   variables {
     cells = {
-      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "172.23.0.0/16" }
-    }
-  }
-
-  expect_failures = [var.cells]
-}
-
-run "rejects_a_pod_subnet_cell_without_a_pod_address_space" {
-  command = plan
-
-  variables {
-    cells = {
-      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet" }
+      dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_address_space = "172.23.0.0/16" }
     }
   }
 
@@ -739,7 +721,7 @@ run "rejects_a_cell_that_is_not_a_slash_16_to_20" {
 
   variables {
     cells = {
-      dev-ext-stateless-az1 = { address_space = "172.21.0.0/22" }
+      dev-ext-stateless-az1 = { address_space = "172.21.0.0/22", pod_address_space = "100.64.0.0/16" }
     }
   }
 
@@ -1090,8 +1072,8 @@ run "a_disabled_cell_keeps_its_address_space_but_gets_no_network" {
       int-fi = { exposure = "int", index = 1 }
     }
     cells = {
-      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
-      dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
+      dev-int-stateless-az1 = { address_space = "172.22.0.0/20", pod_address_space = "100.64.0.0/16", enabled = false }
+      dev-int-stateless-az2 = { address_space = "172.22.16.0/20", pod_address_space = "100.64.0.0/16" }
     }
     hub = {
       virtual_network_id = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-germanywestcentral/providers/Microsoft.Network/virtualNetworks/vnet-hub-germanywestcentral"

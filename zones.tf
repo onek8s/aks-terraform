@@ -3,11 +3,8 @@
 
 locals {
   # The network profile as sent: the variable's, with ACNS (design section 5.1) where it is asked for.
-  # Without an overlay (network_plugin_mode "none", Azure CNI node subnet) no mode and no pod range.
-  network_profile = merge(var.network_profile, {
-    network_plugin_mode = local.pod_overlay ? var.network_profile.network_plugin_mode : null
-    pod_cidr            = local.pod_overlay ? var.network_profile.pod_cidr : null
-    }, var.advanced_networking == null ? {} : {
+  # No plugin mode and no pod range: the pods take addresses of their pools' pod subnets.
+  network_profile = merge(var.network_profile, var.advanced_networking == null ? {} : {
     advanced_networking = {
       enabled = true
       observability = {
@@ -28,11 +25,6 @@ locals {
 
   ebpf_host_routing = try(var.advanced_networking.ebpf_host_routing, false)
 
-  # Whether the pods have an overlay range of their own, or VNet addresses - of their pools' pod subnets
-  # (Azure CNI Pod Subnet, design D74) when the system pool names one, of their nodes' subnets otherwise.
-  pod_overlay = var.network_profile.network_plugin_mode == "overlay"
-  pod_subnet  = !local.pod_overlay && var.default_node_pool.pod_subnet_name != null
-
   # Whether the system pool keeps everything but the platform's controllers off it.
   system_pool_critical_addons_only = anytrue([for taint in coalesce(var.default_node_pool.node_taints, []) : startswith(taint, "CriticalAddonsOnly")])
 }
@@ -44,7 +36,7 @@ check "ebpf_host_routing_needs_azure_linux_or_ubuntu_on_every_node" {
   }
 }
 
-# The isolation zones' node subnets, for their AKSNodeClasses or node pools, and their route tables.
+# The isolation zones' node subnets, for their node pools, and their route tables.
 data "azurerm_subnet" "zone" {
   for_each = var.isolation_zones
 
@@ -53,27 +45,24 @@ data "azurerm_subnet" "zone" {
   virtual_network_name = var.virtual_network_name
 }
 
-# A pod-subnet cell's pod subnets: the system pool's and each zone's (design D74).
+# The pod subnets: the system pool's and each zone's.
 data "azurerm_subnet" "system_pods" {
-  count = local.pod_subnet ? 1 : 0
-
-  name                 = var.default_node_pool.pod_subnet_name
+  name                 = var.pod_subnet_name
   resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
 data "azurerm_subnet" "zone_pods" {
-  for_each = local.pod_subnet ? var.isolation_zones : {}
+  for_each = var.isolation_zones
 
   name                 = each.value.pod_subnet_name
   resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
-# The zones' classic node pools (zone_node_pools, design D74): per zone one per capacity type and
-# architecture, from zero nodes, in the zone's node subnet with the pods in its pod subnet - labelled and
-# tainted like the zone's NAP NodePools, so that the platform's placement mutations put a pod on them
-# unchanged. AKS adds its own spot taint and label to a spot pool - the taint is stated here too, or
+# The zones' classic node pools (zone_node_pools): per zone one per capacity type and architecture, from
+# zero nodes, in the zone's node subnet with the pods in its pod subnet - labelled and tainted
+# `platform/zone` and `platform/capacity=spot`, which the platform's placement mutations target. AKS adds its own spot taint and label to a spot pool - the taint is stated here too, or
 # every plan would try to take it off again; the spot toleration mutation tolerates both. The cluster
 # autoscaler's priority expander (the Flux repository's ConfigMap) tries the spot pools first.
 locals {
@@ -104,7 +93,7 @@ locals {
           ssh_access = var.default_node_pool.ssh_access
         }
         vnet_subnet_id = data.azurerm_subnet.zone[zone].id
-        pod_subnet_id  = try(data.azurerm_subnet.zone_pods[zone].id, null)
+        pod_subnet_id  = data.azurerm_subnet.zone_pods[zone].id
         node_labels = merge(
           { "platform/zone" = zone },
           kind.spot ? { "platform/capacity" = "spot" } : {},
@@ -124,7 +113,7 @@ locals {
   ]...)
 
   # The cluster autoscaler of the zones' pools: the priority expander (spot first), and a node removed
-  # five minutes after it is no longer needed, as NAP consolidates the NAP cells' zone nodes.
+  # five minutes after it is no longer needed.
   auto_scaler_profile = var.zone_node_pools == null ? null : {
     expander                   = "priority"
     scale_down_unneeded_time   = "5m"
@@ -134,15 +123,8 @@ locals {
 
 check "isolation_zones_need_nodes" {
   assert {
-    condition     = length(var.isolation_zones) == 0 || var.node_auto_provisioning_enabled || var.zone_node_pools != null
-    error_message = "${var.name} names isolation zones, whose nodes come from node auto provisioning or the zones' node pools: turn on node_auto_provisioning_enabled, or set zone_node_pools."
-  }
-}
-
-check "a_pod_subnet_cell_names_every_pools_pod_subnet" {
-  assert {
-    condition     = !local.pod_subnet || alltrue([for zone in values(var.isolation_zones) : zone.pod_subnet_name != null])
-    error_message = "${var.name} gives its system pool a pod subnet, and AKS takes a pod subnet on every node pool or on none: name each isolation zone's pod_subnet_name."
+    condition     = length(var.isolation_zones) == 0 || var.zone_node_pools != null
+    error_message = "${var.name} names isolation zones, whose nodes come from the zones' node pools: set zone_node_pools."
   }
 }
 
@@ -186,9 +168,6 @@ resource "azurerm_role_assignment" "external_dns_internal" {
 locals {
   # What the Flux repository is told on top of flux_cluster_settings.
   flux_zone_settings = merge(
-    {
-      for zone, subnet in data.azurerm_subnet.zone : "nap_subnet_id_${replace(zone, "-", "_")}" => subnet.id if var.node_auto_provisioning_enabled
-    },
     {
       for namespace, uri in local.key_vault_namespace_uris : "key_vault_url_${replace(namespace, "-", "_")}" => uri
     },

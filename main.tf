@@ -82,8 +82,7 @@ resource "azurerm_user_assigned_identity" "this" {
 }
 
 # Lets the cluster join nodes and load balancers to the network: the whole virtual network for a cell
-# whose zone nodes come from node auto provisioning or the zones' node pools, the system pool's subnet
-# alone for a cluster without zones - and the route tables of a cell routed through the hub's firewall.
+# with zones (their node pools), the system pool's node and pod subnets alone for a cluster without zones - and the route tables of a cell routed through the hub's firewall.
 resource "azurerm_role_assignment" "network_contributor" {
   for_each = local.network_role_assignment_scopes
 
@@ -211,14 +210,6 @@ module "aks" {
     }
   }
   network_profile = local.network_profile
-  # Node auto provisioning (Karpenter) for the zone nodes - see node_auto_provisioning_enabled. AKS's
-  # default NodePools stay off: every NAP node belongs to a zone NodePool of the Flux repository,
-  # and nothing is created for a pod that no NodePool takes - the ones the system pool runs, say.
-  # A cluster without it is left on the `Manual` mode Azure defaults to.
-  node_provisioning_profile = var.node_auto_provisioning_enabled ? {
-    default_node_pools = "None"
-    mode               = "Auto"
-  } : null
   sku = {
     name = "Base"
     tier = var.sku_tier
@@ -396,18 +387,7 @@ resource "azurerm_role_assignment" "portable_disks" {
 check "cluster_cidrs_do_not_overlap_the_network" {
   assert {
     condition     = length(local.overlapping_cluster_cidrs) == 0
-    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${var.virtual_network_name}: ${join(", ", local.overlapping_cluster_cidrs)}. Move network_profile.pod_cidr and network_profile.service_cidr out of the way."
-  }
-}
-
-# The zone NodePools of the Flux repository read the availability zone from the cluster's settings
-# (nap_availability_zone). Without it the variable is substituted as nothing, Azure is handed an
-# empty zone, and every NodePool is refused or never ready - so a cell that cannot say it is worth a
-# word before it is built.
-check "node_auto_provisioning_has_a_zone" {
-  assert {
-    condition     = !var.node_auto_provisioning_enabled || length(coalesce(var.default_node_pool.availability_zones, [])) == 1
-    error_message = "${var.name} runs node auto provisioning, but its system pool is not in exactly one availability zone, so the Flux repository is not told nap_availability_zone for its zone NodePools. A stateless cell is one availability zone: set default_node_pool.availability_zones to one zone."
+    error_message = "The cluster-internal ranges of ${var.name} collide with the address space of ${var.virtual_network_name}: ${join(", ", local.overlapping_cluster_cidrs)}. Move network_profile.service_cidr out of the way."
   }
 }
 

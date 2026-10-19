@@ -25,9 +25,9 @@ on:
       cluster:
         description: "The cluster to report on"
         required: true
-        default: "aks-dev-int-stateless-az2"
+        default: "aks-dev-int-stateless-az3"
         type: choice
-        options: [aks-dev-int-stateless-az2, aks-dev-int-stateless-az3, aks-dev-int-stateless-az1, aks-dev-int-stateful]
+        options: [aks-dev-int-stateless-az3, aks-dev-int-stateful]
       route_path:
         description: "Also request this path (e.g. /weather) on every route, through its gateway's pods"
         required: false
@@ -54,14 +54,14 @@ concurrency:
 
 jobs:
   status:
-    name: status ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
+    name: status ${{ inputs.cluster || 'aks-dev-int-stateless-az3' }}
     runs-on: ubuntu-latest
     environment: dev
     env:
       # The clusters and their shared resources are all in one group; the public zone, created
       # outside Terraform, is in a group of its own.
       RESOURCE_GROUP: rg-aks-dev
-      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az2' }}
+      CLUSTER: ${{ inputs.cluster || 'aks-dev-int-stateless-az3' }}
       DNS_ZONE_RESOURCE_GROUP: rg-onek8s-dns
       DNS_ZONE: onek8s.lol
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -90,7 +90,7 @@ jobs:
             --query '{kubernetesVersion: kubernetesVersion, currentKubernetesVersion: currentKubernetesVersion, provisioningState: provisioningState, powerState: powerState.code, ingressProfile: ingressProfile, autoUpgrade: autoUpgradeProfile}' \
             --output json
 
-      # What the region's vCPU quotas leave for another cell and for NAP's next nodes.
+      # What the region's vCPU quotas leave for another cell and for the cluster autoscaler's next nodes.
       - name: vCPU quota
         run: |
           az vm list-usage -l "$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query location -o tsv)" \
@@ -170,17 +170,15 @@ jobs:
           # Report everything, whatever one command says.
           set +e -x
           kubectl version
-          kubectl get nodes -o wide -L platform/zone,karpenter.sh/capacity-type,kubernetes.azure.com/ebpf-host-routing,platform/accelerator,node.kubernetes.io/instance-type
-          # GPU nodes: what they offer (nvidia.com/gpu, from AKS's managed device plugin) and the
-          # managed GPU stack's health conditions.
-          kubectl get nodes -l platform/accelerator -o jsonpath='{range .items[*]}{.metadata.name}: gpu={.status.allocatable.nvidia\.com/gpu} dcgm={.metadata.labels.kubernetes\.azure\.com/dcgm-exporter} {range .status.conditions[?(@.type=="UnhealthyNvidiaDevicePlugin")]}{.type}={.status} {end}{"\n"}{end}'
+          kubectl get nodes -o wide -L kubernetes.azure.com/agentpool,platform/zone,platform/capacity,kubernetes.azure.com/ebpf-host-routing,node.kubernetes.io/instance-type
           # Who owns each namespace and pays for it (Azure Policy namespace-ownership).
           kubectl get namespaces -o custom-columns='NAME:.metadata.name,TEAM:.metadata.labels.platform/team,COST_CENTER:.metadata.labels.platform/cost-center,ZONE:.metadata.labels.platform/zone,CONTACT:.metadata.annotations.platform/contact'
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
           kubectl get pods -A --field-selector=status.phase=Pending -o wide
           kubectl get pods -A -o wide
-          kubectl get nodepools.karpenter.sh,aksnodeclasses.karpenter.azure.com,nodeclaims.karpenter.sh
-          kubectl get nodeclaims.karpenter.sh -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          # The zone pools' cluster autoscaler: its status and the priority expander's order (fleet autoscaler-priority).
+          kubectl get configmap -n kube-system cluster-autoscaler-status -o jsonpath='{.data.status}'; echo
+          kubectl get configmap -n kube-system cluster-autoscaler-priority-expander -o jsonpath='{.data.priorities}'; echo
           kubectl get events -A --field-selector reason=FailedScheduling --sort-by=.lastTimestamp | tail -n 20
           kubectl get pods -n kube-system -l app=azure-policy -o wide
           kubectl get constrainttemplates
@@ -272,15 +270,17 @@ jobs:
           kubectl logs -n external-dns -l app.kubernetes.io/instance=external-dns-int --tail=40 --prefix
           kubectl get receivers.notification.toolkit.fluxcd.io -A
           kubectl get receivers.notification.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.webhookPath} {.status.conditions}{"\n"}{end}'
-          # The `example` team, in the ext-fi zone: its Flux configuration, what runs and why not.
-          kubectl get fluxconfigs.clusterconfig.azure.com -n int-fi-example int-fi-example -o jsonpath="{.status}"; echo
-          kubectl get all,endpointslices,networkpolicy -n int-fi-example -o wide
-          kubectl describe pods -n int-fi-example | tail -n 60
-          kubectl get events -n int-fi-example --sort-by=.lastTimestamp | tail -n 30
+          # The `example` team, in each zone that runs it: its Flux configuration, what runs and why not.
+          for ns in $(kubectl get ns -o name | sed 's#namespace/##' | grep -E -- "-example$"); do
+            kubectl get fluxconfigs.clusterconfig.azure.com -n "$ns" "$ns" -o jsonpath="{.status}"; echo
+            kubectl get all,endpointslices,networkpolicy -n "$ns" -o wide
+            kubectl describe pods -n "$ns" | tail -n 60
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -n 30
+          done
           kubectl get events -n flux-system --sort-by=.lastTimestamp | tail -n 40
 
-      # Every route as a client sees it, without DNS or the load balancer: through each gateway pod's own address,
-      # which the runner reaches on the VPN where the gateways run on the system pool (snet-system)
+      # Every route as a client sees it, without DNS: through its gateway's internal load balancer (or a gateway
+      # pod's own address), which the runner reaches on the VPN
       - name: Routes answer
         continue-on-error: true
         env:
@@ -299,8 +299,7 @@ jobs:
           [[ -z "$ROUTE_PATH" || "$ROUTE_PATH" =~ ^/[A-Za-z0-9/._-]*$ ]] || { echo "::error::route_path must be a plain path"; exit 1; }
           kubectl get httproutes -A -o json | jq -r '.items[] | .metadata.namespace as $ns | .spec.parentRefs[0] as $p | .spec.hostnames[]? as $h | "\($p.namespace // $ns) \($p.name) \($h)"' |
           while read -r gwns gw host; do
-            # The gateway's internal load balancer, which the VPN reaches in every cell; a gateway pod's own address
-            # only where pods have VNet addresses (no overlay)
+            # The gateway's internal load balancer, which the VPN reaches in every cell; else a gateway pod's own address
             ip=$(kubectl get svc -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
             [ -n "$ip" ] || ip=$(kubectl get pods -n "$gwns" -l "gateway.networking.k8s.io/gateway-name=$gw" -o jsonpath='{.items[0].status.podIP}')
             [ -n "$ip" ] || { echo "$host: no address of gateway $gwns/$gw"; continue; }

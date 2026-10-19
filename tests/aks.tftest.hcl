@@ -96,6 +96,7 @@ variables {
   location             = "swedencentral"
   name                 = "aks-test"
   node_subnet_name     = "snet-aks-nodes"
+  pod_subnet_name      = "snet-system-pods"
   resource_group_name  = "rg-aks-test"
   virtual_network_name = "vnet-aks-test"
 }
@@ -108,8 +109,8 @@ run "default_cluster_is_private_and_scoped_to_its_node_subnet" {
   command = plan
 
   assert {
-    condition     = length(azurerm_role_assignment.network_contributor) == 1
-    error_message = "A cluster with one node subnet should get exactly one Network Contributor assignment."
+    condition     = sort(keys(azurerm_role_assignment.network_contributor)) == tolist(["node_subnet", "pod_subnet"])
+    error_message = "A cluster without zones should get Network Contributor on its node and pod subnets alone."
   }
   assert {
     condition     = azurerm_role_assignment.network_contributor["node_subnet"].scope == data.azurerm_subnet.node.id
@@ -252,7 +253,7 @@ run "base_keeps_the_subnet_scoped_assignments" {
   command = plan
 
   assert {
-    condition     = keys(azurerm_role_assignment.network_contributor) == ["node_subnet"]
+    condition     = sort(keys(azurerm_role_assignment.network_contributor)) == tolist(["node_subnet", "pod_subnet"])
     error_message = "A cluster without zones should keep the least privilege subnet assignment."
   }
 }
@@ -308,7 +309,7 @@ run "the_cluster_ranges_are_the_configured_ones" {
   command = plan
 
   assert {
-    condition     = local.cluster_cidrs == tolist(["100.201.0.0/16", "100.202.0.0/16"])
+    condition     = local.cluster_cidrs == ["100.202.0.0/16"]
     error_message = "The cluster is sent the network profile it asked for."
   }
 }
@@ -318,7 +319,7 @@ run "an_address_space_clear_of_the_cluster_ranges_raises_nothing" {
 
   assert {
     condition     = length(local.overlapping_cluster_cidrs) == 0
-    error_message = "100.201.0.0/16 and 100.202.0.0/16 do not overlap 172.19.0.0/16."
+    error_message = "100.202.0.0/16 does not overlap 172.19.0.0/16."
   }
 }
 
@@ -1813,122 +1814,6 @@ run "portable_disks_need_persistent_storage" {
   expect_failures = [var.portable_disks_enabled]
 }
 
-run "node_auto_provisioning_is_off_by_default" {
-  command = plan
-
-  assert {
-    condition     = var.node_auto_provisioning_enabled == false
-    error_message = "Node auto provisioning should be off unless asked for."
-  }
-}
-
-run "node_auto_provisioning_grants_the_network_and_tells_flux_where_the_nodes_go" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    default_node_pool = {
-      availability_zones = ["2"]
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-  }
-
-  assert {
-    condition     = keys(azurerm_role_assignment.network_contributor) == ["virtual_network"]
-    error_message = "Node auto provisioning should grant Network Contributor on the whole virtual network."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.nap_subnet_id == data.azurerm_subnet.node.id,
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.nap_availability_zone == "swedencentral-2",
-    ])
-    error_message = "The Flux repository should be told the node subnet and the cell's availability zone."
-  }
-}
-
-run "node_auto_provisioning_without_one_availability_zone_warns" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-  }
-
-  expect_failures = [check.node_auto_provisioning_has_a_zone]
-}
-
-run "node_auto_provisioning_refuses_the_cluster_autoscaler" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    default_node_pool = {
-      availability_zones  = ["1"]
-      enable_auto_scaling = true
-      max_count           = 3
-    }
-  }
-
-  expect_failures = [var.node_auto_provisioning_enabled]
-}
-
-run "node_auto_provisioning_needs_cilium_overlay" {
-  command = plan
-
-  variables {
-    advanced_networking            = null
-    node_auto_provisioning_enabled = true
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    network_profile = {
-      network_policy    = "azure"
-      network_dataplane = "azure"
-    }
-  }
-
-  expect_failures = [var.node_auto_provisioning_enabled]
-}
-
-# Design D59: no overlay - Azure CNI node subnet with Cilium, which NAP supports - so the pods keep
-# addresses of their nodes' subnets up to the hub firewall. No mode and no pod range is sent.
-run "node_auto_provisioning_on_the_node_subnet_sends_no_pod_range" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    default_node_pool = {
-      availability_zones = ["3"]
-    }
-    network_profile = {
-      outbound_type       = "userDefinedRouting"
-      network_plugin_mode = "none"
-    }
-  }
-
-  assert {
-    condition     = local.network_profile.network_plugin_mode == null && local.network_profile.pod_cidr == null && local.network_profile.network_dataplane == "cilium"
-    error_message = "Without an overlay the cluster is sent neither a network plugin mode nor a pod range."
-  }
-  assert {
-    condition     = !contains(local.cluster_cidrs, "100.201.0.0/16")
-    error_message = "Without an overlay the default pod range is not one of the cluster's ranges."
-  }
-}
-
-run "refuses_an_unknown_network_plugin_mode" {
-  command = plan
-
-  variables {
-    network_profile = {
-      network_plugin_mode = "dynamic"
-    }
-  }
-
-  expect_failures = [var.network_profile]
-}
-
 run "a_cluster_federates_the_shared_identities_and_grants_nothing" {
   command = plan
 
@@ -1973,7 +1858,7 @@ run "a_cluster_federates_the_shared_identities_and_grants_nothing" {
     error_message = "The cluster should add a credential of its own to each shared identity."
   }
   assert {
-    condition     = keys(azurerm_role_assignment.network_contributor) == ["node_subnet"] && keys(azurerm_role_assignment.managed_namespace) == ["example/namespace_user/33333333-3333-3333-3333-333333333333"]
+    condition     = sort(keys(azurerm_role_assignment.network_contributor)) == tolist(["node_subnet", "pod_subnet"]) && keys(azurerm_role_assignment.managed_namespace) == ["example/namespace_user/33333333-3333-3333-3333-333333333333"]
     error_message = "The cluster's own grants are the network's and the namespace's kubeconfig; every grant on the vaults is shared/'s."
   }
   assert {
@@ -2247,43 +2132,15 @@ run "without_customer_managed_keys_there_are_none" {
   }
 }
 
-run "isolation_zones_tell_flux_their_node_subnets" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
-      ext-se = { node_subnet_name = "snet-ext-se-nodes" }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      for key in ["nap_subnet_id_int_fi", "nap_subnet_id_ext_se"] :
-      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), key)
-    ])
-    error_message = "The Flux repository should be told every zone's node subnet."
-  }
-}
-
 run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
   command = plan
 
   variables {
     network_profile = {
-      outbound_type       = "userDefinedRouting"
-      network_plugin_mode = "none"
+      outbound_type = "userDefinedRouting"
     }
     default_node_pool = {
       availability_zones = ["3"]
-      pod_subnet_name    = "snet-system-pods"
       ssh_access         = "Disabled"
       encryption_at_host = true
     }
@@ -2317,7 +2174,7 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
       local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
       local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
     )
-    error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted like the zone's NodePools, their pods in the zone's pod subnet."
+    error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted for the placement mutations, their pods in the zone's pod subnet."
   }
   assert {
     condition     = local.default_agent_pool.pod_subnet_id != null && local.auto_scaler_profile.expander == "priority"
@@ -2326,51 +2183,24 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
   assert {
     condition = (
       contains(keys(azurerm_role_assignment.network_contributor), "virtual_network") &&
-      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "nap_subnet_id_int_se")
+      !contains(keys(local.network_profile), "network_plugin_mode") && !contains(keys(local.network_profile), "pod_cidr")
     )
-    error_message = "The zone pools' cluster gets the virtual network, and Flux is told no NAP subnet."
+    error_message = "The zone pools' cluster gets the virtual network, and the cluster is sent no plugin mode and no pod range."
   }
-}
-
-run "rejects_node_auto_provisioning_with_zone_pools" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    zone_node_pools                = {}
-  }
-
-  expect_failures = [var.node_auto_provisioning_enabled]
-}
-
-run "rejects_node_auto_provisioning_with_a_pod_subnet" {
-  command = plan
-
-  variables {
-    node_auto_provisioning_enabled = true
-    network_profile = {
-      network_plugin_mode = "none"
-    }
-    default_node_pool = {
-      pod_subnet_name = "snet-system-pods"
-    }
-  }
-
-  expect_failures = [var.node_auto_provisioning_enabled]
 }
 
 run "an_external_cluster_holds_external_zones_and_tells_flux_its_exposure" {
   command = plan
 
   variables {
-    exposure                       = "ext"
-    node_auto_provisioning_enabled = true
+    exposure        = "ext"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
-      ext-se = { node_subnet_name = "snet-ext-se-nodes" }
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
+      ext-se = { node_subnet_name = "snet-ext-se-nodes", pod_subnet_name = "snet-ext-se-pods" }
     }
     managed_namespaces = {
       ext-fi-orders = { labels = { "platform/zone" = "ext-fi" } }
@@ -2390,14 +2220,14 @@ run "an_external_cluster_refuses_an_internal_zone" {
   command = plan
 
   variables {
-    exposure                       = "ext"
-    node_auto_provisioning_enabled = true
+    exposure        = "ext"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
-      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
   }
 
@@ -2439,12 +2269,12 @@ run "an_exposure_is_int_or_ext" {
   expect_failures = [var.exposure]
 }
 
-run "isolation_zones_without_node_auto_provisioning_are_warned_about" {
+run "isolation_zones_without_zone_node_pools_are_warned_about" {
   command = plan
 
   variables {
     isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
   }
 
@@ -2909,14 +2739,14 @@ run "traefik_serves_every_gateway_from_a_flux_configuration_of_its_own" {
   command = plan
 
   variables {
-    exposure                       = "ext"
-    node_auto_provisioning_enabled = true
+    exposure        = "ext"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
-      ext-se = { node_subnet_name = "snet-ext-se-nodes" }
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
+      ext-se = { node_subnet_name = "snet-ext-se-nodes", pod_subnet_name = "snet-ext-se-pods" }
     }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
@@ -2964,13 +2794,13 @@ run "an_internal_zone_gets_an_internal_traefik_load_balancer" {
   command = plan
 
   variables {
-    exposure                       = "int"
-    node_auto_provisioning_enabled = true
+    exposure        = "int"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
@@ -2991,13 +2821,13 @@ run "app_routing_serves_every_gateway_without_traefik" {
   command = plan
 
   variables {
-    exposure                       = "ext"
-    node_auto_provisioning_enabled = true
+    exposure        = "ext"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
     }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
@@ -3118,13 +2948,13 @@ run "a_cell_without_the_webhook_has_a_gateway_per_zone_and_nothing_else" {
   command = plan
 
   variables {
-    exposure                       = "int"
-    node_auto_provisioning_enabled = true
+    exposure        = "int"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes" }
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
@@ -3146,13 +2976,13 @@ run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
   command = plan
 
   variables {
-    exposure                       = "ext"
-    node_auto_provisioning_enabled = true
+    exposure        = "ext"
+    zone_node_pools = {}
     default_node_pool = {
       availability_zones = ["1"]
     }
     isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
     }
     key_vault_name = "kv-onek8s-gwc-platform"
     flux_git_repository = {

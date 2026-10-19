@@ -1,7 +1,7 @@
 # The internal stateful cluster `int-stateful` of the OneK8s dev environment, on a lab budget (see "Non-production
-# cost savings" below), Azure CNI overlay with Cilium. Keeps state: persistent volumes, with the platform's
+# cost savings" below), Azure CNI Pod Subnet with Cilium. Keeps state: persistent volumes, with the platform's
 # `portable-disk` StorageClass whose disks outlive the cluster. Beside the stateless clusters
-# (envs/dev-int-stateless-az<N>.tfvars) on the same shared resources, so that workloads can be moved
+# (envs/dev-int-stateless-az3.tfvars) on the same shared resources, so that workloads can be moved
 # between them. shared/envs/dev.tfvars is applied first. Defined, but not deployed for now.
 #
 #   terraform workspace select -or-create dev-int-stateful
@@ -35,10 +35,10 @@ advanced_networking = {
 # `id-sec-dev-aks-...`); what is shared carries `shared` (`id-sec-dev-shared-kv-...`).
 resource_group_name = "rg-aks-dev"
 
-# The environment's network, created by shared/: every cluster's nodes share the subnet. With Azure
-# CNI overlay only the nodes take addresses from it; the pod range is each cluster's own.
+# The environment's network, created by shared/: the nodes' subnet and the pods' (Azure CNI Pod Subnet).
 virtual_network_name = "vnet-aks-dev"
 node_subnet_name     = "snet-aks-nodes"
+pod_subnet_name      = "snet-aks-pods"
 
 # SHARED. The environment's platform Key Vault, created by shared/ and looked up here, and the
 # int-fi zone's vault for the example team's secrets - each namespace reading only the ones named

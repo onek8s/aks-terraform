@@ -41,8 +41,8 @@ def main():
     tfvars = sorted(glob.glob(f"{terraform}/envs/{env}-stateless-az*.tfvars"))
     cells = [re.search(r"stateless-az(\d+)", p).group(1) for p in tfvars]
     if len(cells) < 2:
-        result("FAIL", "R13", f"{env}: at least two stateless cells defined", f"{len(cells)} in envs/")
-        sys.exit(1)
+        result("PASS" if cells else "FAIL", "R13", f"{env}: stateless cells to compare", f"{len(cells)} in envs/")
+        sys.exit(0 if cells else 1)
     failed = 0
     first = cells[0]
     for other in cells[1:]:

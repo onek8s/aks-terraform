@@ -1,10 +1,9 @@
 # What every stateless cell of the OneK8s dev environment shares - applied before the cell's own file:
 #
-#   terraform apply -var-file=envs/dev-int-stateless.tfvars -var-file=envs/dev-int-stateless-az2.tfvars
+#   terraform apply -var-file=envs/dev-int-stateless.tfvars -var-file=envs/dev-int-stateless-az3.tfvars
 #
 # (Deploy passes both.) A cell's file holds what tells it from its siblings: its name, availability zone and
-# network, its zones and namespaces, its Flux path, and the network mode under study (overlay in az2, pod
-# subnet in az3; design H15). shared/envs/dev.tfvars is applied first: the resource group, the cells'
+# network, its zones and namespaces, its Flux path. shared/envs/dev.tfvars is applied first: the resource group, the cells'
 # networks, the vaults, the registry and the workspace named below are its.
 
 location = "germanywestcentral"

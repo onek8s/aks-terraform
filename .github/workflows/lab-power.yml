@@ -5,27 +5,20 @@ name: Lab power
 # removed and Git is not changed: the clusters keep their state (Azure keeps a stopped cluster's state for up
 # to 12 months), and what the stop changes in the clusters, Flux puts back from Git on the start.
 #
-# A cluster with node autoprovisioning (NAP) cannot be stopped as it is ("You can't stop clusters which use the
-# NAP feature", learn.microsoft.com/azure/aks/start-stop-cluster; its nodes are standalone VMs the stop does not
-# manage), so the stop first takes NAP out of the way, the way the docs disable it - and the start brings it back:
-#
 #   stop, per cluster:  1. every Flux configuration suspended (nothing fights the steps below);
 #                       2. every Deployment and StatefulSet of the zones' namespaces (label platform/zone: the
 #                          applications, the zone's gateway and ESO) scaled to 0 - their replicas kept in an
 #                          annotation - and their pods waited for;
-#                       3. NAP off: every NodePool's cpu limit set to 0 (no new node), NAP's nodes deleted
-#                          (Karpenter removes their VMs) and waited for, then node provisioning mode Manual;
-#                       4. `az aks stop`, waited for (control plane and system pool deallocated).
-#         then:         5. labfw's VM deallocated (`firewall`) - last: the cells' egress, the runners' VPN
+#                       3. `az aks stop`, waited for (control plane and every node pool deallocated).
+#         then:         4. labfw's VM deallocated (`firewall`) - last: the cells' egress, the runners' VPN
 #                          and the private names all go through it. Its public address is static, so the
 #                          VPN configs stay valid.
 #   start:              1. labfw's VM started and running, with a minute for its services (`firewall`);
 #         per cluster:  2. `az aks start`, waited for (AKS recreates the API server's private endpoint in
 #                          snet-system; the public FQDN follows it);
-#                       3. node provisioning mode Auto (NAP back);
-#                       4. what the stop scaled down scaled back (the annotation), every Flux configuration and
-#                          Kustomization resumed - Flux re-applies the NodePools' limits and Git's replicas within a
-#                          minute - and every HelmRelease reconciled by force (a chart's replicas), and NAP adds the
+#                       3. what the stop scaled down scaled back (the annotation), every Flux configuration and
+#                          Kustomization resumed - Flux re-applies Git's replicas within a minute - and every
+#                          HelmRelease reconciled by force (a chart's replicas); the cluster autoscaler adds the
 #                          zones' nodes.
 #
 # A failed cluster step leaves labfw on (a cluster that is not stopped keeps its firewall) and the cluster
@@ -40,14 +33,14 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "stop (Flux paused, apps scaled down, NAP off, clusters stopped, then labfw) or start (labfw, clusters, NAP on, Flux resumed)"
+        description: "stop (Flux paused, apps scaled down, clusters stopped, then labfw) or start (labfw, clusters, Flux resumed)"
         required: true
         type: choice
         options: [stop, start]
       clusters:
         description: "The clusters, space-separated (empty: none)"
         required: false
-        default: "aks-dev-int-stateless-az2 aks-dev-int-stateless-az3"
+        default: "aks-dev-int-stateless-az3"
       firewall:
         description: "Also labfw's VM: deallocated last on stop, started first on start"
         required: false
@@ -105,7 +98,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/kube"
           cat > "$RUNNER_TEMP/lib.sh" <<'LIB'
           # The helpers of every cluster step. Sourced; needs RESOURCE_GROUP.
-          power_state() { az aks show -g "$RESOURCE_GROUP" -n "$1" --query '[powerState.code, provisioningState, nodeProvisioningProfile.mode]' -o tsv | tr '\n' ' '; }
+          power_state() { az aks show -g "$RESOURCE_GROUP" -n "$1" --query '[powerState.code, provisioningState]' -o tsv | tr '\n' ' '; }
           wait_cluster() { # <cluster> <power> : until powerState and provisioningState Succeeded, 20 min
             local cluster=$1 want=$2 power state i
             for i in $(seq 1 80); do
@@ -116,17 +109,6 @@ jobs:
               sleep 15
             done
             echo "::error::$cluster is $power ($state), wanted $want"; return 1
-          }
-          wait_provisioned() { # <cluster> : until provisioningState Succeeded, 20 min
-            local cluster=$1 state i
-            for i in $(seq 1 80); do
-              state="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query provisioningState -o tsv)"
-              echo "$cluster: $state"
-              [ "$state" = "Succeeded" ] && return 0
-              [ "$state" = "Failed" ] && { echo "::error::$cluster: $state"; return 1; }
-              sleep 15
-            done
-            echo "::error::$cluster is still $state"; return 1
           }
           kubeconfig() { # <cluster> : kubectl against it (over the VPN) as the signed-in identity
             export KUBECONFIG="$RUNNER_TEMP/kube/$1"
@@ -144,7 +126,7 @@ jobs:
           }
           flux_suspend_children() { # <cluster> true|false : every Flux Kustomization in the cluster. The extension's agent copies the
             # configuration's suspend to its own Kustomization only; the ones the fleet's `platform` Kustomization creates from Git
-            # (zones, node pools, tenants...) keep reconciling - and would put the NodePools' limits back - unless suspended here.
+            # (zones, tenants...) keep reconciling - and would put the replicas back - unless suspended here.
             # On the start they are set back the same way: a parent's apply does not own the field a patch set.
             local ks
             for ks in $(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq -r --argjson want "$2" '.items[] | select((.spec.suspend // false) != $want) | .metadata.namespace + "/" + .metadata.name'); do
@@ -249,39 +231,6 @@ jobs:
             [ "$left" -eq 0 ] || { echo "::error::$cluster: application pods still running"; exit 1; }
           done
 
-      - name: NAP off
-        if: inputs.action == 'stop' && inputs.clusters != ''
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/lib.sh"
-          for cluster in $CLUSTERS; do
-            kubeconfig "$cluster"
-            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" = "Manual" ]; then
-              echo "$cluster: NAP already off"; continue
-            fi
-            # The way the docs disable NAP: no new nodes (every NodePool's cpu limit 0 - Flux restores the
-            # limits of Git on the start), NAP's nodes deleted (Karpenter's finalizer removes their VMs), then Manual.
-            for pool in $(kubectl get nodepools.karpenter.sh -o jsonpath='{.items[*].metadata.name}'); do
-              kubectl patch nodepools.karpenter.sh "$pool" --type merge -p '{"spec":{"limits":{"cpu":"0"}}}'
-            done
-            nodes="$(kubectl get nodes -l karpenter.sh/nodepool -o jsonpath='{.items[*].metadata.name}')"
-            [ -z "$nodes" ] || kubectl delete nodes $nodes --wait=false
-            node_rg="$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeResourceGroup -o tsv)"
-            for i in $(seq 1 60); do
-              left="$(kubectl get nodes -l karpenter.sh/nodepool -o jsonpath='{.items[*].metadata.name}')"
-              vms="$(az vm list -g "$node_rg" --query '[].name' -o tsv | tr '\n' ' ')"
-              echo "$cluster: NAP nodes: ${left:-none}; standalone VMs: ${vms:-none}"
-              [ -z "$left" ] && [ -z "$vms" ] && break
-              sleep 15
-            done
-            [ -z "$left" ] && [ -z "$vms" ] || { echo "::error::$cluster: NAP nodes or VMs left"; exit 1; }
-            az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Manual --no-wait --only-show-errors -o none
-          done
-          for cluster in $CLUSTERS; do
-            wait_provisioned "$cluster"
-            echo "$cluster: node provisioning $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)"
-          done
-
       - name: Stop the clusters
         if: inputs.action == 'stop' && inputs.clusters != ''
         run: |
@@ -293,7 +242,7 @@ jobs:
           done
           for cluster in $CLUSTERS; do
             wait_cluster "$cluster" Stopped
-            echo "$cluster: Stopped (Flux paused, applications at 0, NAP off)" >> "$GITHUB_STEP_SUMMARY"
+            echo "$cluster: Stopped (Flux paused, applications at 0)" >> "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Deallocate labfw (last)
@@ -314,25 +263,12 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: NAP on and Flux resumed
+      - name: Flux resumed
         if: inputs.action == 'start' && inputs.clusters != ''
         run: |
           set -euo pipefail
           source "$RUNNER_TEMP/lib.sh"
           for cluster in $CLUSTERS; do
-            # A pod-subnet cell (design D74) has no NAP: its zones run classic pools with the cluster autoscaler,
-            # which a stop leaves alone and a start brings back by itself.
-            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query 'length(agentPoolProfiles[?enableAutoScaling])' -o tsv)" != "0" ]; then
-              echo "$cluster: no NAP (classic zone pools with the cluster autoscaler)"; continue
-            fi
-            if [ "$(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)" != "Auto" ]; then
-              # As Terraform created it (main.tf node_provisioning_profile): no default NodePools, the fleet brings its own
-              az aks update -g "$RESOURCE_GROUP" -n "$cluster" --node-provisioning-mode Auto --node-provisioning-default-pools None --no-wait --only-show-errors -o none
-            fi
-          done
-          for cluster in $CLUSTERS; do
-            wait_provisioned "$cluster"
-            echo "$cluster: node provisioning $(az aks show -g "$RESOURCE_GROUP" -n "$cluster" --query nodeProvisioningProfile.mode -o tsv)"
             for config in $(flux_configurations "$cluster"); do
               flux_suspend "$cluster" "$config" false
               echo "$cluster: Flux configuration $config resumed"
@@ -356,15 +292,14 @@ jobs:
               kubectl -n "${hr%%/*}" annotate helmreleases.helm.toolkit.fluxcd.io "${hr##*/}" "reconcile.fluxcd.io/requestedAt=$now" "reconcile.fluxcd.io/forceAt=$now" --overwrite -o name
             done
           done
-          # What came back: Flux's first reconcile puts the limits and replicas of Git back; NAP's nodes follow.
+          # What came back: Flux's first reconcile puts the replicas of Git back; the cluster autoscaler's nodes follow.
           sleep 120
           for cluster in $CLUSTERS; do
             kubeconfig "$cluster"
             echo "== $cluster: $(power_state "$cluster")"
-            kubectl get nodepools.karpenter.sh -o custom-columns='NAME:.metadata.name,CPU_LIMIT:.spec.limits.cpu' || true
             for ns in $(kubectl get namespaces -l platform/zone -o jsonpath='{.items[*].metadata.name}'); do
               kubectl -n "$ns" get deployments,statefulsets 2>/dev/null || true
             done
             kubectl get nodes -o wide
-            echo "$cluster: Running (NAP on, Flux resumed - the applications and the zones' nodes follow within minutes)" >> "$GITHUB_STEP_SUMMARY"
+            echo "$cluster: Running (Flux resumed - the applications and the zones' nodes follow within minutes)" >> "$GITHUB_STEP_SUMMARY"
           done
