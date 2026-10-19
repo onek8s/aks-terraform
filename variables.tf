@@ -66,6 +66,17 @@ variable "node_subnet_name" {
   }
 }
 
+variable "pod_subnet_name" {
+  type        = string
+  description = "Name of the subnet of `virtual_network_name` the system pool's pods take their addresses from (Azure CNI Pod Subnet with dynamic IP allocation) - the cell's `snet-system-pods`, created by shared/. Cannot change on a running pool."
+  nullable    = false
+
+  validation {
+    condition     = length(trimspace(var.pod_subnet_name)) > 0
+    error_message = "pod_subnet_name must not be empty."
+  }
+}
+
 variable "resource_group_name" {
   type        = string
   description = "Name of the existing resource group the cluster is deployed into."
@@ -229,7 +240,6 @@ variable "default_node_pool" {
     os_disk_size_gb     = optional(number)
     os_disk_type        = optional(string)
     availability_zones  = optional(list(string))
-    pod_subnet_name     = optional(string)
 
     max_surge                  = optional(string, "10%")
     drain_timeout_minutes      = optional(number)
@@ -246,10 +256,8 @@ The system node pool. The defaults are the production setting (design section 2.
 nodes on Azure Linux 3.0; the dev lab's one 8 GiB node is a cost saving (README, "Production defaults and
 non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed` (null: AKS chooses),
 `encryption_at_host`, `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `node_taints`
-(`CriticalAddonsOnly=true:NoSchedule` keeps every pod but the platform's off it), `pod_subnet_name` for a
-pod-subnet cell (design D74, with `network_profile.network_plugin_mode = "none"`; every pool of such a
-cluster names one), `max_pods`, and the upgrade roll: `max_surge`, `drain_timeout_minutes`,
-`node_soak_duration_minutes` (README, "Node pool upgrades"). The size, OS, disk type and pod subnet
+(`CriticalAddonsOnly=true:NoSchedule` keeps every pod but the platform's off it), `max_pods`, and the upgrade roll: `max_surge`, `drain_timeout_minutes`,
+`node_soak_duration_minutes` (README, "Node pool upgrades"). The size, OS and disk type
 cannot change on a running pool.
 DESCRIPTION
   nullable    = false
@@ -838,22 +846,19 @@ DESCRIPTION
 
 variable "network_profile" {
   type = object({
-    network_plugin      = optional(string, "azure")
-    network_plugin_mode = optional(string, "overlay")
-    network_policy      = optional(string, "cilium")
-    network_dataplane   = optional(string, "cilium")
-    load_balancer_sku   = optional(string)
-    outbound_type       = optional(string, "loadBalancer")
-    pod_cidr            = optional(string, "100.201.0.0/16")
-    service_cidr        = optional(string, "100.202.0.0/16")
-    dns_service_ip      = optional(string, "100.202.0.10")
+    network_plugin    = optional(string, "azure")
+    network_policy    = optional(string, "cilium")
+    network_dataplane = optional(string, "cilium")
+    load_balancer_sku = optional(string)
+    outbound_type     = optional(string, "loadBalancer")
+    service_cidr      = optional(string, "100.202.0.0/16")
+    dns_service_ip    = optional(string, "100.202.0.10")
   })
   default     = {}
   description = <<DESCRIPTION
-Cluster network configuration. `service_cidr`, `pod_cidr` and `dns_service_ip` are cluster-internal ranges
-and must not overlap the cell's address space. `network_plugin_mode = "none"` turns the overlay off and
-`pod_cidr` is not used: every pod takes a VNet address of its pool's pod subnet (Azure CNI Pod Subnet,
-design D74: `default_node_pool.pod_subnet_name` and the zones' `pod_subnet_name`).
+Cluster network configuration. Every pod takes a VNet address of its pool's pod subnet (Azure CNI Pod
+Subnet with dynamic IP allocation: `pod_subnet_name` and the zones' `pod_subnet_name`). `service_cidr` and
+`dns_service_ip` are cluster-internal and must not overlap the cell's address space.
 `outbound_type = "userDefinedRouting"` when the cell's subnets route egress through the hub firewall - no
 public load balancer is then created.
 DESCRIPTION
@@ -862,10 +867,6 @@ DESCRIPTION
   validation {
     condition     = contains(["azure", "kubenet", "none"], var.network_profile.network_plugin)
     error_message = "network_profile.network_plugin must be one of \"azure\", \"kubenet\" or \"none\"."
-  }
-  validation {
-    condition     = contains(["overlay", "none"], var.network_profile.network_plugin_mode)
-    error_message = "network_profile.network_plugin_mode must be \"overlay\" (Azure CNI Overlay) or \"none\" (Azure CNI node subnet: pods take addresses of their nodes' subnets)."
   }
   validation {
     condition     = contains(["azure", "calico", "cilium", "none"], var.network_profile.network_policy)
@@ -888,8 +889,8 @@ DESCRIPTION
     error_message = "network_profile.load_balancer_sku must be either \"basic\" or \"standard\"."
   }
   validation {
-    condition     = alltrue([for cidr in [var.network_profile.pod_cidr, var.network_profile.service_cidr] : can(cidrhost(cidr, 0))])
-    error_message = "network_profile.pod_cidr and network_profile.service_cidr must be CIDR ranges, for example \"100.202.0.0/16\"."
+    condition     = can(cidrhost(var.network_profile.service_cidr, 0))
+    error_message = "network_profile.service_cidr must be a CIDR range, for example \"100.202.0.0/16\"."
   }
   validation {
     condition     = can(cidrhost("${var.network_profile.dns_service_ip}/32", 0))
@@ -901,41 +902,6 @@ DESCRIPTION
       false
     )
     error_message = "network_profile.dns_service_ip must fall inside network_profile.service_cidr."
-  }
-  validation {
-    condition     = try(cidrhost(var.network_profile.pod_cidr, 0) != cidrhost(var.network_profile.service_cidr, 0), false)
-    error_message = "network_profile.pod_cidr and network_profile.service_cidr must not be the same range."
-  }
-}
-
-variable "node_auto_provisioning_enabled" {
-  type        = bool
-  default     = false
-  description = <<DESCRIPTION
-Node auto provisioning (NAP, the AKS-managed Karpenter) for the isolation zones' nodes (design section
-2.3): the Flux repository's NodePools per zone - on-demand and spot, amd64 and arm64 - create the nodes,
-AKS's own default NodePools are off. Needs Azure CNI Overlay powered by Cilium and no cluster autoscaler
-on any pool; refused with a pod subnet (use `zone_node_pools`). The cluster identity is granted the whole
-virtual network, and the Flux repository is told `nap_subnet_id`, `nap_subnet_id_<zone>` and
-`nap_availability_zone`. See the README, "Node auto provisioning".
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = !var.node_auto_provisioning_enabled || !var.default_node_pool.enable_auto_scaling
-    error_message = "node_auto_provisioning_enabled cannot be combined with default_node_pool.enable_auto_scaling: AKS refuses node auto provisioning on a cluster that runs the cluster autoscaler on any node pool."
-  }
-  validation {
-    condition     = !var.node_auto_provisioning_enabled || var.zone_node_pools == null
-    error_message = "node_auto_provisioning_enabled cannot be combined with zone_node_pools: the zones' nodes come from NAP or from classic node pools with the cluster autoscaler, which AKS refuses beside NAP."
-  }
-  validation {
-    condition     = !var.node_auto_provisioning_enabled || var.default_node_pool.pod_subnet_name == null
-    error_message = "node_auto_provisioning_enabled cannot be combined with a pod subnet (default_node_pool.pod_subnet_name): NAP does not support Azure CNI Pod Subnet (design D74) - use zone_node_pools."
-  }
-  validation {
-    condition     = !var.node_auto_provisioning_enabled || (var.network_profile.network_plugin == "azure" && contains(["overlay", "none"], var.network_profile.network_plugin_mode) && var.network_profile.network_dataplane == "cilium")
-    error_message = "node_auto_provisioning_enabled needs Azure CNI Overlay or node subnet powered by Cilium: network_profile.network_plugin = \"azure\", network_plugin_mode = \"overlay\" or \"none\" and network_dataplane = \"cilium\" (NAP does not support a pod subnet with dynamic IP allocation)."
   }
 }
 
@@ -1063,8 +1029,8 @@ variable "advanced_networking" {
   description = <<DESCRIPTION
 Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium - OneK8s design
 section 16. Defaults to all three on, the production setting; null turns ACNS off - a cluster without
-the Cilium dataplane, or a cell whose egress the hub firewall decides (design D61: overlay + the hub
-Firewall only; the zones' Cilium policies then stay at layer 4). Decided when the cluster is created.
+the Cilium dataplane, or a cell whose egress the hub firewall alone decides (the zones' Cilium policies then
+stay at layer 4). Decided when the cluster is created.
 `observability = false` is a non-production cost saving (D56): FQDN policies keep working.
 
 - `observability` - Hubble flow logs and metrics.
@@ -1095,7 +1061,7 @@ variable "customer_managed_keys" {
 Encryption at rest with customer-managed keys - OneK8s design section 18. Two keys of the cluster's
 own are created in the vault: `key-<cluster>-kms`, with which the control plane encrypts the
 Kubernetes secrets in etcd (KMS), and `key-<cluster>-disk`, the key of a disk encryption set for the
-OS disks of every node - the system pool and the NAP nodes. Null leaves both to platform-managed keys.
+OS disks of every node - the system pool and the zones' pools. Null leaves both to platform-managed keys.
 
 The vault - the environment's platform vault, with purge protection, which a disk encryption set
 needs - is reached `Public`ly or `Private`ly. Classic KMS reaches a private vault only with API Server
@@ -1146,16 +1112,14 @@ DESCRIPTION
 variable "isolation_zones" {
   type = map(object({
     node_subnet_name = string
-    pod_subnet_name  = optional(string)
+    pod_subnet_name  = string
   }))
   default     = {}
   description = <<DESCRIPTION
 The isolation zones of a stateless cell - OneK8s design section 2.3 - keyed by zone (`ext-fi`): the
-subnet of virtual_network_name each zone's nodes are put in. With node auto provisioning the Flux
-repository is told its ID as `nap_subnet_id_<zone>` (hyphens as underscores) for the zone's
-AKSNodeClass; with zone_node_pools the zone's classic node pools join it, and their pods take
-addresses of `pod_subnet_name` (a pod-subnet cell, design D74: shared/'s `snet-<zone>-pods`). Either
-way the cluster is granted the whole virtual network. All of one exposure (`exposure`).
+subnet of virtual_network_name each zone's node pools (zone_node_pools) join, and the one their pods take
+addresses of (shared/'s `snet-<zone>-nodes` and `snet-<zone>-pods`). The cluster is granted the whole
+virtual network. All of one exposure (`exposure`).
 DESCRIPTION
   nullable    = false
 }
@@ -1172,12 +1136,12 @@ variable "zone_node_pools" {
   })
   default     = null
   description = <<DESCRIPTION
-Classic node pools for the isolation zones, scaled by the cluster autoscaler - the nodes of a pod-subnet
-cell (design D74), where node auto provisioning is refused: per zone `<zone>`, `<zone>spot`, `<zone>arm`
+Classic node pools for the isolation zones, scaled by the cluster autoscaler (node auto provisioning does
+not support a pod subnet): per zone `<zone>`, `<zone>spot`, `<zone>arm`
 and `<zone>armspot` (the zone without its hyphen), each from 0 to `max_count` (`spot_max_count` for spot)
-nodes in the system pool's availability zone, labelled and tainted like the zone's NodePools under NAP.
-The priority expander (the Flux repository's ConfigMap) takes the spot pools first. Null for a NAP cell or
-a cluster without zones. See the README, "Pod-subnet cells: classic zone pools".
+nodes in the system pool's availability zone, labelled `platform/zone` (and `platform/capacity=spot`) and
+tainted alike. The priority expander (the Flux repository's ConfigMap) takes the spot pools first. Null for
+a cluster without zones. See the README, "Zone node pools".
 DESCRIPTION
 
   validation {

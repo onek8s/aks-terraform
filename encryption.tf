@@ -5,7 +5,7 @@
 #   key-<cluster>-kms   KMS: the control plane encrypts the Kubernetes secrets in etcd with it, as the
 #                       cluster identity (Key Vault Crypto User on the key).
 #   key-<cluster>-disk  The disk encryption set of every node's OS disk - the system pool's and the
-#                       NAP nodes' - as the set's own identity (Key Vault Crypto Service Encryption
+#                       zones' pools' - as the set's own identity (Key Vault Crypto Service Encryption
 #                       User on the key). AKS takes one set per cluster, not one per node pool.
 #
 # The keys never expire; the rotation policy makes a new version every year, which the disk

@@ -1,13 +1,13 @@
 # The stateless cells' networks - OneK8s design pictures 2.1 and 3.1, section 5. Every cell (a stateless
 # cluster in one availability zone) has a virtual network of its own, `vnet-<cell>`, and in it one
-# address range per isolation zone: the zone's own node subnet, where node auto provisioning puts the
-# zone's nodes, and the subnet of the zone's internal load balancer. The system node pool has a subnet
+# address range per isolation zone: the zone's own node subnet, where the zone's node pools put its
+# nodes, its pod subnet, and the subnet of the zone's internal load balancer. The system node pool has a subnet
 # of its own beside them. Azure Virtual Network encryption encrypts the traffic between the nodes
 # (section 4.1).
 #
 # Every subnet has its own network security group, which denies every inbound flow the design does
 # not list (section 2.4): the kubelet from the system pool, Cilium's health checks and ICMP between the
-# nodes, the pods of the cluster's overlay, the load balancers' health probes, and HTTPS from the
+# nodes, the cell's pods, the load balancers' health probes, and HTTPS from the
 # internet (external zones and the platform gateway, through their public load balancers) or from
 # the virtual network (internal zones). Pod-to-pod traffic between zones is the third layer's to
 # stop: Cilium, in the platform repository. With `hub` (the build tenant's network mode `labfw`, or
@@ -21,9 +21,8 @@
 #
 # Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the system
 # pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first half) and its
-# internal load balancer (the fifth eighth, a /27). A cell with `pod_network = "pod-subnet"` (design D74)
-# has no overlay: its pods take addresses of a pod subnet of their own, laid out the same way in a second
-# address space of the VNet, `pod_address_space` - a /16 of 100.64.0.0/10 with a /20 per slot:
+# internal load balancer (the fifth eighth, a /27). The pods (Azure CNI Pod Subnet) take addresses of a pod
+# subnet of their pool's own, laid out the same way in a second address space of the VNet, `pod_address_space` - a /16 of 100.64.0.0/10 with a /20 per slot:
 # `snet-system-pods` in slot 0, `snet-<zone>-pods` in the zone's. Slot 15 is reserved.
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
@@ -31,13 +30,13 @@ locals {
   # The enabled cells: a disabled cell keeps its address space but gets no network.
   cells = { for cell, c in var.cells : cell => c if c.enabled }
 
-  # A cell's slot: the /24 with that index in its address space - and in a pod-subnet cell the /20 with
+  # A cell's slot: the /24 with that index in its address space - and the /20 with
   # the same index in its pod address space.
   cell_slots = {
     for cell, settings in local.cells : cell => [for index in range(16) : cidrsubnet(settings.address_space, 24 - tonumber(split("/", settings.address_space)[1]), index)]
   }
   cell_pod_slots = {
-    for cell, settings in local.cells : cell => [for index in range(16) : cidrsubnet(settings.pod_address_space, 4, index)] if settings.pod_network == "pod-subnet"
+    for cell, settings in local.cells : cell => [for index in range(16) : cidrsubnet(settings.pod_address_space, 4, index)]
   }
 
   cell_subnets = merge([
@@ -51,7 +50,7 @@ locals {
           prefix = local.cell_slots[cell][0]
         }
       },
-      settings.pod_network != "pod-subnet" ? {} : {
+      {
         "${cell}/snet-system-pods" = {
           cell   = cell
           name   = "snet-system-pods"
@@ -78,7 +77,7 @@ locals {
           }
         }
       ]...),
-      settings.pod_network != "pod-subnet" ? {} : {
+      {
         for zone, z in local.isolation_zones : "${cell}/snet-${zone}-pods" => {
           cell   = cell
           name   = "snet-${zone}-pods"
@@ -90,12 +89,12 @@ locals {
     )
   ]...)
 
-  # The subnets that hold nodes or pods - the system pool's and each zone's, and in a pod-subnet cell their
+  # The subnets that hold nodes or pods - the system pool's and each zone's, and their
   # pod subnets, which take the rules of their pool's node subnet - and the system pool's ones.
   cell_host_kinds   = ["system", "nodes", "system-pods", "pods"]
   cell_system_kinds = ["system", "system-pods"]
 
-  # Every pod subnet of a pod-subnet cell, for the rule that lets the pods in.
+  # Every pod subnet of a cell, for the rule that lets the pods in.
   cell_pod_prefixes = {
     for cell in keys(local.cells) : cell => [
       for key, subnet in local.cell_subnets : subnet.prefix if subnet.cell == cell && contains(["system-pods", "pods"], subnet.kind)
@@ -121,11 +120,9 @@ locals {
         # CoreDNS, which runs on the system pool, for what queries it from a node's own address - the
         # ACNS DNS proxy forwarding a pod's query.
         "${key}/dns" = { subnet = key, priority = 125, protocol = "*", ports = ["53"], sources = local.cell_node_prefixes[subnet.cell] }
-        # Azure CNI Overlay keeps the pod addresses between nodes; which pod may reach which is
-        # Cilium's to decide. In a pod-subnet cell (`pod_network = "pod-subnet"`, design D74) the pods
-        # have addresses of the cell's pod subnets, so those are let in - between zones the hub
+        # The pods have addresses of the cell's pod subnets, so those are let in - between zones the hub
         # firewall sees them as well (D73), and Cilium decides inside a zone.
-        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = local.cells[subnet.cell].pod_network == "pod-subnet" ? local.cell_pod_prefixes[subnet.cell] : [var.cell_pod_cidr] }
+        "${key}/pods"        = { subnet = key, priority = 130, protocol = "*", ports = ["*"], sources = local.cell_pod_prefixes[subnet.cell] }
         "${key}/lb-probes"   = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
         "${key}/same-subnet" = { subnet = key, priority = 150, protocol = "*", ports = ["*"], sources = [subnet.prefix] }
       } if contains(local.cell_host_kinds, subnet.kind)
@@ -173,8 +170,8 @@ resource "azurerm_virtual_network" "cell" {
   name                = local.names["virtual_network/${each.key}"]
   location            = var.location
   resource_group_name = local.resource_group_name
-  # A pod-subnet cell's pod address space beside the nodes'
-  address_space = compact([each.value.address_space, each.value.pod_address_space])
+  # The pods' address space beside the nodes'
+  address_space = [each.value.address_space, each.value.pod_address_space]
   # The hub firewall's DNS proxy with `hub`; Azure DNS otherwise
   dns_servers = var.hub == null ? [] : var.hub.dns_servers
 
@@ -301,11 +298,9 @@ resource "azurerm_route_table" "cell" {
 # another leaves for the firewall, which denies and logs it (nothing is allowed between zones, design
 # R5 and section 2.4); a flow the firewall did allow would come back through the hub's peering. Not
 # the zone's own slot: Azure applies a route to the traffic within a subnet too, and the nodes of one
-# zone talk to each other directly. Not the system pool's slot either, for the flows above. And not
-# the pods of an overlay cell, whose addresses Azure routes between the nodes in a routing domain of
-# their own that no route table reaches - between zones those are Cilium's alone. A pod-subnet cell
-# (`pod_network = "pod-subnet"`, design D74) routes the other zones' pod slots the same way, and its pod
-# subnets take their pool's table, so there the firewall sees the pods too. Each route is named after
+# zone talk to each other directly. Not the system pool's slot either, for the flows above. The other
+# zones' pod slots are routed the same way, and the pod subnets take their pool's table, so the firewall
+# sees the pods too. Each route is named after
 # the zone that holds the slot (enabled or not), or `slot-<n>` while it is free; a pod slot's adds `-pods`.
 locals {
   cell_zone_route_tables = var.hub == null ? {} : merge([
@@ -322,7 +317,7 @@ locals {
           {
             for index in range(1, 15) :
             "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-pods-via-hub-firewall" => local.cell_pod_slots[cell][index]
-            if index != z.index && settings.pod_network == "pod-subnet"
+            if index != z.index
           },
         )
       }
@@ -386,7 +381,7 @@ resource "azurerm_virtual_network_peering" "hub_to_cell" {
   remote_virtual_network_id    = azurerm_virtual_network.cell[each.key].id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = true
-  # A cell's address space can change in place (a pod-subnet cell adds its pods' space): the hub's side then
+  # A cell's address space can change in place: the hub's side then
   # stays `RemoteNotInSync` and routes nothing to the new range until it is synced, which a changed trigger does.
   triggers = {
     remote_address_space = join(",", azurerm_virtual_network.cell[each.key].address_space)

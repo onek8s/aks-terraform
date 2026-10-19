@@ -1,7 +1,7 @@
 # The dev environment's shared resources of the internal exposure (OneK8s design decision D52:
 # internal and external workloads have a subscription and clusters each): what its clusters -
-# aks-dev-int-stateful (envs/dev-int-stateful.tfvars) and aks-dev-int-stateless-az1
-# (envs/dev-int-stateless-az1.tfvars) - all use, in a state of its own. Applied first - the clusters
+# aks-dev-int-stateless-az3 (envs/dev-int-stateless-az3.tfvars) and aks-dev-int-stateful
+# (envs/dev-int-stateful.tfvars) - all use, in a state of its own. Applied first - the clusters
 # look all of this up by name.
 #
 #   cd shared
@@ -24,13 +24,14 @@ location    = "germanywestcentral"
 # names a resource itself still wins.
 resource_group_create = true
 
-# The stateful cluster's network (envs/dev-int-stateful.tfvars, defined but not deployed). Azure CNI
-# overlay: only the nodes take addresses from the subnet.
+# The stateful cluster's network (envs/dev-int-stateful.tfvars, defined but not deployed): its nodes'
+# subnet and its pods' (Azure CNI Pod Subnet, delegated to AKS).
 virtual_network_name          = "vnet-aks-dev"
 virtual_network_create        = true
 virtual_network_address_space = ["172.20.0.0/22"]
 subnets = {
   snet-aks-nodes = "172.20.0.0/23"
+  snet-aks-pods  = "172.20.3.0/24"
 }
 
 # The environment's services on private endpoints in that network (snet-shared-pe, design section 3.1):
@@ -51,35 +52,28 @@ private_endpoints = {
 # The isolation zones (OneK8s design, "Isolation zone") of the internal exposure: the internal
 # workloads of Finland and Sweden. The external ones (ext-fi index 3, ext-se index 4) belong to the
 # external subscription and its clusters; their indexes stay reserved. Each has its own address
-# range in every cell, its own node subnet and NAP NodePools, its own Key Vault, gateway and External
-# Secrets Operator. `index` is the zone's /24 in each cell's address space and never changes.
+# range in every cell, its own node and pod subnets and node pools, its own Key Vault, gateway and External
+# Secrets Operator. `index` is the zone's slot in each cell's address spaces and never changes.
 #
-# Sweden is enabled again since 2026-10-15 for the firewall-egress cell az3 (design D59), the only cell
-# that runs it: every cell gets its subnets, but only az3's tfvars and the fleet's zones.yaml name it.
-# `enabled = false` would take its subnets, vault, namespaces and private DNS away again.
+# The lab's one cell, az3, runs Sweden only: every cell gets both zones' subnets, but only az3's tfvars and
+# the fleet's zones.yaml name int-se. Finland keeps its vault, private DNS and subnets for the stateful
+# cluster and a later cell. `enabled = false` would take a zone's subnets, vault and private DNS away.
 isolation_zones = {
   int-fi = { exposure = "int", index = 1 }
   int-se = { exposure = "int", index = 2 }
 }
 
-# The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system, and per
-# zone snet-<zone>-nodes and snet-<zone>-ilb, each with its own NSG; VNet encryption on.
-# The design's cells, one per availability zone. The lab runs one: az1 is disabled (2026-10-15) because
-# germanywestcentral's logical zone 1 is "NotAvailableForSubscription" for every VM size in sub-aks-dev
-# (enabling it is a support request to Microsoft), so az2 runs. A disabled cell keeps its address space
-# and its tfvars (envs/dev-int-stateless-az1.tfvars) but has no network.
-#
-# az3 (design D59, D74; rebuilt 2026-10-18) is the lab's pod-subnet cell: no overlay (`pod_network = "pod-subnet"`,
-# Azure CNI Pod Subnet with dynamic IP allocation), so its pods take addresses of their pool's pod subnet in
-# 100.64.0.0/16 (RFC 6598 shared address space, never routed outside the landing zone), keep them up to labfw,
+# The stateless cells' networks, one per cluster - see cells.tf for the layout: snet-system(-pods), and per
+# zone snet-<zone>-nodes, snet-<zone>-pods and snet-<zone>-ilb, each with its own NSG; VNet encryption on.
+# The design's cells, one per availability zone; the lab runs one, az3 (germanywestcentral's zone 1 is
+# "NotAvailableForSubscription" for every VM size in sub-aks-dev). Azure CNI Pod Subnet with dynamic IP
+# allocation: its pods take addresses of their pool's pod subnet in 100.64.0.0/16 (RFC 6598 shared address space, never routed outside the landing zone), keep them up to labfw,
 # and labfw - not Cilium - decides every flow that leaves the cluster, by zone and by the pod's address. Cilium
 # keeps the policies inside the cluster. Nodes and load balancers have /24 slots of 10.100.0.0/16 like any cell:
 # snet-system 10.100.0.0/24, int-fi 10.100.1.0/24, int-se 10.100.2.0/24 (nodes the /25, ILB 10.100.<n>.128/27);
 # pods: snet-system-pods 100.64.0.0/20, snet-int-fi-pods 100.64.16.0/20, snet-int-se-pods 100.64.32.0/20.
 cells = {
-  dev-int-stateless-az1 = { address_space = "172.22.0.0/20", enabled = false }
-  dev-int-stateless-az2 = { address_space = "172.22.16.0/20" }
-  dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_network = "pod-subnet", pod_address_space = "100.64.0.0/16" }
+  dev-int-stateless-az3 = { address_space = "10.100.0.0/16", pod_address_space = "100.64.0.0/16" }
 }
 
 # The landing zone's hub (azure-landing-zone network mode labfw): every cell is peered with it, sends
@@ -141,8 +135,8 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "260b0ca972b5d1949d7fde4b86c077dd98b50258"
   }
-  # A weather forecast from the internet (/weather): the firewall-egress cell's example of an
-  # application's own outbound dependency (design D59)
+  # A weather forecast from the internet (/weather): the lab cell's example of an
+  # application's own outbound dependency (design section 5.2)
   "aks-hello:0.4.0" = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "63594f30e4a0b770aef7e797ce819300c4be3420"
@@ -168,6 +162,11 @@ container_registry_builds = {
   "aks-hello:0.5.2" = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "b9ad11f879cf97186359fa8b97f2752e6efd9228"
+  }
+  # The Ubuntu ASP.NET Core runtime image with a shell for debugging (kubectl exec)
+  "aks-hello:0.6.0" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "7f0316f4528348555a2e817893740ea980ab1a33"
   }
 }
 
@@ -198,7 +197,7 @@ key_vault_namespaces = {
       admin = "71438fbc-0666-4d82-be17-54b61236d657"
     }
   }
-  # The example team in Sweden's zone, on the firewall-egress cell az3 (design D59): no groups yet.
+  # The example team in Sweden's zone, on the lab's cell az3: no groups yet.
   int-se-example = {
     zone = "int-se"
   }
@@ -225,20 +224,6 @@ dns_zone_private             = false
 dns_zone_create              = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
-# hello.ext-fi.dev.onek8s.lol would be served by the ext-fi zone of every external cell at once through
-# Azure Traffic Manager (design section 3.1). Kept for an external subscription; no profile is created
-# here, because ext-fi is not a zone of this (internal) environment - see global_hostnames.
-global_hostnames = {
-  "hello.ext-fi.dev" = {
-    zone = "ext-fi"
-    endpoints = [
-      "hello-aks-dev-ext-stateless-az1.ext-fi.dev.onek8s.lol",
-      "hello-aks-dev-ext-stateless-az2.ext-fi.dev.onek8s.lol",
-    ]
-    health_path = "/healthz"
-  }
-}
-
 # The environment's monthly budget (budget.tf): the Owners of sub-aks-dev are told at 80 % and 100 %
 # of actual cost and at a forecast of 100 %. The lab's steady cost - one cell's system node, its
 # internal load balancer, the vaults, the registry, the workspace - is well below it; a GPU
@@ -250,7 +235,7 @@ monthly_budget = {
 
 # The AI agents' model (onek8s/aks-ai-agents, model.provider foundry; design section 6.1): Claude Sonnet 5.5 on
 # Microsoft Foundry in swedencentral - germanywestcentral does not offer Anthropic's models - Entra ID only. First
-# user: the egress agent (design D59), which proposes the firewall rules of the applications from labfw's denials.
+# user: the egress agent (design section 5.2), which proposes the firewall rules of the applications from labfw's denials.
 # The deployment signs Anthropic's Azure Marketplace offer in OneK8s's name, billed to sub-aks-dev; the organisation,
 # country and industry go to Anthropic with every request (the user's choice, 2026-10-15).
 # Not deployed yet: sub-aks-dev has 0 Foundry quota (Tokens Per Minute) for every Claude model in swedencentral

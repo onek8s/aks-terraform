@@ -27,8 +27,8 @@ locals {
 }
 
 # The clusters' network, with virtual_network_create: one virtual network, and the subnets the
-# clusters' node pools name in node_subnet_name. With Azure CNI overlay only the nodes take addresses
-# from it, so the clusters of an environment can share one subnet. Without it, virtual_network_name
+# clusters' node pools name in node_subnet_name and their pods in pod_subnet_name (a subnet whose name
+# ends in `-pods` is delegated to AKS, as Azure CNI Pod Subnet needs). Without it, virtual_network_name
 # names a network that exists already.
 resource "azurerm_virtual_network" "this" {
   count = var.virtual_network_create ? 1 : 0
@@ -46,6 +46,18 @@ resource "azurerm_subnet" "this" {
   resource_group_name  = local.resource_group_name
   virtual_network_name = azurerm_virtual_network.this[0].name
   address_prefixes     = [each.value]
+
+  # A pod subnet, as a cell's (cells.tf).
+  dynamic "delegation" {
+    for_each = endswith(each.key, "-pods") ? [1] : []
+    content {
+      name = "aks-delegation"
+      service_delegation {
+        name    = "Microsoft.ContainerService/managedClusters"
+        actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+      }
+    }
+  }
 }
 
 check "a_created_network_is_named" {
