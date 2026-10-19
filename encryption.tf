@@ -31,13 +31,6 @@ resource "azurerm_key_vault_key" "cluster" {
       time_after_creation = "P1Y"
     }
   }
-
-  lifecycle {
-    precondition {
-      condition     = !local.system_assigned_identity
-      error_message = "${var.name} runs on a system assigned identity, which does not exist before the cluster and so cannot be granted its KMS key. Attach the cluster to an existing virtual network."
-    }
-  }
 }
 
 resource "azurerm_disk_encryption_set" "this" {
@@ -56,7 +49,7 @@ resource "azurerm_disk_encryption_set" "this" {
 }
 
 resource "azurerm_role_assignment" "disk_encryption_set_key" {
-  count = var.customer_managed_keys != null && var.create_role_assignments ? 1 : 0
+  count = var.customer_managed_keys == null ? 0 : 1
 
   principal_id         = azurerm_disk_encryption_set.this[0].identity[0].principal_id
   scope                = azurerm_key_vault_key.cluster["disk"].resource_versionless_id
@@ -67,15 +60,15 @@ resource "azurerm_role_assignment" "disk_encryption_set_key" {
 # The cluster identity: the KMS key, and reading the disk encryption set it creates the nodes' disks
 # with; with KMS data encryption also Key Vault Contributor on the vault, which AKS asks for.
 resource "azurerm_role_assignment" "cluster_customer_managed_keys" {
-  for_each = var.customer_managed_keys != null && var.create_role_assignments ? merge({
+  for_each = var.customer_managed_keys == null ? {} : merge({
     kms_key             = { scope = azurerm_key_vault_key.cluster["kms"].resource_versionless_id, role = "Key Vault Crypto User" }
     disk_encryption_set = { scope = azurerm_disk_encryption_set.this[0].id, role = "Reader" }
     }, !var.customer_managed_keys.kms_data_encryption ? {} : {
     # KMS data encryption reads the vault's network settings (AKS's documented prerequisite)
     kms_vault = { scope = data.azurerm_key_vault.customer_managed_keys[0].id, role = "Key Vault Contributor" }
-  }) : {}
+  })
 
-  principal_id         = azurerm_user_assigned_identity.this[0].principal_id
+  principal_id         = azurerm_user_assigned_identity.this.principal_id
   scope                = each.value.scope
   role_definition_name = each.value.role
   principal_type       = "ServicePrincipal"
@@ -83,9 +76,9 @@ resource "azurerm_role_assignment" "cluster_customer_managed_keys" {
 
 # Azure checks the keys when the cluster is created, and role assignments take a while to take effect.
 resource "time_sleep" "customer_managed_keys_propagation" {
-  count = var.customer_managed_keys != null && var.create_role_assignments && var.role_assignment_propagation_delay != "0s" ? 1 : 0
+  count = var.customer_managed_keys == null ? 0 : 1
 
-  create_duration = var.role_assignment_propagation_delay
+  create_duration = local.role_assignment_propagation_delay
   triggers = {
     disk_encryption_set_key = one(azurerm_role_assignment.disk_encryption_set_key[*].id)
     cluster                 = join(",", [for assignment in azurerm_role_assignment.cluster_customer_managed_keys : assignment.id])

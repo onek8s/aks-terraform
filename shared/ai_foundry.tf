@@ -63,7 +63,7 @@ resource "azapi_resource" "agents_model" {
 }
 
 resource "azurerm_role_assignment" "agents_model_user" {
-  count = var.ai_foundry == null || !var.create_role_assignments ? 0 : 1
+  count = var.ai_foundry == null ? 0 : 1
 
   scope                = azurerm_cognitive_account.agents[0].id
   role_definition_name = "Cognitive Services User"

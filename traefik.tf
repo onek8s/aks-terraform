@@ -4,25 +4,14 @@
 
 locals {
   # The cluster's Gateways, as the Flux repository runs them: one per isolation zone, `<zone>` in
-  # `<zone>-gateway`, behind an internal load balancer for an internal zone, and the platform's,
-  # `platform` in `platform-gateway`, always public (Flux's webhook receivers). The platform's only on
-  # a cluster with a Flux repository of its own, which is what deploys it, and platform_gateway_enabled.
-  gateways = var.gateway_implementation == null ? {} : merge(
-    {
-      for zone in keys(var.isolation_zones) : zone => {
-        namespace = "${zone}-gateway"
-        exposure  = startswith(zone, "int-") ? "int" : "ext"
-        internal  = startswith(zone, "int-")
-      }
-    },
-    local.flux_enabled && var.platform_gateway_enabled ? {
-      platform = {
-        namespace = "platform-gateway"
-        exposure  = "ext"
-        internal  = false
-      }
-    } : {},
-  )
+  # `<zone>-gateway`, behind an internal load balancer for an internal zone.
+  gateways = var.gateway_implementation == null ? {} : {
+    for zone in keys(var.isolation_zones) : zone => {
+      namespace = "${zone}-gateway"
+      exposure  = startswith(zone, "int-") ? "int" : "ext"
+      internal  = startswith(zone, "int-")
+    }
+  }
 
   # The class each Gateway names, told to the Flux repository as `gateway_class_name_<gateway>`, and
   # the implementation itself as `gateway_implementation`: the Flux repository adds what only one
@@ -94,11 +83,4 @@ resource "azapi_resource" "traefik_flux_configuration" {
   body      = each.value
 
   depends_on = [azapi_resource.flux_extension]
-}
-
-check "flux_webhook_needs_the_platform_gateway" {
-  assert {
-    condition     = !local.flux_github_webhook_enabled || var.platform_gateway_enabled
-    error_message = "${var.name} asks for Flux's GitHub webhook (flux_github_webhook), which GitHub reaches through the platform gateway, but platform_gateway_enabled is false."
-  }
 }

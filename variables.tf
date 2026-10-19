@@ -57,21 +57,12 @@ DESCRIPTION
 
 variable "node_subnet_name" {
   type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing subnet the cluster nodes are placed in. Required together with
-`virtual_network_name`, and left unset with it for a cluster that brings no network of its own.
-DESCRIPTION
+  description = "Name of the subnet of `virtual_network_name` the system pool's nodes are placed in - the cell's `snet-system`, created by shared/."
+  nullable    = false
 
   validation {
-    condition     = var.node_subnet_name == null || length(trimspace(coalesce(var.node_subnet_name, ""))) > 0
+    condition     = length(trimspace(var.node_subnet_name)) > 0
     error_message = "node_subnet_name must not be empty."
-  }
-  # The two are one decision. A subnet without its network cannot be looked up, and a network with
-  # no node subnet named in it has nowhere to put the nodes.
-  validation {
-    condition     = (var.virtual_network_name == null) == (var.node_subnet_name == null)
-    error_message = "virtual_network_name and node_subnet_name go together: name both to attach the cluster to an existing network, or leave both unset to let AKS create and manage a virtual network of its own."
   }
 }
 
@@ -88,76 +79,13 @@ variable "resource_group_name" {
 
 variable "virtual_network_name" {
   type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing virtual network the cluster is attached to, together with `node_subnet_name`.
-
-Leave both unset for a cluster that brings no network at all: AKS then creates and manages a virtual
-network for it inside the node resource group, and every bring-your-own subnet here stays empty. The
-cluster is then reachable only from that network, which the node resource group lockdown makes hard
-to peer or link - see the README. An AKS Automatic cluster with no network of its own is on that arrangement.
-DESCRIPTION
+  description = "Name of the cluster's virtual network in `resource_group_name` - the cell's, created by shared/ (`cells`)."
+  nullable    = false
 
   validation {
-    condition     = var.virtual_network_name == null || length(trimspace(coalesce(var.virtual_network_name, ""))) > 0
+    condition     = length(trimspace(var.virtual_network_name)) > 0
     error_message = "virtual_network_name must not be empty."
   }
-}
-
-variable "api_server_authorized_ip_ranges" {
-  type        = list(string)
-  default     = []
-  description = <<DESCRIPTION
-CIDR ranges allowed to reach the API server. Only meaningful for a public cluster
-(`private_cluster_enabled = false`); an empty list leaves the API server open to the internet.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = alltrue([for range in var.api_server_authorized_ip_ranges : can(cidrhost(range, 0))])
-    error_message = "api_server_authorized_ip_ranges must contain CIDR ranges, for example \"203.0.113.0/24\"."
-  }
-}
-
-variable "api_server_subnet_name" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing subnet used for API Server VNet Integration. The subnet must be delegated to
-`Microsoft.ContainerService/managedClusters` and be a `/28` or larger.
-
-Leave it unset for a cluster whose API server is not joined to the network. Microsoft documents the
-subnet as required for an AKS Automatic cluster in an existing virtual network, so Terraform warns
-about that combination rather than refusing it - unless the integration is turned off deliberately
-through `api_server_vnet_integration_enabled`, which is what an AKS Automatic cluster on the network AKS manages does.
-DESCRIPTION
-
-  # Naming a subnet for an API server that is not joined to the network says two different things at
-  # once. Rather than quietly dropping one of them, the combination is refused.
-  validation {
-    condition     = var.api_server_vnet_integration_enabled || var.api_server_subnet_name == null
-    error_message = "api_server_subnet_name names a subnet for an API server that is not joined to the network. Leave it unset while api_server_vnet_integration_enabled = false, or set that back to true to use the subnet."
-  }
-  validation {
-    condition     = var.virtual_network_name != null || var.api_server_subnet_name == null
-    error_message = "api_server_subnet_name names a subnet of an existing virtual network, and this cluster brings none. Name virtual_network_name and node_subnet_name as well, or leave the API server where AKS puts it."
-  }
-}
-
-variable "api_server_vnet_integration_enabled" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Whether the API server may be joined to the existing virtual network. The integration only actually
-happens when `api_server_subnet_name` also names a subnet to inject it into, so leaving this at its
-default changes nothing on its own.
-
-Set it to `false` to turn API Server VNet Integration off for good in an environment: naming a
-subnet is then refused rather than ignored, and the warning about an AKS Automatic cluster without
-one is dropped, because the absence is the point rather than an oversight. The API server is reached
-over its public or AKS-managed private endpoint instead, exactly as it is on a `Base` cluster here.
-DESCRIPTION
-  nullable    = false
 }
 
 variable "auto_upgrade" {
@@ -202,20 +130,7 @@ variable "azure_policy_enabled" {
   default     = true
   description = <<DESCRIPTION
 Whether to install the Azure Policy add-on, which enforces Azure Policy definitions inside the
-cluster through Gatekeeper. AKS Automatic always runs it, so this is ignored for that SKU.
-DESCRIPTION
-  nullable    = false
-}
-
-variable "platform_gateway_enabled" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Whether the cluster has the platform's Gateway, `platform` in `platform-gateway`: a public load
-balancer for Flux's webhook receivers (flux_github_webhook). False for a cell without a public entry
-point - an internal cell routed through the hub's firewall, where a public load balancer cannot
-answer (its replies would leave by the default route): Flux then polls, and the Flux repository's
-cluster directory leaves the platform gateway and the webhook out.
+cluster through Gatekeeper.
 DESCRIPTION
   nullable    = false
 }
@@ -224,8 +139,8 @@ variable "gateway_implementation" {
   type        = string
   default     = "approuting-istio"
   description = <<DESCRIPTION
-The Gateway API implementation that serves the cluster's Gateways - one per isolation zone and the
-platform's, which the Flux repository deploys (OneK8s design section 4.1). Defaults to
+The Gateway API implementation that serves the cluster's Gateways - one per isolation zone, which
+the Flux repository deploys (OneK8s design section 4.1). Defaults to
 `approuting-istio`, the production setting (D55: the Azure standard offering, upgraded by AKS);
 `traefik` is a non-production cost saving. Null for a cluster without Gateways: the stateful
 cluster has no Gateway API implementation (R9a).
@@ -244,7 +159,7 @@ cluster has no Gateway API implementation (R9a).
   before the first Gateway - a second system node in every lab cell.
 
 The Flux repository is told the class each Gateway names as `gateway_class_name_<gateway>` (the
-zone's hyphens as underscores; `gateway_class_name_platform` for the platform's). Switching
+zone's hyphens as underscores). Switching
 re-creates the Gateways under the new class (they carry Flux `force`), so a cell's gateways are
 down for the minutes it takes - drain the cell in Traffic Manager first where that matters. Both
 need the managed Gateway API CRDs, which every cluster has.
@@ -286,34 +201,6 @@ DESCRIPTION
   }
 }
 
-variable "dapr" {
-  type = object({
-    version           = optional(string)
-    high_availability = optional(bool, true)
-    settings          = optional(map(string), {})
-  })
-  default     = null
-  description = <<DESCRIPTION
-The AKS [Dapr extension][dapr] (`microsoft.dapr`) - NOT part of the OneK8s platform (design D65: no
-requirement names it, so per D64 it is an option kept open, section 7.4); set only on a lab cell to try
-it. Null (the default) installs nothing. Its control plane - operator, sidecar injector, sentry,
-placement and scheduler - goes into `dapr-system` on the system pool, like every platform controller,
-never onto an isolation zone's nodes. A stateless cell has no StorageClass, so placement and the
-scheduler keep their state in memory: actor placement and scheduled jobs and reminders do not survive
-a restart of their pods.
-
-- `version` - The extension version (e.g. `1.16.4-msft.1`), pinned without minor upgrades. Null takes
-  the newest of the stable release train and lets AKS upgrade its minor version. A change re-creates
-  the extension.
-- `high_availability` - Three replicas of each control plane component (the extension's default). It
-  cannot change on an installed extension; a lab cell on one system node needs false.
-- `settings` - More Helm values of the Dapr chart, as configuration settings (strings), merged over
-  the ones this module sets.
-
-[dapr]: https://learn.microsoft.com/azure/aks/dapr
-DESCRIPTION
-}
-
 variable "image_integrity_enabled" {
   type        = bool
   default     = false
@@ -334,8 +221,8 @@ DESCRIPTION
   nullable    = false
 
   validation {
-    condition     = !var.image_integrity_enabled || (var.azure_policy_enabled && !var.key_vault_create && var.key_vault_name != null && var.container_registry_name != null)
-    error_message = "image_integrity_enabled needs the Azure Policy add-on, the environment's shared Key Vault (key_vault_create = false, key_vault_name) and container_registry_name."
+    condition     = !var.image_integrity_enabled || (var.azure_policy_enabled && var.key_vault_name != null && var.container_registry_name != null)
+    error_message = "image_integrity_enabled needs the Azure Policy add-on, the environment's platform Key Vault (key_vault_name) and container_registry_name."
   }
 }
 
@@ -349,67 +236,6 @@ variable "image_integrity_service_account" {
     condition     = can(regex("^[a-z0-9-]+/[a-z0-9-]+$", var.image_integrity_service_account))
     error_message = "image_integrity_service_account is <namespace>/<name>."
   }
-}
-
-variable "azure_rbac_enabled" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Whether the cluster authorizes the Kubernetes API through Azure RBAC - "Microsoft Entra ID
-authentication with Azure RBAC" - rather than through Kubernetes RBAC. Always on for the Automatic
-SKU, which Azure preconfigures with it and does not let a cluster off.
-
-This decides how `entra_admin_group_object_ids` and `entra_reader_group_object_ids` reach the
-cluster: as Azure role assignments on it, or as the admin groups of its own Entra ID profile. See
-those two.
-DESCRIPTION
-  nullable    = false
-}
-
-variable "cluster_timeouts" {
-  type = object({
-    create = optional(string, "90m")
-    delete = optional(string, "90m")
-    read   = optional(string, "10m")
-    update = optional(string, "90m")
-  })
-  default     = {}
-  description = <<DESCRIPTION
-How long Terraform waits for a cluster operation to finish before giving up. The AzAPI provider
-defaults to 30 minutes, which an AKS Automatic cluster in an existing network regularly exceeds -
-the API server, the hosted system node pools and the add-ons Azure installs on its own are all
-created before the request returns. Terraform then reports a timeout while Azure carries on, and the
-cluster is left in `Creating` with nothing in state to reconcile it against.
-
-Giving up early does not stop the deployment, so these are set well above what a healthy create
-takes rather than close to it.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition = alltrue([for timeout in [
-      var.cluster_timeouts.create,
-      var.cluster_timeouts.delete,
-      var.cluster_timeouts.read,
-      var.cluster_timeouts.update,
-    ] : can(regex("^[0-9]+(s|m|h)$", timeout))])
-    error_message = "Every cluster_timeouts value must be a duration such as \"90m\" or \"2h\"."
-  }
-}
-
-variable "create_role_assignments" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Create the role assignments made here: the ones the cluster identity needs on the existing network
-and private DNS zone, and the ones that grant `entra_admin_group_object_ids` and
-`entra_reader_group_object_ids` their access to the cluster under Azure RBAC. Set to `false` when
-the assignments are managed elsewhere - the deployment then requires no
-`Microsoft.Authorization/roleAssignments/write` permission, and has to be given every one of those
-grants by whoever does manage them. A cluster that brings no network has no network assignments to
-create either way.
-DESCRIPTION
-  nullable    = false
 }
 
 variable "default_node_pool" {
@@ -437,8 +263,7 @@ variable "default_node_pool" {
   })
   default     = {}
   description = <<DESCRIPTION
-System node pool of the cluster. **Ignored for AKS Automatic apart from `name`**, which sizes,
-scales and rolls its own node pools - see the README for what that SKU drops.
+System node pool of the cluster.
 
 The defaults are the production setting (OneK8s design section 2.3): two `Standard_D4ds_v5` nodes
 (4 vCPU, 16 GiB), room for App Routing's istiod, the VPA add-on and the platform's controllers, and
@@ -520,28 +345,13 @@ DESCRIPTION
   }
 }
 
-variable "dns_zone_create" {
-  type        = bool
-  default     = false
-  description = <<DESCRIPTION
-Whether the zone of `dns_zone_name` is created here rather than looked up. The domain's registrar
-then has to be pointed at the zone's name servers, which `dns_zone_name_servers` lists, before
-anything published in it resolves.
-DESCRIPTION
-  nullable    = false
-  validation {
-    condition     = !var.dns_zone_create || var.dns_zone_name != null
-    error_message = "dns_zone_create needs dns_zone_name to name the zone."
-  }
-}
-
 variable "dns_zone_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
 Name of the DNS zone the cluster publishes its Gateway hostnames in, for example `contoso.com` - a
-public Azure DNS zone, or an Azure Private DNS zone with `dns_zone_private`; an existing one, unless
-`dns_zone_create` is set. external-dns, deployed through Flux, keeps a record in it for every
+public Azure DNS zone, or an Azure Private DNS zone with `dns_zone_private`; one that exists already
+(shared/ creates it, or it was provisioned outside Terraform). external-dns, deployed through Flux, keeps a record in it for every
 hostname a Gateway listener serves, pointing at the address of the Gateway's load balancer
 - a public one for a public zone, an internal one for a private zone. An identity is created for it
 here, federated with its Kubernetes service account and granted on the zone. Leave it unset and
@@ -561,37 +371,20 @@ granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`; the Ga
 internal. The Flux repository is told which (`dns_zone_private`, `dns_provider`).
 DESCRIPTION
   nullable    = false
-  validation {
-    condition     = !(var.dns_zone_private && var.dns_zone_create)
-    error_message = "A private zone is created and linked to the clusters' network by shared/ (dns_zone_create there): dns_zone_create here is for a public zone only."
-  }
 }
 
 variable "dns_zone_resource_group_name" {
   type        = string
   default     = null
-  description = "Resource group of the DNS zone - the existing one, or the one it is created in. Defaults to `resource_group_name`."
-}
-
-variable "enable_telemetry" {
-  type        = bool
-  default     = true
-  description = "Whether to send the anonymous telemetry that Azure Verified Modules collect."
-  nullable    = false
+  description = "Resource group of the DNS zone. Defaults to `resource_group_name`."
 }
 
 variable "entra_admin_group_object_ids" {
   type        = list(string)
   default     = []
   description = <<DESCRIPTION
-Object IDs of the Microsoft Entra ID groups granted cluster admin. How they are granted follows
-`azure_rbac_enabled`, because the two authorization modes have nothing in common:
-
-- With Azure RBAC, each group is assigned `Azure Kubernetes Service RBAC Cluster Admin` on the
-  cluster. The admin groups of the cluster's Entra ID profile are not honored in this mode, so
-  nothing is sent there.
-- With Kubernetes RBAC, each group becomes an admin group of the cluster's Entra ID profile, which
-  binds it to `cluster-admin` inside the cluster. No role assignment is created.
+Object IDs of the Microsoft Entra ID groups granted cluster admin: each is assigned `Azure Kubernetes
+Service RBAC Cluster Admin` on the cluster, the Azure role that answers to `cluster-admin` inside it.
 
 Members still need `Azure Kubernetes Service Cluster User Role` on the cluster to download a
 kubeconfig at all; that one is not created here.
@@ -612,9 +405,6 @@ Object IDs of the Microsoft Entra ID groups granted read-only access to the clus
 them `Azure Kubernetes Service RBAC Reader` on it. That role reads most objects in every namespace,
 but not `Secrets` and not roles or role bindings.
 
-Azure RBAC only. Kubernetes RBAC has no equivalent - the cluster's Entra ID profile carries admin
-groups and nothing else - so these groups are granted nothing while `azure_rbac_enabled = false`.
-
 Members still need `Azure Kubernetes Service Cluster User Role` on the cluster to download a
 kubeconfig at all; that one is not created here.
 DESCRIPTION
@@ -623,55 +413,6 @@ DESCRIPTION
   validation {
     condition     = alltrue([for id in var.entra_reader_group_object_ids : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", id))])
     error_message = "entra_reader_group_object_ids must contain group object IDs as GUIDs, not group names."
-  }
-}
-
-variable "fqdn_subdomain" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Subdomain registered in the bring-your-own private DNS zone. Azure requires it whenever a custom
-private DNS zone is used, so it defaults to the cluster name in that case.
-DESCRIPTION
-}
-
-variable "flux_git_credentials" {
-  type = object({
-    https_user      = optional(string, "git")
-    https_key       = optional(string)
-    ssh_private_key = optional(string)
-  })
-  default     = null
-  description = <<DESCRIPTION
-How Flux authenticates to a private `flux_git_repository`. Set exactly one of:
-
-- `https_key` - a token for an `https://` URL. For GitHub, a fine-grained personal access token
-  with read-only `Contents` on the repository; GitHub ignores `https_user` for a token, so the
-  default `git` will do.
-- `ssh_private_key` - a PEM or OpenSSH private key for an `ssh://` URL, such as
-  `ssh://git@github.com/<org>/<repo>`. For GitHub, a read-only deploy key on the repository. Flux
-  ships with GitHub's host keys, so no known_hosts is needed.
-
-Sent to Azure write-only and never stored in the Terraform state. Keep it out of the variables
-file: pass it through `TF_VAR_flux_git_credentials` from a secret store instead.
-DESCRIPTION
-  sensitive   = true
-
-  validation {
-    condition     = var.flux_git_credentials == null || var.flux_git_repository != null
-    error_message = "flux_git_credentials is set without a flux_git_repository to use it for."
-  }
-  validation {
-    condition     = var.flux_git_credentials == null || try((var.flux_git_credentials.https_key != null) != (var.flux_git_credentials.ssh_private_key != null), false)
-    error_message = "flux_git_credentials needs exactly one of https_key and ssh_private_key."
-  }
-  validation {
-    condition     = var.flux_git_credentials == null || try(var.flux_git_credentials.https_key == null || startswith(var.flux_git_repository.url, "https://"), false)
-    error_message = "flux_git_credentials.https_key needs an https:// flux_git_repository.url - a token is never sent in the clear."
-  }
-  validation {
-    condition     = var.flux_git_credentials == null || try(var.flux_git_credentials.ssh_private_key == null || startswith(var.flux_git_repository.url, "ssh://"), false)
-    error_message = "flux_git_credentials.ssh_private_key needs an ssh:// flux_git_repository.url."
   }
 }
 
@@ -684,16 +425,15 @@ variable "flux_git_repository" {
   })
   default     = null
   description = <<DESCRIPTION
-The one Git repository the cluster syncs its main configuration from through Flux. Setting it
-installs the Flux cluster extension and creates a Flux configuration named `platform` that reconciles
-the Kustomization at `path` on `branch`, on either SKU. Leave it unset and Flux is not installed.
-
-A private repository also needs `flux_git_credentials`.
+The one Git repository the cluster syncs its main configuration from through Flux: a public one, read
+without a credential. Setting it installs the Flux cluster extension and creates a Flux configuration
+named `platform` that reconciles the Kustomization at `path` on `branch`. Leave it unset and Flux is
+not installed.
 DESCRIPTION
 
   validation {
-    condition     = var.flux_git_repository == null || can(regex("^(https?|ssh)://", var.flux_git_repository.url))
-    error_message = "flux_git_repository.url must start with https://, http:// or ssh://."
+    condition     = var.flux_git_repository == null || can(regex("^https://", var.flux_git_repository.url))
+    error_message = "flux_git_repository.url must start with https://."
   }
   validation {
     condition     = var.flux_git_repository == null || try(trimspace(var.flux_git_repository.branch) != "", false)
@@ -723,60 +463,18 @@ DESCRIPTION
   }
 }
 
-variable "flux_github_webhook" {
-  type        = bool
-  default     = false
-  description = <<DESCRIPTION
-Whether the Flux repository publishes a GitHub webhook receiver, so a push reconciles at once rather
-than at the next poll. A token is generated for it and kept in the Key Vault as
-`flux-system--github-webhook-token`, and `flux-system` is given a share of the vault - its identity's
-client ID is passed to Flux as `key_vault_client_id_flux_system` - for the repository's Receiver to
-read it. The same token is set as the secret of the repository's webhook in GitHub. Needs
-`key_vault_name` and `flux_git_repository`.
-DESCRIPTION
-  nullable    = false
-}
-
-variable "key_vault_create" {
-  type        = bool
-  default     = true
-  description = <<DESCRIPTION
-Whether the Key Vault of `key_vault_name` is the cluster's own, created here, or the environment's
-shared one, created by `shared/` in `resource_group_name` and only looked up.
-
-The cluster's own vault comes with everything on it - the namespaces' identities
-(`<cluster identity>-kv-<namespace>`), their read access, the `writer` and `admin` grants, the admin
-groups' `Key Vault Administrator`, the Flux webhook's token - and goes with the cluster.
-
-With the shared one, all of that is `shared/`'s, and the namespaces read the vault as the
-environment's shared identities (`id-<region>-<environment>-shared-kv-<namespace>`). The cluster
-adds a federated credential of its own to each, for its namespace's `key-vault` service account, and
-nothing else: it can be destroyed, rebuilt or replaced while the secrets and the identities stay.
-Every namespace with a share here needs one in `shared/` too.
-DESCRIPTION
-  nullable    = false
-  validation {
-    condition     = var.key_vault_create || var.key_vault_name != null
-    error_message = "key_vault_create = false needs key_vault_name to name the environment's shared vault."
-  }
-}
-
 variable "key_vault_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the cluster's Azure Key Vault, in `resource_group_name`: its own, created here, or the
-environment's shared one when `key_vault_create` is false. Key Vault names
-are global: 3 to 24 letters, digits and single hyphens, starting with a letter. Leave it unset and no
-vault is created and nothing is synced from one.
+Name of the environment's platform Key Vault in `resource_group_name`, created by shared/ with the
+namespaces' identities and every grant on it, and looked up here. Leave it unset and nothing is synced
+from a vault.
 
-The one vault holds the secrets of every namespace, kept apart by name: a namespace owns the secrets
-named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and `managed_namespaces` gets
-an identity - the cluster's own, or the environment's shared one beside the shared vault -
-federated with its `key-vault` service account and granted
-`Key Vault Secrets User` with an Azure ABAC condition that lets it read its own secrets and no
-others. The namespace's `writer` and `admin` grants manage its secrets under the same condition, and
-`entra_admin_group_object_ids` run the whole vault as `Key Vault Administrator`.
+A namespace owns the secrets named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and
+`managed_namespaces` reads its share as the environment's shared identity for it, which the cluster
+federates with the namespace's `key-vault` service account - an application namespace's share is in its
+zone's vault (`key_vault_namespace_vaults`). Every namespace with a share here needs one in shared/ too.
 DESCRIPTION
 
   validation {
@@ -787,13 +485,12 @@ DESCRIPTION
 
 variable "key_vault_namespaces" {
   type        = set(string)
-  default     = ["ingress-gateway"]
+  default     = []
   description = <<DESCRIPTION
-Namespaces that are not in `managed_namespaces` and still get a share of the Key Vault: the ones the
-Flux repository creates for the platform itself. Every managed namespace gets one anyway.
-
-The default is the platform's: `ingress-gateway`, whose listener certificates are kept in the vault
-as `ingress-gateway--<name>`. Nothing is created for it without a `key_vault_name`.
+Namespaces that are not in `managed_namespaces` and still get a share of the platform vault: the ones
+the Flux repository creates for the platform itself - each zone's `<zone>-gateway`, whose listener
+certificate is `<zone>-gateway--wildcard`, and `flux-system`. Every managed namespace gets one anyway.
+Nothing is created for them without a `key_vault_name`.
 DESCRIPTION
   nullable    = false
 
@@ -811,24 +508,6 @@ variable "kubernetes_version" {
   validation {
     condition     = var.kubernetes_version == null || can(regex("^[0-9]+\\.[0-9]+(\\.[0-9]+)?$", var.kubernetes_version))
     error_message = "kubernetes_version must be of the form 1.32 or 1.32.4, without a leading \"v\"."
-  }
-}
-
-variable "lock_kind" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Management lock placed on the cluster, or null for none.
-
-- `CanNotDelete` - The cluster cannot be deleted, by Terraform or from the portal, until the lock is
-  removed. Worth having on anything that would take an outage to rebuild.
-- `ReadOnly` - Nothing about the cluster can be changed either. This also blocks the upgrades AKS
-  runs on its own, so it is rarely what you want.
-DESCRIPTION
-
-  validation {
-    condition     = var.lock_kind == null || contains(["CanNotDelete", "ReadOnly"], coalesce(var.lock_kind, ""))
-    error_message = "lock_kind must be either \"CanNotDelete\" or \"ReadOnly\", or left unset."
   }
 }
 
@@ -1000,11 +679,6 @@ DESCRIPTION
 
 variable "managed_namespaces" {
   type = map(object({
-    access = optional(list(object({
-      principal_id   = string
-      principal_type = optional(string, "Group")
-      role           = string
-    })), [])
     adoption_policy = optional(string)
     annotations     = optional(map(string), {})
     delete_policy   = optional(string)
@@ -1122,47 +796,6 @@ also gets its repository as the annotation `platform/repository`. Azure Policy
 that is enforced, for namespaces made here and anywhere else alike. `labels` must not set the
 `platform/team` or `platform/cost-center` keys itself.
 
-`access` grants Entra ID groups, service principals and users their rights on that namespace alone,
-as Azure role assignments scoped to it - no cluster-wide grant, and nothing to reach in the
-namespace next door:
-
-```hcl
-managed_namespaces = {
-  team-payments = {
-    access = [
-      # The team: a kubeconfig for this namespace, and read/write inside it.
-      { role = "namespace_user", principal_id = "00000000-0000-0000-0000-000000000000" },
-      { role = "writer", principal_id = "00000000-0000-0000-0000-000000000000" },
-      # Their deployment pipeline.
-      { role = "writer", principal_id = "11111111-1111-1111-1111-111111111111", principal_type = "ServicePrincipal" },
-    ]
-  }
-}
-```
-
-- `principal_id` - Object ID of the Entra ID group, service principal or user. For an application
-  this is the object ID of its **service principal** in the tenant, not the application ID.
-- `principal_type` - `Group` (the default), `ServicePrincipal` or `User`. Stated rather than looked
-  up, so that a principal created moments ago and not yet replicated does not fail the assignment.
-- `role` - One of:
-  - `namespace_user` - `Azure Kubernetes Service Namespace User`. Read-only on the namespace
-    resource, and the right to list credentials for it: this is what lets somebody run
-    `az aks namespace get-credentials` and get a kubeconfig for this namespace and nothing else.
-    Without it a principal has whatever the data plane roles below grant and no way to reach the
-    cluster at all.
-  - `reader` - `Azure Kubernetes Service RBAC Reader`. Reads most objects in the namespace, but not
-    `Secrets` - reading those is a way to act as any service account in it - and not roles or role
-    bindings.
-  - `writer` - `Azure Kubernetes Service RBAC Writer`. Reads and writes most objects, `Secrets`
-    included, and can run pods as any service account in the namespace.
-  - `admin` - `Azure Kubernetes Service RBAC Admin`. `writer`, plus roles and role bindings inside
-    the namespace. Still cannot change the namespace itself or its quota - those come from here.
-
-The three data plane roles are enforced by Azure RBAC for Kubernetes authorization, so they grant
-nothing while `azure_rbac_enabled = false` and Terraform says so on every plan. `namespace_user` is
-a control plane role and works either way. Nothing is granted at all while
-`create_role_assignments = false`.
-
 `groups` binds an Entra ID security group to each of Kubernetes' built-in user-facing roles in the
 namespace (OneK8s design section 2.6: Kubernetes RBAC is namespace-scoped, Entra ID groups per
 application team). Each role is optional; a role without a group gets no binding at all:
@@ -1191,8 +824,7 @@ Each group gets a Kubernetes `RoleBinding` named `platform-<role>` in the namesp
 group's object ID (AKS puts the Entra ID group object IDs of the caller into its Kubernetes groups),
 and `Azure Kubernetes Service Namespace User` on the namespace resource, so that its members can
 fetch a kubeconfig for the namespace - `az aks namespace get-credentials` - and nothing else. The
-binding is Kubernetes RBAC, so it works whether or not `azure_rbac_enabled` is on; with Azure RBAC
-on, the two are evaluated side by side and either may allow a call.
+binding is Kubernetes RBAC, evaluated side by side with Azure RBAC: either may allow a call.
 
 The role bindings are objects inside the cluster, so they are delivered the way everything inside the
 cluster is: by Flux. A namespace with groups gets a Flux configuration of its own, `<namespace>-access`
@@ -1218,7 +850,7 @@ managed_namespaces = {
 }
 ```
 
-- `url` - `https://` or `ssh://` URL of the repository.
+- `url` - `https://` URL of the repository.
 - `branch` - Branch to sync. Defaults to `main`.
 - `path` - Directory in the repository to apply. Defaults to the top.
 - `secret_name` - For a private repository: a Secret in the namespace that Flux reads it with -
@@ -1302,41 +934,6 @@ DESCRIPTION
     ]))
     error_message = "managed_namespaces[*].labels must not set a pod-security.kubernetes.io/* label. Use pod_security, which is where the Pod Security Standard of a namespace is decided."
   }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for access in namespace.access : contains(["admin", "namespace_user", "reader", "writer"], access.role)
-      ]
-    ]))
-    error_message = "managed_namespaces[*].access[*].role must be one of \"namespace_user\", \"reader\", \"writer\" or \"admin\"."
-  }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for access in namespace.access : contains(["Group", "ServicePrincipal", "User"], access.principal_type)
-      ]
-    ]))
-    error_message = "managed_namespaces[*].access[*].principal_type must be one of \"Group\", \"ServicePrincipal\" or \"User\"."
-  }
-  # An object ID, not a display name and not an application ID - Azure takes the principal as given
-  # rather than looking it up, so a name here becomes an assignment to nothing.
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for access in namespace.access : can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", access.principal_id))
-      ]
-    ]))
-    error_message = "managed_namespaces[*].access[*].principal_id must be an Entra ID object ID, for example \"00000000-0000-0000-0000-000000000000\". For an application this is the object ID of its service principal, not the application ID."
-  }
-  # Each grant becomes one role assignment addressed by namespace, role and principal, and Azure
-  # refuses the same role twice on the same principal at the same scope anyway.
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      length(distinct([for access in namespace.access : "${access.role}/${access.principal_id}"])) == length(namespace.access)
-    ])
-    error_message = "managed_namespaces[*].access lists the same role for the same principal twice in one namespace. State each grant once."
-  }
   # The group's object ID is the Kubernetes group name AKS gives its members - not its display name.
   validation {
     condition = alltrue(flatten([
@@ -1373,9 +970,9 @@ DESCRIPTION
   validation {
     condition = alltrue([
       for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || can(regex("^(https?|ssh)://", namespace.flux.url))
+      namespace.flux == null || can(regex("^https://", namespace.flux.url))
     ])
-    error_message = "managed_namespaces[*].flux.url must start with https://, http:// or ssh://."
+    error_message = "managed_namespaces[*].flux.url must start with https://."
   }
   validation {
     condition = alltrue([
@@ -1459,8 +1056,6 @@ and the zones' in isolation_zones), or of its node's subnet when no pool names o
 subnet, which Microsoft lists as legacy). Use
 `outbound_type = "userDefinedRouting"` when the existing subnet routes egress through a firewall,
 which also avoids creating a public load balancer.
-
-An AKS Automatic cluster manages its own dataplane, so only `outbound_type` survives for that SKU.
 DESCRIPTION
   nullable    = false
 
@@ -1513,29 +1108,6 @@ DESCRIPTION
   }
 }
 
-variable "network_role_assignment_scope" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Scope of the `Network Contributor` assignment the cluster identity gets on the existing network.
-
-- `subnet` - One assignment per subnet the cluster actually uses. This is the least privilege AKS
-  documents for a bring-your-own network, and the default for a `Base` cluster.
-- `virtual_network` - A single assignment on the whole virtual network. The default for AKS
-  Automatic, which Microsoft documents as requiring it: node autoprovisioning creates the node pools
-  itself and works at virtual network scope, not at the scope of the subnets named here. Also needed
-  on a `Base` cluster that has to reach network resources outside its own subnets.
-
-Left unset, this follows `sku_name`. Ignored when `create_role_assignments = false`, and when the
-cluster brings no network for the identity to be granted anything on.
-DESCRIPTION
-
-  validation {
-    condition     = var.network_role_assignment_scope == null || contains(["subnet", "virtual_network"], coalesce(var.network_role_assignment_scope, ""))
-    error_message = "network_role_assignment_scope must be either \"subnet\" or \"virtual_network\", or left unset."
-  }
-}
-
 variable "node_auto_provisioning_enabled" {
   type        = bool
   default     = false
@@ -1548,30 +1120,28 @@ arm64 - are the Flux repository's, so AKS's own default `NodePool`s are turned o
 system node pool stays a classic node pool, sized by `default_node_pool`.
 
 Needs Azure CNI Overlay with the Cilium dataplane and no cluster autoscaler on any node pool. The
-cluster identity is granted Network Contributor on the whole virtual network unless
-`network_role_assignment_scope` says otherwise, and the Flux repository is told the node subnet and
+cluster identity is granted Network Contributor on the whole virtual network, and the Flux repository is told the node subnet and
 the system pool's availability zone (`nap_subnet_id`, `nap_availability_zone`) for its
-`AKSNodeClass`es and `NodePool`s. Ignored for AKS Automatic, which provisions its nodes this way
-already.
+`AKSNodeClass`es and `NodePool`s.
 
 [nap]: https://learn.microsoft.com/en-us/azure/aks/node-autoprovision
 DESCRIPTION
   nullable    = false
 
   validation {
-    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || !var.default_node_pool.enable_auto_scaling
+    condition     = !var.node_auto_provisioning_enabled || !var.default_node_pool.enable_auto_scaling
     error_message = "node_auto_provisioning_enabled cannot be combined with default_node_pool.enable_auto_scaling: AKS refuses node auto provisioning on a cluster that runs the cluster autoscaler on any node pool."
   }
   validation {
-    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || var.zone_node_pools == null
+    condition     = !var.node_auto_provisioning_enabled || var.zone_node_pools == null
     error_message = "node_auto_provisioning_enabled cannot be combined with zone_node_pools: the zones' nodes come from NAP or from classic node pools with the cluster autoscaler, which AKS refuses beside NAP."
   }
   validation {
-    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || var.default_node_pool.pod_subnet_name == null
+    condition     = !var.node_auto_provisioning_enabled || var.default_node_pool.pod_subnet_name == null
     error_message = "node_auto_provisioning_enabled cannot be combined with a pod subnet (default_node_pool.pod_subnet_name): NAP does not support Azure CNI Pod Subnet (design D74) - use zone_node_pools."
   }
   validation {
-    condition     = !var.node_auto_provisioning_enabled || var.sku_name == "Automatic" || (var.network_profile.network_plugin == "azure" && contains(["overlay", "none"], var.network_profile.network_plugin_mode) && var.network_profile.network_dataplane == "cilium")
+    condition     = !var.node_auto_provisioning_enabled || (var.network_profile.network_plugin == "azure" && contains(["overlay", "none"], var.network_profile.network_plugin_mode) && var.network_profile.network_dataplane == "cilium")
     error_message = "node_auto_provisioning_enabled needs Azure CNI Overlay or node subnet powered by Cilium: network_profile.network_plugin = \"azure\", network_plugin_mode = \"overlay\" or \"none\" and network_dataplane = \"cilium\" (NAP does not support a pod subnet with dynamic IP allocation)."
   }
 }
@@ -1584,12 +1154,6 @@ Name of an existing Azure Container Registry the cluster pulls its images from -
 shared one, see shared/. The kubelet identity is granted `AcrPull` on it, so pods need no image pull
 secret. Null for none.
 DESCRIPTION
-}
-
-variable "container_registry_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of container_registry_name. Defaults to resource_group_name."
 }
 
 variable "persistent_storage_enabled" {
@@ -1623,41 +1187,19 @@ DESCRIPTION
   }
 }
 
-variable "private_cluster_enabled" {
-  type        = bool
-  default     = true
-  description = "Whether the API server is reachable only over a private endpoint. Set to `false` for a public cluster."
-  nullable    = false
-}
-
 variable "private_cluster_public_fqdn_enabled" {
   type        = bool
   default     = false
-  description = "Whether a private cluster also gets a public FQDN resolving to its private IP."
+  description = "Whether the private API server also gets a public FQDN resolving to its private address."
   nullable    = false
-}
-
-variable "private_dns_zone_name" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing private DNS zone for the API server, for example
-`privatelink.swedencentral.azmk8s.io`. When left null a private cluster uses an AKS-managed zone.
-DESCRIPTION
-
-  validation {
-    condition     = var.private_dns_zone_name == null || can(regex("\\.azmk8s\\.io$", coalesce(var.private_dns_zone_name, "")))
-    error_message = "private_dns_zone_name must end in .azmk8s.io, for example \"privatelink.swedencentral.azmk8s.io\"."
-  }
 }
 
 variable "private_dns_zone_mode" {
   type        = string
   default     = "system"
   description = <<DESCRIPTION
-How a private cluster's API server name resolves when `private_dns_zone_name` brings no zone of its own:
-`system` - an AKS-managed private DNS zone, linked to the cluster's network only; `none` - no private
-zone, the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address
+How the private API server's name resolves (design D58): `system` - an AKS-managed private DNS zone,
+linked to the cluster's network only; `none` - no private zone, the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address
 from anywhere, which suits a network that resolves through a DNS server elsewhere, such as the hub
 firewall's DNS proxy (the dev lab behind labfw).
 DESCRIPTION
@@ -1670,42 +1212,6 @@ DESCRIPTION
   validation {
     condition     = var.private_dns_zone_mode != "none" || var.private_cluster_public_fqdn_enabled
     error_message = "private_dns_zone_mode = \"none\" leaves the API server only its public FQDN to be found by: set private_cluster_public_fqdn_enabled = true."
-  }
-}
-
-variable "private_dns_zone_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of the existing private DNS zone. Defaults to `resource_group_name`."
-}
-
-variable "role_assignment_propagation_delay" {
-  type        = string
-  default     = "60s"
-  description = <<DESCRIPTION
-How long to wait after creating the role assignments before creating the cluster. Azure RBAC is
-eventually consistent, so a cluster created the moment the assignment returns is regularly refused
-access to the subnet it is supposed to join. Set to `"0s"` to skip the wait, for example when the
-assignments already existed. Ignored when there are no assignments to wait for - either
-`create_role_assignments = false`, or a cluster that brings no network.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = can(regex("^[0-9]+(ms|s|m|h)$", var.role_assignment_propagation_delay))
-    error_message = "role_assignment_propagation_delay must be a duration such as \"60s\" or \"2m\"."
-  }
-}
-
-variable "sku_name" {
-  type        = string
-  default     = "Base"
-  description = "Managed cluster SKU name. `Base` for a normal cluster, `Automatic` for AKS Automatic."
-  nullable    = false
-
-  validation {
-    condition     = contains(["Automatic", "Base"], var.sku_name)
-    error_message = "sku_name must be either \"Base\" or \"Automatic\"."
   }
 }
 
@@ -1723,10 +1229,6 @@ DESCRIPTION
     condition     = contains(["Free", "Premium", "Standard"], var.sku_tier)
     error_message = "sku_tier must be one of \"Free\", \"Standard\" or \"Premium\"."
   }
-  validation {
-    condition     = var.sku_name != "Automatic" || var.sku_tier != "Free"
-    error_message = "AKS Automatic clusters require the \"Standard\" or \"Premium\" tier."
-  }
 }
 
 variable "subscription_id" {
@@ -1740,39 +1242,6 @@ variable "subscription_id" {
   }
 }
 
-variable "system_node_subnet_name" {
-  type        = string
-  default     = null
-  description = <<DESCRIPTION
-Name of the existing subnet used by the hosted system components of an AKS Automatic cluster.
-Required for AKS Automatic **in an existing virtual network**, ignored otherwise - a cluster that
-brings no network hosts them in the one AKS creates for it. **It must be a different subnet from
-`node_subnet_name`** - Azure hosts the system components separately from the nodes and refuses a
-request that names one subnet for both.
-DESCRIPTION
-
-  validation {
-    condition     = var.sku_name != "Automatic" || var.virtual_network_name == null || var.system_node_subnet_name != null
-    error_message = "AKS Automatic on an existing network requires system_node_subnet_name."
-  }
-  validation {
-    condition     = var.virtual_network_name != null || var.system_node_subnet_name == null
-    error_message = "system_node_subnet_name names a subnet of an existing virtual network, and this cluster brings none. AKS places the hosted system components in the network it creates for itself."
-  }
-  # Azure answers this one with `400 InvalidParameter: systemNodeByoSubnetId and nodeByoSubnetId
-  # must be different subnets`, so there is no point sending it.
-  validation {
-    condition     = var.sku_name != "Automatic" || var.system_node_subnet_name == null || var.system_node_subnet_name != var.node_subnet_name
-    error_message = "system_node_subnet_name must name a different subnet from node_subnet_name. AKS places the hosted system components of an Automatic cluster in their own subnet and rejects a request that gives it the node subnet."
-  }
-}
-
-variable "virtual_network_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of the existing virtual network. Defaults to `resource_group_name`."
-}
-
 variable "vertical_pod_autoscaler_enabled" {
   type        = bool
   default     = true
@@ -1782,18 +1251,13 @@ updater and admission controller, and the `VerticalPodAutoscaler` CRD. On in eve
 design section 2.3, pod right-sizing): each application's `VerticalPodAutoscaler` in its own
 repository resizes its pods in place (`updateMode: InPlaceOrRecreate`, Kubernetes 1.35+), within
 the bounds stated there. Turning it off removes the add-on and with it every resize; the
-`VerticalPodAutoscaler` objects then do nothing. Ignored for AKS Automatic, which runs it anyway.
+`VerticalPodAutoscaler` objects then do nothing.
 On is the production setting; off is a non-production cost saving (its components request ~2.4 GiB
 on the system pool).
 
 [vpa]: https://learn.microsoft.com/en-us/azure/aks/vertical-pod-autoscaler
 DESCRIPTION
   nullable    = false
-}
-
-variable "cost_analysis_enabled" {
-  type    = bool
-  default = false
 }
 
 variable "advanced_networking" {
@@ -1947,8 +1411,7 @@ variable "key_vault_namespace_vaults" {
   type        = map(string)
   default     = {}
   description = <<DESCRIPTION
-For a shared vault (key_vault_create = false): the namespaces whose share is in another of the
-environment's vaults than key_vault_name - an application namespace's in its isolation zone's vault -
+The namespaces whose share is in another of the environment's vaults than key_vault_name - an application namespace's in its isolation zone's vault -
 keyed by namespace, the vault's name as the value. shared/ makes the grants; the cluster looks the
 vault up, federates the namespace's identity, and tells the Flux repository the vault's URL as
 `key_vault_url_<namespace>` (hyphens as underscores) - every namespace gets that variable, the ones
@@ -1977,12 +1440,6 @@ Name of the environment's Log Analytics workspace (created by shared/, `log-<env
 cluster sends its Kubernetes audit log through a diagnostic setting - the categories in
 audit_log_categories (OneK8s design section 6.2, CIS AKS Benchmark 2.1.1). Null for none.
 DESCRIPTION
-}
-
-variable "log_analytics_workspace_resource_group_name" {
-  type        = string
-  default     = null
-  description = "Resource group of log_analytics_workspace_name. Defaults to resource_group_name."
 }
 
 variable "audit_log_categories" {

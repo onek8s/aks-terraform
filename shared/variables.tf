@@ -57,8 +57,8 @@ variable "key_vault_name" {
   type        = string
   default     = null
   description = <<DESCRIPTION
-Name of the environment's shared Key Vault, which the clusters name in their `key_vault_name` with
-`key_vault_create = false`. Key Vault names are global: 3 to 24 letters, digits and single hyphens,
+Name of the environment's platform Key Vault, which the clusters name in their `key_vault_name`. Key
+Vault names are global: 3 to 24 letters, digits and single hyphens,
 starting with a letter. Null: the naming policy's `key_vault` with the name `platform` (by default
 `kv-onek8s-<region code>-platform`).
 DESCRIPTION
@@ -140,28 +140,6 @@ variable "key_vault_admin_group_object_ids" {
   nullable    = false
 }
 
-variable "flux_github_webhook" {
-  type        = bool
-  default     = false
-  description = <<DESCRIPTION
-Whether to generate the token GitHub signs Flux webhook deliveries with, as
-`flux-system--github-webhook-token`. Every cluster's Receiver reads the same token, so each answers
-on the same path. `flux-system` needs a share in `key_vault_namespaces` to read it.
-DESCRIPTION
-  nullable    = false
-}
-
-variable "flux_github_webhook_namespaces" {
-  type        = list(string)
-  default     = []
-  description = <<DESCRIPTION
-Team namespaces whose own Flux Receiver reconciles the team's repository on a GitHub push: the same
-token is put in each one's share of the vault as `<namespace>--github-webhook-token`. Each needs a
-share in `key_vault_namespaces`; `flux_github_webhook` has to be on.
-DESCRIPTION
-  nullable    = false
-}
-
 variable "dns_zone_name" {
   type        = string
   default     = null
@@ -197,13 +175,6 @@ variable "virtual_network_name" {
   type        = string
   default     = null
   description = "Name of the clusters' network, created here with virtual_network_create."
-}
-
-variable "create_role_assignments" {
-  type        = bool
-  default     = true
-  description = "Whether to grant the identities and the people their access to the vault here, or leave it to whoever manages the estate's role assignments."
-  nullable    = false
 }
 
 variable "subscription_id" {
@@ -383,7 +354,7 @@ variable "isolation_zones" {
   description = <<DESCRIPTION
 The isolation zones - OneK8s design, "Isolation zone" - keyed by name (`int-fi`, `ext-se`):
 `exposure` `int` (reached from the corporate network) or `ext` (from the internet), and `index`, the
-zone's /24 in each cell's address space (1 to 14; 0 is the system pool's, 15 the API server's). A zone's index never
+zone's /24 in each cell's address space (1 to 14; 0 is the system pool's, 15 is reserved). A zone's index never
 changes once it is in use - a new country's zones take new ones.
 
 `enabled = false` disables a country's zone without giving up its index: no subnets, NSGs or private
@@ -407,7 +378,6 @@ variable "cells" {
   type = map(object({
     address_space     = string
     enabled           = optional(bool, true)
-    api_server_subnet = optional(bool, false)
     pod_network       = optional(string, "overlay")
     pod_address_space = optional(string)
   }))
@@ -421,11 +391,6 @@ half, a /25) and `snet-<zone>-ilb` (its fifth eighth, a /27).
 `enabled = false` keeps a cell in the specification - its address space stays reserved - without
 building its network: no VNet, subnets, NSGs, route table, hub peering or DNS links. Its cluster
 cannot be deployed while it is disabled.
-
-`api_server_subnet = true` adds `snet-apiserver`, delegated to AKS for API Server VNet Integration
-(design section 2.2). Azure refuses that integration on an encrypted network with v4 and newer VM sizes
-(`VNetEncryptionNotCompatibleWithAPIServerVNetIntegration`), and every cell network here is encrypted
-(section 4.1), so it stays off until that changes; a private cluster then uses Private Link instead.
 
 `pod_network` is where the cell's cluster gives its pods their addresses: `overlay` (Azure CNI Overlay,
 the default - the pods' range is `cell_pod_cidr`, translated to the node's address when it leaves the

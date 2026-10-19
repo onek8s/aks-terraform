@@ -46,27 +46,27 @@ check "ebpf_host_routing_needs_azure_linux_or_ubuntu_on_every_node" {
 
 # The isolation zones' node subnets, for their AKSNodeClasses or node pools, and their route tables.
 data "azurerm_subnet" "zone" {
-  for_each = local.byo_network ? var.isolation_zones : {}
+  for_each = var.isolation_zones
 
   name                 = each.value.node_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
 # A pod-subnet cell's pod subnets: the system pool's and each zone's (design D74).
 data "azurerm_subnet" "system_pods" {
-  count = local.byo_network && local.pod_subnet ? 1 : 0
+  count = local.pod_subnet ? 1 : 0
 
   name                 = var.default_node_pool.pod_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
 data "azurerm_subnet" "zone_pods" {
-  for_each = local.byo_network && local.pod_subnet ? var.isolation_zones : {}
+  for_each = local.pod_subnet ? var.isolation_zones : {}
 
   name                 = each.value.pod_subnet_name
-  resource_group_name  = local.virtual_network_resource_group_name
+  resource_group_name  = var.resource_group_name
   virtual_network_name = var.virtual_network_name
 }
 
@@ -134,8 +134,8 @@ locals {
 
 check "isolation_zones_need_nodes" {
   assert {
-    condition     = length(var.isolation_zones) == 0 || ((local.node_auto_provisioning || var.zone_node_pools != null) && local.byo_network)
-    error_message = "${var.name} names isolation zones, whose nodes go into their subnets of an existing network: turn on node_auto_provisioning_enabled, or set zone_node_pools, and name virtual_network_name."
+    condition     = length(var.isolation_zones) == 0 || var.node_auto_provisioning_enabled || var.zone_node_pools != null
+    error_message = "${var.name} names isolation zones, whose nodes come from node auto provisioning or the zones' node pools: turn on node_auto_provisioning_enabled, or set zone_node_pools."
   }
 }
 
@@ -148,7 +148,7 @@ check "a_pod_subnet_cell_names_every_pools_pod_subnet" {
 
 # The other vaults of a shared vault's namespaces - an application's zone vault.
 data "azurerm_key_vault" "namespace" {
-  for_each = local.key_vault_shared ? toset(values(var.key_vault_namespace_vaults)) : toset([])
+  for_each = toset(values(var.key_vault_namespace_vaults))
 
   name                = each.key
   resource_group_name = var.resource_group_name
@@ -158,7 +158,7 @@ locals {
   # The URL of the vault each namespace's share is in.
   key_vault_namespace_uris = {
     for namespace in local.key_vault_namespaces : namespace => (
-      contains(keys(var.key_vault_namespace_vaults), namespace) && local.key_vault_shared
+      contains(keys(var.key_vault_namespace_vaults), namespace)
       ? data.azurerm_key_vault.namespace[var.key_vault_namespace_vaults[namespace]].vault_uri
       : local.key_vault_uri
     )
@@ -175,7 +175,7 @@ data "azurerm_private_dns_zone" "internal" {
 }
 
 resource "azurerm_role_assignment" "external_dns_internal" {
-  for_each = var.create_role_assignments ? data.azurerm_private_dns_zone.internal : {}
+  for_each = data.azurerm_private_dns_zone.internal
 
   principal_id         = azurerm_user_assigned_identity.external_dns[0].principal_id
   scope                = each.value.id
@@ -187,7 +187,7 @@ locals {
   # What the Flux repository is told on top of flux_cluster_settings.
   flux_zone_settings = merge(
     {
-      for zone, subnet in data.azurerm_subnet.zone : "nap_subnet_id_${replace(zone, "-", "_")}" => subnet.id if local.node_auto_provisioning
+      for zone, subnet in data.azurerm_subnet.zone : "nap_subnet_id_${replace(zone, "-", "_")}" => subnet.id if var.node_auto_provisioning_enabled
     },
     {
       for namespace, uri in local.key_vault_namespace_uris : "key_vault_url_${replace(namespace, "-", "_")}" => uri

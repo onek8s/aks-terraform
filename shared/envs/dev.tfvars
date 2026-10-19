@@ -96,11 +96,10 @@ hub = {
 # proxy - in the corporate network behind the hub.
 internal_dns_zones = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
-
 # The environment's platform Key Vault (OneK8s design sections 4.1 and 4.2), kv-onek8s-gwc-platform by
-# the naming policy, which the clusters name in key_vault_name with key_vault_create = false: the
-# gateways' certificates, the clusters' customer-managed keys (so purge protection - a disk encryption
-# set needs it) and the Flux webhook token. Key Vault names are global; name it in key_vault_name if
+# the naming policy, which the clusters name in key_vault_name: the
+# gateways' certificates and the clusters' customer-managed keys (so purge protection - a disk encryption
+# set needs it). Key Vault names are global; name it in key_vault_name if
 # this one is taken. kv-onek8s-gwc-* since the move to germanywestcentral: kv-onek8s-dev-platform is
 # soft-deleted with purge protection in swedencentral (until 2027-01) and cannot be recovered into
 # another region.
@@ -210,10 +209,6 @@ key_vault_namespaces = {
 # Kubernetes views can offer a namespace to pick. Lab group grp-onek8s-dev-platform-viewers, with a
 # tester application the isolation tests sign in as.
 platform_viewer_group_object_ids = ["75353964-033e-4ea2-8ec4-f44e89fee6a6"]
-
-# No Flux webhook token: an internal cell has no public entry point for GitHub's deliveries, so Flux
-# polls (every minute).
-flux_github_webhook = false
 
 # The one zone the environment publishes in, public or private - the clusters say the same in their
 # own dns_zone_private. Public here, so every hostname resolves on the internet: onek8s.lol exists

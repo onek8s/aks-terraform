@@ -24,9 +24,7 @@
 # internal load balancer (the fifth eighth, a /27). A cell with `pod_network = "pod-subnet"` (design D74)
 # has no overlay: its pods take addresses of a pod subnet of their own, laid out the same way in a second
 # address space of the VNet, `pod_address_space` - a /16 of 100.64.0.0/10 with a /20 per slot:
-# `snet-system-pods` in slot 0, `snet-<zone>-pods` in the zone's. With `api_server_subnet`, slot 15 starts
-# with `snet-apiserver`, a /28 delegated to AKS for API Server VNet Integration (design section 2.2) -
-# which Azure refuses on an encrypted network with v4+ VM sizes, so no cell has it yet.
+# `snet-system-pods` in slot 0, `snet-<zone>-pods` in the zone's. Slot 15 is reserved.
 locals {
   # The enabled isolation zones: a disabled country's zone keeps its index but gets nothing.
   isolation_zones = { for zone, z in var.isolation_zones : zone => z if z.enabled }
@@ -60,15 +58,6 @@ locals {
           zone   = null
           kind   = "system-pods"
           prefix = local.cell_pod_slots[cell][0]
-        }
-      },
-      !settings.api_server_subnet ? {} : {
-        "${cell}/snet-apiserver" = {
-          cell   = cell
-          name   = "snet-apiserver"
-          zone   = null
-          kind   = "apiserver"
-          prefix = cidrsubnet(local.cell_slots[cell][15], 4, 0)
         }
       },
       merge([
@@ -140,22 +129,6 @@ locals {
         "${key}/lb-probes"   = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
         "${key}/same-subnet" = { subnet = key, priority = 150, protocol = "*", ports = ["*"], sources = [subnet.prefix] }
       } if contains(local.cell_host_kinds, subnet.kind)
-    ]...),
-    # The VNet-integrated API server: the kubelet (logs, exec) and admission webhooks
-    merge([
-      for key, subnet in local.cell_subnets : {
-        "${key}/api-server" = { subnet = key, priority = 160, protocol = "Tcp", ports = ["*"], sources = [local.cell_subnets["${subnet.cell}/snet-apiserver"].prefix] }
-      } if contains(local.cell_host_kinds, subnet.kind) && contains(keys(local.cell_subnets), "${subnet.cell}/snet-apiserver")
-    ]...),
-    # The API server's subnet: HTTPS from the network (the nodes, and through the hub's peering the
-    # management network and the labfw VPN, which arrive SNATed to the firewall), the nodes' tunnel
-    # port and the load balancer's health probes.
-    merge([
-      for key, subnet in local.cell_subnets : {
-        "${key}/lb-probes" = { subnet = key, priority = 140, protocol = "*", ports = ["*"], sources = ["AzureLoadBalancer"] }
-        "${key}/https"     = { subnet = key, priority = 200, protocol = "Tcp", ports = ["443"], sources = ["VirtualNetwork"] }
-        "${key}/tunnel"    = { subnet = key, priority = 210, protocol = "Tcp", ports = ["4443"], sources = local.cell_node_prefixes[subnet.cell] }
-      } if subnet.kind == "apiserver"
     ]...),
     # HTTPS to the entry points: an external zone's and the platform gateway's public load balancer
     # from the internet, an internal zone's load balancer from the virtual network. Port 443 only -
@@ -263,17 +236,6 @@ resource "azurerm_subnet" "cell" {
   address_prefixes     = [each.value.prefix]
   # The internal load balancers' subnets may carry a Private Link Service later.
   private_link_service_network_policies_enabled = each.value.kind != "ilb"
-
-  dynamic "delegation" {
-    for_each = each.value.kind == "apiserver" ? [1] : []
-    content {
-      name = "aks-api-server"
-      service_delegation {
-        name    = "Microsoft.ContainerService/managedClusters"
-        actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
-      }
-    }
-  }
 
   # A pod subnet is delegated to AKS: dynamic IP allocation adds the delegation when the first pool joins it,
   # and Azure refuses an update that takes it away (SubnetMissingRequiredDelegation), so it is stated here.
@@ -394,9 +356,8 @@ resource "azurerm_route_table" "zone" {
   }
 }
 
-# Node and pod subnets only: an internal load balancer's subnet holds no NICs, and the API server's answers
-# its clients by the system routes (the hub's peering). The system pool's subnets take the cell's table, a
-# zone's node and pod subnets the zone's.
+# Node and pod subnets only: an internal load balancer's subnet holds no NICs. The system pool's subnets
+# take the cell's table, a zone's node and pod subnets the zone's.
 resource "azurerm_subnet_route_table_association" "cell" {
   for_each = var.hub == null ? {} : { for key, subnet in local.cell_subnets : key => subnet if contains(local.cell_host_kinds, subnet.kind) }
 
@@ -465,6 +426,6 @@ resource "azurerm_private_dns_zone_virtual_network_link" "internal_hub" {
 check "cells_have_room_for_every_zone" {
   assert {
     condition     = alltrue([for zone in values(var.isolation_zones) : zone.index >= 1 && zone.index <= 14])
-    error_message = "An isolation zone's index picks its /24 in each cell's address space: 1 to 14 (0 is the system pool's, 15 the API server's)."
+    error_message = "An isolation zone's index picks its /24 in each cell's address space: 1 to 14 (0 is the system pool's, 15 is reserved)."
   }
 }

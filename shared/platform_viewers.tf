@@ -41,7 +41,7 @@ resource "azurerm_role_definition" "platform_viewer" {
 }
 
 resource "azurerm_role_assignment" "platform_viewer" {
-  for_each = var.create_role_assignments ? toset(var.platform_viewer_group_object_ids) : toset([])
+  for_each = toset(var.platform_viewer_group_object_ids)
 
   principal_id       = each.value
   scope              = local.resource_group_id
