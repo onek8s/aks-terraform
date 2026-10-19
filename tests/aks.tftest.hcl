@@ -695,9 +695,9 @@ run "a_namespace_closes_ingress_to_itself_and_leaves_egress_open" {
   assert {
     condition = alltrue([
       for namespace in azapi_resource.managed_namespace :
-      namespace.body.properties.defaultNetworkPolicy.egress == "AllowAll"
+      namespace.body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
     ])
-    error_message = "By default a workload should be able to reach out without further ado."
+    error_message = "By default a workload should reach nothing in another namespace."
   }
 }
 
@@ -762,7 +762,7 @@ run "a_namespace_overrides_only_the_defaults_it_names" {
         network_policy = { ingress = "AllowAll" }
       }
       team-search = {
-        network_policy = { egress = "AllowSameNamespace" }
+        network_policy = { egress = "AllowAll" }
       }
     }
   }
@@ -772,12 +772,12 @@ run "a_namespace_overrides_only_the_defaults_it_names" {
     error_message = "A namespace that opens ingress should get what it asked for."
   }
   assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
+    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
     error_message = "Overriding ingress should leave egress on the default."
   }
   assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
-    error_message = "A namespace that confines egress should get what it asked for."
+    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
+    error_message = "A namespace that opens egress should get what it asked for."
   }
   assert {
     condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
