@@ -73,9 +73,9 @@ data "azurerm_subnet" "zone_pods" {
 # The zones' classic node pools (zone_node_pools, design D74): per zone one per capacity type and
 # architecture, from zero nodes, in the zone's node subnet with the pods in its pod subnet - labelled and
 # tainted like the zone's NAP NodePools, so that the platform's placement mutations put a pod on them
-# unchanged. AKS adds its own spot taint and label to a spot pool; the spot toleration mutation tolerates
-# both. The cluster autoscaler's priority expander (the Flux repository's ConfigMap) tries the spot
-# pools first.
+# unchanged. AKS adds its own spot taint and label to a spot pool - the taint is stated here too, or
+# every plan would try to take it off again; the spot toleration mutation tolerates both. The cluster
+# autoscaler's priority expander (the Flux repository's ConfigMap) tries the spot pools first.
 locals {
   zone_node_pool_kinds = {
     ""        = { arch = "amd64", spot = false }
@@ -111,7 +111,7 @@ locals {
         )
         node_taints = concat(
           ["platform/zone=${zone}:NoSchedule"],
-          kind.spot ? ["platform/capacity=spot:NoSchedule"] : [],
+          kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
         )
         scale_set_priority        = kind.spot ? "Spot" : null
         scale_set_eviction_policy = kind.spot ? "Delete" : null

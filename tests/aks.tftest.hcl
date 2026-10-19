@@ -2314,7 +2314,7 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
       local.zone_agent_pools["intse"].availability_zones == tolist(["3"]) &&
       local.zone_agent_pools["intse"].pod_subnet_id != null &&
       local.zone_agent_pools["intsespot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/capacity" = "spot" }) &&
-      local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule"]) &&
+      local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
       local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
     )
     error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted like the zone's NodePools, their pods in the zone's pod subnet."
