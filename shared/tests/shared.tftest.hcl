@@ -49,6 +49,7 @@ mock_provider "azurerm" {
   }
 }
 mock_provider "azapi" {}
+mock_provider "random" {}
 
 variables {
   environment         = "test"
@@ -1348,5 +1349,49 @@ run "the_agents_openai_models_on_the_same_resource" {
       length(azapi_resource.agents_model) == 0
     )
     error_message = "An OpenAI model is a deployment of its own on the agents' resource."
+  }
+}
+
+run "the_webhook_token_is_flux_systems" {
+  command = plan
+
+  variables {
+    flux_github_webhook = true
+    key_vault_namespaces = {
+      flux-system = {}
+    }
+  }
+
+  assert {
+    condition     = azurerm_key_vault_secret.flux_github_webhook[0].name == "flux-system--github-webhook-token"
+    error_message = "The webhook's token should be in flux-system's share of the vault."
+  }
+}
+
+run "the_webhook_token_needs_flux_system_to_have_a_share" {
+  command = plan
+
+  variables {
+    flux_github_webhook = true
+  }
+
+  expect_failures = [azurerm_key_vault_secret.flux_github_webhook]
+}
+
+run "a_team_namespace_gets_the_webhook_token_in_its_share" {
+  command = plan
+
+  variables {
+    key_vault_namespaces = {
+      flux-system = {}
+      example     = {}
+    }
+    flux_github_webhook            = true
+    flux_github_webhook_namespaces = ["example"]
+  }
+
+  assert {
+    condition     = azurerm_key_vault_secret.flux_github_webhook_namespace["example"].name == "example--github-webhook-token"
+    error_message = "The example namespace should get the webhook token in its own share of the vault."
   }
 }

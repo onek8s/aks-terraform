@@ -3114,7 +3114,7 @@ run "an_unknown_os_disk_type_is_refused" {
   expect_failures = [var.default_node_pool]
 }
 
-run "a_cell_has_a_gateway_per_zone_and_nothing_else" {
+run "a_cell_without_the_webhook_has_a_gateway_per_zone_and_nothing_else" {
   command = plan
 
   variables {
@@ -3134,11 +3134,83 @@ run "a_cell_has_a_gateway_per_zone_and_nothing_else" {
 
   assert {
     condition     = keys(azapi_resource.traefik_flux_configuration) == ["int-fi"]
-    error_message = "One Gateway per zone, nothing else."
+    error_message = "Without the Flux webhook, one Gateway per zone and nothing else."
   }
   assert {
     condition     = !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "gateway_class_name_platform")
     error_message = "The Flux repository is told no platform gateway class."
   }
+}
+
+run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
+  command = plan
+
+  variables {
+    exposure                       = "ext"
+    node_auto_provisioning_enabled = true
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      ext-fi = { node_subnet_name = "snet-ext-fi-nodes" }
+    }
+    key_vault_name = "kv-onek8s-gwc-platform"
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    gateway_implementation = "traefik"
+    flux_github_webhook    = true
+  }
+
+  assert {
+    condition     = keys(azapi_resource.traefik_flux_configuration) == ["ext-fi", "platform"]
+    error_message = "The Flux webhook should bring the platform gateway beside the zone's."
+  }
+  assert {
+    condition = (
+      azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_namespace == "platform-gateway" &&
+      azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_internal == "false" &&
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_platform == "traefik-platform"
+    )
+    error_message = "The platform gateway should be public, in platform-gateway, and its class told to the Flux repository."
+  }
+  assert {
+    condition = alltrue([
+      contains(keys(azurerm_federated_identity_credential.key_vault), "flux-system"),
+      azurerm_federated_identity_credential.key_vault["flux-system"].subject == "system:serviceaccount:flux-system:key-vault",
+      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_flux_system"),
+    ])
+    error_message = "flux-system should get a share of the vault to read the webhook's token with."
+  }
+}
+
+run "the_flux_webhook_needs_a_vault" {
+  command = plan
+
+  variables {
+    flux_git_repository    = { url = "https://github.com/example/cluster-config" }
+    gateway_implementation = "traefik"
+    flux_github_webhook    = true
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.traefik_flux_configuration), "platform")
+    error_message = "No platform gateway without a vault to read the webhook's token from."
+  }
+
+  expect_failures = [check.flux_github_webhook_has_a_repository_a_vault_and_a_gateway]
+}
+
+run "the_flux_webhook_needs_a_gateway_implementation" {
+  command = plan
+
+  variables {
+    key_vault_name         = "kv-onek8s-gwc-platform"
+    flux_git_repository    = { url = "https://github.com/example/cluster-config" }
+    gateway_implementation = null
+    flux_github_webhook    = true
+  }
+
+  expect_failures = [check.flux_github_webhook_has_a_repository_a_vault_and_a_gateway]
 }
 
