@@ -35,13 +35,6 @@ default_node_pool = {
 }
 pod_subnet_name = "snet-system-pods"
 
-# ACNS without container network observability (Hubble): no hubble-relay, flow logs or Hubble metrics
-# (design D56). FQDN network policies and eBPF host routing stay on. Production: advanced_networking = {}
-# (all on, the default); turning Hubble back on is an in-place update.
-advanced_networking = {
-  observability = false
-}
-
 # Egress through the hub firewall: the
 # cell's subnets send 0.0.0.0/0 there (shared/: hub), so AKS creates no outbound load balancer rule, and
 # labfw translates every flow that leaves the landing zone. Neither can change on a running cluster.

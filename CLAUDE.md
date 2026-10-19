@@ -85,9 +85,11 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `CriticalAddonsOnly`. It fits only with the lab's cost savings, stated in one "Non-production cost savings" block of
   `envs/dev-int-stateless.tfvars`: Free tier, `gateway_implementation = "traefik"`, VPA add-on off (aks-hello's
   VerticalPodAutoscaler is patched out in the example repo). variables.tf defaults are production (Standard,
-  `approuting-istio`, VPA on, `advanced_networking = {}`, 2 x Standard_D4ds_v5) - README "Production defaults and
+  `approuting-istio`, VPA on, 2 x Standard_D4ds_v5) - README "Production defaults and
   non-production cost savings". The stateful tfvars state `gateway_implementation = null` (R9a).
-- **ACNS** with FQDN policies and eBPF host routing (decided at creation), Hubble off (`{ observability = false }`, D56).
+- **No ACNS** (D80, cell rebuilt 2026-10-19): `advanced_networking = null` is the default - no Hubble, FQDN policies or
+  eBPF host routing. The fleet's Cilium policies are layer 3 and 4 only (no `toFQDNs`, no DNS rules - both need the
+  ACNS DNS proxy); platform namespaces go out on 443 to `world`, labfw decides.
 - **Hub: azure-landing-zone mode `labfw`** - VM `labfw-fw` (Standard_B2ats_v2, 10.0.1.4, public IP 4.184.103.12,
   `rg-hub-labfw-germanywestcentral` in sub-hub) enforces `afwp-hub-int-germanywestcentral` + parent. The cell is peered
   with `vnet-hub-germanywestcentral`; `rt-<cell>` (0.0.0.0/0 -> 10.0.1.4) on the system subnets, `rt-<cell>-<zone>` on
@@ -190,8 +192,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Spot, architecture and GPUs are the application's choice** (R17), stated only as pod labels `platform/arch`,
   `platform/capacity: spot`, `platform/accelerator: nvidia-gpu` (+ `nvidia.com/gpu`); the policy mutations do the rest.
   A spot pod falls back to on-demand. amd64 and arm64 both offered; aks-hello is amd64 only.
-- **eBPF host routing (BpfVeth) only at cluster creation** ("User-installed iptables rules found" otherwise), through
-  AVM 0.8.5's `network_profile.advanced_networking.performance.acceleration_mode`.
+- **No ACNS** (D80): Hubble, FQDN filtering and eBPF host routing are options kept open (design 7.4). eBPF host routing
+  (BpfVeth) only at cluster creation ("User-installed iptables rules found" otherwise), through AVM 0.8.5's
+  `network_profile.advanced_networking.performance.acceleration_mode`.
 - **Private API server everywhere** (D58), runners on the labfw VPN. **No public endpoints** (D60) but the non-prd
   Basic registry (D62).
 - **Secrets only through ESO**; vault shares by ABAC prefix `<namespace>--`; gateway certs `<zone>-gateway--wildcard`
@@ -224,8 +227,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `production.cloudfront.docker.com`, `external-secrets.io`). labfw applies a policy change ~2 min after the Platform
   apply (`systemctl kill -s HUP labfw` at once). The fleet's HelmReleases retry forever (`retries: -1`).
 - **Kestrel's default `Http1AndHttp2` is HTTP/1.1 only on a plain port**: h2c needs an `Http2`-only port.
-- **Cilium DNS rules must cover the pod's search suffixes** (incl. `<id>.<x>.internal.cloudapp.net`), or musl stops
-  resolving.
+- **Cilium DNS rules (ACNS only) must cover the pod's search suffixes** (incl. `<id>.<x>.internal.cloudapp.net`), or
+  musl stops resolving. Without ACNS a policy may carry neither DNS rules nor `toFQDNs`.
 - **A `Microsoft.Kubernetes.Data` policy rule may test only `type`, `location` and `tags`** of the cluster
   (`InvalidPolicyAliasFormat`, only at apply); scope by `not_scopes`. Custom mutations cannot be parameterized. New
   parameters on an assigned definition need a `defaultValue`. An assignment display name over 128 characters fails

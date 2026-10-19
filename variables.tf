@@ -1025,20 +1025,20 @@ variable "advanced_networking" {
     fqdn_policies     = optional(bool, true)
     ebpf_host_routing = optional(bool, true)
   })
-  default     = {}
+  default     = null
   description = <<DESCRIPTION
-Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium - OneK8s design
-section 16. Defaults to all three on, the production setting; null turns ACNS off - a cluster without
-the Cilium dataplane, or a cell whose egress the hub firewall alone decides (the zones' Cilium policies then
-stay at layer 4). Decided when the cluster is created.
-`observability = false` is a non-production cost saving (D56): FQDN policies keep working.
+Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium. Off by default: OneK8s
+does not use ACNS (design D80) - the hub firewall decides egress, Cilium keeps the in-cluster rules at
+layers 3 and 4. Each part is an option kept open with a measured trigger (design section 7.4); an
+object turns ACNS on with the parts it names (each on unless set to false). eBPF host routing is
+decided when the cluster is created.
 
 - `observability` - Hubble flow logs and metrics.
-- `fqdn_policies` - Cilium network policies with `toFQDNs`, resolved by the ACNS DNS proxy: what lets
-  an application's egress name its destinations.
+- `fqdn_policies` - Cilium network policies with `toFQDNs` and DNS rules, resolved by the ACNS DNS
+  proxy. Without it the fleet's Cilium policies may not use either.
 - `ebpf_host_routing` - eBPF host routing (`accelerationMode: BpfVeth`): no iptables in the node's
   network namespace. Every node has to run Azure Linux 3.0 or Ubuntu 24.04 on Kubernetes 1.33 or
-  later - set default_node_pool.os_sku. Turning it on or off rolls the nodes.
+  later - set default_node_pool.os_sku.
 DESCRIPTION
 
   validation {
