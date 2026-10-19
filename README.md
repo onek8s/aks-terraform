@@ -186,18 +186,17 @@ assignments can be scoped to the namespace alone - see
 | | Default | What it means |
 | --- | --- | --- |
 | `network_policy.ingress` | `AllowSameNamespace` | Only pods of the same namespace can open a connection to a pod in it. |
-| `network_policy.egress` | `AllowAll` | A pod may reach the API server, DNS, the internet and the rest of the cluster. |
+| `network_policy.egress` | `AllowSameNamespace` | A pod may open connections only to pods of its own namespace - nothing in another namespace. What else it reaches the platform adds: DNS, and outside the cluster through the hub firewall (aks-fluxcd-platform's zone policies). |
 | `adoption_policy` | `Never` | A Kubernetes namespace of that name that already exists fails the apply instead of being taken over. |
 | `delete_policy` | `Keep` | Removing the entry deletes the Azure resource and leaves the Kubernetes namespace, and whatever runs in it, standing. |
 | `resource_quota` | 2 cores and 4Gi of limits, 500m and 1Gi of requests | Azure requires a quota on every managed namespace, so this is a ceiling to raise or lower rather than one to turn off. |
 | `pod_security` | `restricted` | The namespace is held to the hardened [Pod Security Standard][pss], enforced, audited and warned about - see [Pod Security Standards](#pod-security-standards). |
 
-**Closed inbound, open outbound** is the shape this settles on: a workload talks out to what it
-needs without anyone having to enumerate it, and nothing in another namespace talks in until it is
-allowed to. It is the half of the pair that is worth having by default - the one that stops a
-compromised or merely misconfigured workload in one namespace from reaching straight into another -
-while a default-deny egress would break DNS, the API server and every outbound call on the first
-day and be turned off again by the afternoon.
+**Everything inside the namespace, nothing between namespaces** is the shape this settles on, in
+both directions: a compromised or misconfigured workload in one namespace can neither be reached
+from another nor reach into one. Policies add up, so the platform's own policies open what every
+application needs beside it - DNS to CoreDNS, and the world outside the cluster, where the hub
+firewall decides per application (design section 5.1) - without a namespace reaching its neighbours.
 
 These are the namespace's *default* policies, not a ceiling. Kubernetes network policies are
 additive, so a `NetworkPolicy` applied inside the namespace can only widen what these permit -
@@ -213,9 +212,9 @@ managed_namespaces = {
   team-payments = {
     network_policy = { ingress = "AllowAll" }
   }
-  # Batch jobs that have no business reaching anything outside their own namespace.
+  # Calls the Services of other namespaces.
   team-search = {
-    network_policy = { egress = "AllowSameNamespace" }
+    network_policy = { egress = "AllowAll" }
     resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
   }
 }

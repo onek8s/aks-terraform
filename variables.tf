@@ -542,7 +542,7 @@ variable "managed_namespace_defaults" {
     delete_policy   = optional(string, "Keep")
     labels          = optional(map(string), {})
     network_policy = optional(object({
-      egress  = optional(string, "AllowAll")
+      egress  = optional(string, "AllowSameNamespace")
       ingress = optional(string, "AllowSameNamespace")
     }), {})
     pod_security = optional(object({
@@ -561,7 +561,7 @@ variable "managed_namespace_defaults" {
   default     = {}
   description = <<DESCRIPTION
 What every entry in `managed_namespaces` gets unless it says otherwise: the default `NetworkPolicy`
-(`ingress` `AllowSameNamespace`, `egress` `AllowAll`; each `AllowAll`, `AllowSameNamespace` or `DenyAll` -
+(`ingress` and `egress` `AllowSameNamespace`: no traffic between namespaces; each `AllowAll`, `AllowSameNamespace` or `DenyAll` -
 Kubernetes network policies are additive, so a policy in the namespace can only widen these), the Pod
 Security Standard (`enforce`, `audit` and `warn`: `restricted`, `baseline`, `privileged` or `none`; `version`
 `latest` or `v1.NN`), the `ResourceQuota` Azure requires on every managed namespace (CPU in Kubernetes
