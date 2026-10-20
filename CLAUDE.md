@@ -116,6 +116,14 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `firewall-applications/<env>-<exposure>/<namespace>.yaml`; platform allow-lists in parent `rcg-platform` (AKS FQDN
   tag, `AzureCloud.germanywc` 443 - service tags use the short region name, `service_tag_region`) + child `rcg-aks-dev`.
   Denials go to Log Analytics `log-labfw-germanywestcentral`, table `LabfwFirewallLog_CL` (~10 min latency).
+  **Summary rules on that workspace (2026-10-20, design D84, azure-landing-zone `modules/firewall-log-summaries`):**
+  `firewall-denied-flows` and `firewall-rule-hits` hourly into `FirewallDeniedFlows_CL` (per source, destination,
+  port, rule: Count, FirstSeen, LastSeen) and `FirewallRuleHits_CL` (per rule and action: Count, Sources,
+  Destinations), `firewall-zone-traffic` daily into `FirewallZoneTraffic_CL`; every row carries `Environment` and
+  `Zone` from the source address (the zone slots, `system`, `shared`, `management`, `client`, `vpn`, `hub`, `other`),
+  generated from the stack's spoke prefixes. Hourly tables keep 90 days, the daily one 395; a bin lands 1-2 h after
+  the flow (the daily one the next day); run log in `LASummaryLogs`. The egress agent keeps reading the raw table.
+  V34 (the summaries fill, attributed to the right zone) is open - the user checks it in the portal or over the VPN.
 - **Private API server** (D58): classic private cluster over Private Link (endpoint in snet-system),
   `private_dns_zone_mode = "none"` + public FQDN resolving to the private IP. Not API Server VNet Integration (Azure
   refuses it on encrypted VNets with v4+ sizes, H14). `az aks command invoke` is the break-glass (namespace
