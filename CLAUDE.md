@@ -93,8 +93,11 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Hub: azure-landing-zone mode `labfw`** - VM `labfw-fw` (Standard_B2ats_v2, 10.0.1.4, public IP 4.184.103.12,
   `rg-hub-labfw-germanywestcentral` in sub-hub) enforces `afwp-hub-int-germanywestcentral` + parent. The cell is peered
   with `vnet-hub-germanywestcentral`; `rt-<cell>` (0.0.0.0/0 -> 10.0.1.4) on the system subnets, `rt-<cell>-<zone>` on
-  each zone's node and pod subnets (default route + every other zone's node and pod slot, 1-14, never its own nor
-  slot 0; D73) so zone-to-zone traffic meets the firewall (V31 denial not tested yet). VNet DNS = labfw's DNS proxy;
+  each zone's node and pod subnets (seven routes since 2026-10-20: default route + the cell's `address_space` and
+  `pod_address_space` -> 10.0.1.4, the zone's own and the system pool's node and pod slots `VnetLocal`; D73) so
+  zone-to-zone traffic meets the firewall (V31 denial not tested yet). Between zones only an application rule
+  (FQDN, the caller's rule file) to the other zone's published name: the firewall proxies it from its own address,
+  so the gateway's answer returns through the hub; never a network rule between zone slots (asymmetric). VNet DNS = labfw's DNS proxy;
   `outbound_type = "userDefinedRouting"`. labfw SNATs what leaves 10.0.0.0/16, 10.100.0.0/16, 172.16.0.0/12,
   192.168.0.0/16, 100.64.0.0/10; zone IP groups list node + pod slots. Egress per application from azure-landing-zone
   `firewall-applications/<env>-<exposure>/<namespace>.yaml`; platform allow-lists in parent `rcg-platform` (AKS FQDN

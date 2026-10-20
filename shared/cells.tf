@@ -13,11 +13,11 @@
 # stop: Cilium, in the platform repository. With `hub` (the build tenant's network mode `labfw`, or
 # `firewall`) every cell is peered with the landing zone's hub and its node subnets send everything
 # else to the hub's firewall, which decides what a cell reaches outside its own network - and, since
-# design D73, what one zone of the cell may reach in another: a zone's node subnet has a route table
-# of its own, `rt-<cell>-<zone>`, that routes every other zone's slot to the firewall as well, while
-# the system pool's subnet keeps `rt-<cell>` with the default route alone. Without a hub (`sandbox`)
-# the nodes reach the internet through the cluster's load balancer and the NSGs and Cilium are the
-# boundaries.
+# design D73, what one zone of the cell may reach in another: a zone's node and pod subnets have a
+# route table of their own, `rt-<cell>-<zone>`, that sends the cell's own address spaces to the
+# firewall as well, the zone's own and the system pool's slots excepted, while the system pool's
+# subnets keep `rt-<cell>` with the default route alone. Without a hub (`sandbox`) the nodes reach
+# the internet through the cluster's load balancer and the NSGs and Cilium are the boundaries.
 #
 # Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the system
 # pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first half) and its
@@ -292,34 +292,35 @@ resource "azurerm_route_table" "cell" {
   }
 }
 
-# A zone's route table (design D73): the default route, plus every other zone's slot - occupied or
-# free, so that a new zone changes no existing table - with the hub's firewall as the next hop. A
-# slot's route is more specific than the virtual network's system route, so what one zone sends to
-# another leaves for the firewall, which denies and logs it (nothing is allowed between zones, design
-# R5 and section 2.4); a flow the firewall did allow would come back through the hub's peering. Not
-# the zone's own slot: Azure applies a route to the traffic within a subnet too, and the nodes of one
-# zone talk to each other directly. Not the system pool's slot either, for the flows above. The other
-# zones' pod slots are routed the same way, and the pod subnets take their pool's table, so the firewall
-# sees the pods too. Each route is named after
-# the zone that holds the slot (enabled or not), or `slot-<n>` while it is free; a pod slot's adds `-pods`.
+# A zone's route table (design D73): seven routes, the same for every zone and every number of zones.
+# The default route and the cell's two address spaces - the nodes' and load balancers', and the pods' -
+# go to the hub's firewall: a route for the whole address space takes precedence over the virtual
+# network's system route for the same prefix, so what one zone sends to another zone's nodes, load
+# balancer or pods leaves for the firewall, which denies and logs it. Nothing is allowed between
+# zones (design R5 and section 2.4); an application reaches another zone's application only as a
+# client of that zone's entry point, with an application rule (FQDN) in its own rule file, which the
+# firewall proxies from its own address (the answer comes back to it through the hub's peering and
+# the system subnets' default route). Four more specific routes stay inside the virtual network
+# (`VnetLocal`): the zone's own node and pod slots - Azure applies a route to the traffic within a
+# subnet too, and the nodes and pods of one zone talk to each other directly - and the system pool's
+# slot 0, nodes and pods: the kubelet tunnel, metrics-server, CoreDNS, the API server's private
+# endpoint and every zone's gateway pods are there (design section 2.4, flows 1 to 4). A new zone
+# changes no existing table.
 locals {
   cell_zone_route_tables = var.hub == null ? {} : merge([
     for cell, settings in local.cells : {
       for zone, z in local.isolation_zones : "${cell}/${zone}" => {
         cell = cell
         zone = zone
-        routes = merge(
-          {
-            for index in range(1, 15) :
-            "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-via-hub-firewall" => local.cell_slots[cell][index]
-            if index != z.index
-          },
-          {
-            for index in range(1, 15) :
-            "${coalesce(one([for other, o in var.isolation_zones : other if o.index == index]), "slot-${index}")}-pods-via-hub-firewall" => local.cell_pod_slots[cell][index]
-            if index != z.index
-          },
-        )
+        routes = {
+          "default-via-hub-firewall" = { prefix = "0.0.0.0/0", direct = false }
+          "nodes-via-hub-firewall"   = { prefix = settings.address_space, direct = false }
+          "pods-via-hub-firewall"    = { prefix = settings.pod_address_space, direct = false }
+          "own-nodes-direct"         = { prefix = local.cell_slots[cell][z.index], direct = true }
+          "own-pods-direct"          = { prefix = local.cell_pod_slots[cell][z.index], direct = true }
+          "system-nodes-direct"      = { prefix = local.cell_slots[cell][0], direct = true }
+          "system-pods-direct"       = { prefix = local.cell_pod_slots[cell][0], direct = true }
+        }
       }
     }
   ]...)
@@ -333,20 +334,13 @@ resource "azurerm_route_table" "zone" {
   resource_group_name           = local.resource_group_name
   bgp_route_propagation_enabled = false
 
-  route {
-    name                   = "default-via-hub-firewall"
-    address_prefix         = "0.0.0.0/0"
-    next_hop_type          = "VirtualAppliance"
-    next_hop_in_ip_address = var.hub.next_hop_ip
-  }
-
   dynamic "route" {
     for_each = each.value.routes
     content {
       name                   = route.key
-      address_prefix         = route.value
-      next_hop_type          = "VirtualAppliance"
-      next_hop_in_ip_address = var.hub.next_hop_ip
+      address_prefix         = route.value.prefix
+      next_hop_type          = route.value.direct ? "VnetLocal" : "VirtualAppliance"
+      next_hop_in_ip_address = route.value.direct ? null : var.hub.next_hop_ip
     }
   }
 }
