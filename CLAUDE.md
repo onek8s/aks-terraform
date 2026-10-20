@@ -205,8 +205,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   AZURE_CLIENT_ID; set it again with Lab admin (gh) after any rebuild of sub-mgmt.
 - **Quotas** (germanywestcentral, sub-aks-dev): regional 38, Dpsv6 16, Daldv6 8 (system node 4 + two D2alds_v6),
   low-priority 3 (one spot D2alds_v6; raises get throttled - retry at most hourly). sub-hub: Basv2 4 (labfw).
-- **Backlog**: design section 7.1 "Backlog, in priority order". Pick from the top unless the user says otherwise;
-  update the list there when an item is done. V32 (spot fallback, labfw's log naming the pod) and V31 are open -
+- **Backlog**: tracked with the implementation, not in the design (removed from 7.1 in v2.1; 7.1 is in the design's
+  unpublished `archive/` since v4.0). V32 (spot fallback, labfw's log naming the pod) and V31 are open -
   V31 can now be tested: both zones run in az3 (Isolation tests, only when the user asks).
 
 ## Decisions already made (do not re-litigate)
@@ -231,7 +231,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Spot, architecture and GPUs are the application's choice** (R17), stated only as pod labels `platform/arch`,
   `platform/capacity: spot`, `platform/accelerator: nvidia-gpu` (+ `nvidia.com/gpu`); the policy mutations do the rest.
   A spot pod falls back to on-demand. amd64 and arm64 both offered; aks-hello is amd64 only.
-- **No ACNS** (D80): Hubble, FQDN filtering and eBPF host routing are options kept open (design 7.4). eBPF host routing
+- **No ACNS** (D80): Hubble, FQDN filtering and eBPF host routing are options kept open (design 5.1; the outlook is in the design's unpublished archive/ since v4.0). eBPF host routing
   (BpfVeth) only at cluster creation ("User-installed iptables rules found" otherwise), through AVM 0.8.5's
   `network_profile.advanced_networking.performance.acceleration_mode`.
 - **Private API server everywhere** (D58), runners on the labfw VPN. **No public endpoints** (D60) but the non-prd
