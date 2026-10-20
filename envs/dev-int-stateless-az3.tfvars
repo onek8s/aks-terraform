@@ -1,5 +1,5 @@
 # Internal cell `int-stateless-az3` of the OneK8s dev environment (design section 3.1), the lab's one cell:
-# availability zone 3, Sweden's zone. Azure CNI Pod Subnet with dynamic IP allocation - the pods take
+# availability zone 3, Sweden's and Finland's zones. Azure CNI Pod Subnet with dynamic IP allocation - the pods take
 # addresses of their pool's pod subnet in 100.64.0.0/16 and keep them up to the hub's firewall (labfw),
 # which decides every flow that leaves the cluster by zone (the subnet) and by application (the pod's
 # address, which the egress agent of onek8s/aks-ai-agents maps to its namespace). The zone's nodes come
@@ -42,31 +42,36 @@ network_profile = {
   outbound_type = "userDefinedRouting"
 }
 
-# Sweden's zone: its nodes in snet-int-se-nodes with their pods in snet-int-se-pods, from classic node
-# pools - intse, intsespot, intsearm, intsearmspot, from zero nodes in availability zone 3 - scaled by the
-# cluster autoscaler, whose priority expander takes the spot pools first (aks-fluxcd-platform,
-# clusters/dev-int-stateless-az3). Sized for the lab's quotas in germanywestcentral: Daldv6
-# 8 vCPUs (the system node takes 4, so two 2-vCPU amd64 nodes), low-priority (spot) 3 vCPUs (one spot
-# node). Its gateway reads its listener certificate from the platform vault (int-se-gateway--wildcard);
-# flux-system the observability chart's credentials. The application namespace's share is in the zone's
-# vault; the zone's names are in shared/'s private DNS zone.
+# The zones - Sweden's int-se and, since 2026-10-20, Finland's int-fi, so that the lab has two zones in one
+# cell to test the isolation between them (design D73, V31): each zone's nodes in snet-<zone>-nodes with
+# their pods in snet-<zone>-pods, from classic node pools - <zone>, <zone>spot, <zone>arm, <zone>armspot,
+# from zero nodes in availability zone 3 - scaled by the cluster autoscaler, whose priority expander takes
+# the spot pools first (aks-fluxcd-platform, clusters/dev-int-stateless-az3). Sized for the lab's quotas in
+# germanywestcentral: Daldv6 8 vCPUs (the system node takes 4, so two 2-vCPU amd64 nodes in all - one per
+# zone), low-priority (spot) 3 vCPUs (one spot node; the other zone's spot pod falls back to on-demand).
+# Each gateway reads its listener certificate from the platform vault (<zone>-gateway--wildcard);
+# flux-system the observability chart's credentials. The application namespaces' shares are in their
+# zone's vault; the zones' names are in shared/'s private DNS zones.
 zone_node_pools = {
-  max_count      = 2
+  max_count      = 1
   spot_max_count = 1
 }
 isolation_zones = {
+  int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
   int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
 }
-key_vault_namespaces = ["flux-system", "int-se-gateway"]
+key_vault_namespaces = ["flux-system", "int-fi-gateway", "int-se-gateway"]
 key_vault_namespace_vaults = {
+  int-fi-example = "kv-onek8s-gwc-int-fi"
   int-se-example = "kv-onek8s-gwc-int-se"
 }
-internal_dns_zone_names = ["int-se.dev.onek8s.lol"]
+internal_dns_zone_names = ["int-fi.dev.onek8s.lol", "int-se.dev.onek8s.lol"]
 
-# The `example` team's application, in the int-se zone (design section 2.6: one namespace per
-# application and zone, `<zone>-<app>`). Its own Flux configuration deploys firewall-egress/ of
-# onek8s/aks-fluxcd-example into it - aks-hello on the zone's own nodes, with its weather forecast from
-# the internet - and its routes attach to the int-se gateway. Ingress and egress inside the cluster are
+# The `example` team's application, once per zone (design section 2.6: one namespace per application
+# and zone, `<zone>-<app>`). Each namespace's own Flux configuration deploys onek8s/aks-fluxcd-example
+# into it - aks-hello on the zone's own nodes, with its weather forecast from the internet - and its
+# routes attach to the zone's gateway: firewall-egress/ into int-se-example, firewall-egress-int-fi/
+# (the same with Helsinki's forecast) into int-fi-example. Ingress and egress inside the cluster are
 # closed to its own namespace by the namespace's default policies; egress outside the cluster is left
 # to labfw (design section 5.2): the zone's platform policy lets it leave, and the firewall allows only what the
 # zone's and the application's firewall rules name - anything else is denied there, and the egress agent
@@ -99,6 +104,37 @@ managed_namespaces = {
       substitute = {
         zone        = "int-se"
         zone_domain = "int-se.dev.onek8s.lol"
+        home_cell   = "aks-dev-int-stateless-az3"
+      }
+    }
+  }
+  int-fi-example = {
+    owner = {
+      team        = "example"
+      cost_center = "example"
+      contact     = "https://github.com/onek8s/aks-fluxcd-example/issues"
+    }
+    labels = {
+      "platform/zone" = "int-fi"
+    }
+    # The lab groups of shared/'s key_vault_namespaces.int-fi-example (design D49): view, edit and admin
+    # in the namespace, and the same roles on the namespace's share of the zone's vault.
+    groups = {
+      view  = "6d9ae939-5e03-4ddb-b378-baa7fa5b5180"
+      edit  = "88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc"
+      admin = "71438fbc-0666-4d82-be17-54b61236d657"
+    }
+    network_policy = {
+      ingress = "AllowSameNamespace"
+      egress  = "AllowSameNamespace"
+    }
+    flux = {
+      url                   = "https://github.com/onek8s/aks-fluxcd-example"
+      path                  = "./firewall-egress-int-fi"
+      sync_interval_seconds = 60
+      substitute = {
+        zone        = "int-fi"
+        zone_domain = "int-fi.dev.onek8s.lol"
         home_cell   = "aks-dev-int-stateless-az3"
       }
     }
