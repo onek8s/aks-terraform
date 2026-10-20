@@ -462,7 +462,7 @@ run "a_disabled_country_keeps_its_index_and_gets_nothing" {
   }
 }
 
-run "a_disabled_country_keeps_its_slot_in_the_other_zones_routes" {
+run "a_disabled_country_gets_no_route_table_but_its_slot_is_still_routed" {
   command = plan
 
   variables {
@@ -483,9 +483,10 @@ run "a_disabled_country_keeps_its_slot_in_the_other_zones_routes" {
   assert {
     condition = (
       keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "int-se-via-hub-firewall 172.22.2.0/24")
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "nodes-via-hub-firewall 172.22.0.0/20 VirtualAppliance") &&
+      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : r.address_prefix], "172.22.2.0/24")
     )
-    error_message = "A disabled zone gets no route table, but its slot is routed to the firewall from the other zones under its name."
+    error_message = "A disabled zone gets no route table; its slot is routed to the firewall from the other zones by the cell's address space, not by a route of its own."
   }
 }
 
@@ -524,20 +525,18 @@ run "a_cell_behind_the_hub_firewall" {
     condition = (
       keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
       !azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].bgp_route_propagation_enabled &&
-      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 1 + 13 + 13 &&
-      alltrue([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : r.next_hop_type == "VirtualAppliance" && r.next_hop_in_ip_address == "10.0.1.4"]) &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "default-via-hub-firewall 0.0.0.0/0") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "slot-2-via-hub-firewall 172.22.2.0/24") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix}"], "slot-14-via-hub-firewall 172.22.14.0/24")
+      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 7 &&
+      toset([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type} ${coalesce(r.next_hop_in_ip_address, "-")}"]) == toset([
+        "default-via-hub-firewall 0.0.0.0/0 VirtualAppliance 10.0.1.4",
+        "nodes-via-hub-firewall 172.22.0.0/20 VirtualAppliance 10.0.1.4",
+        "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance 10.0.1.4",
+        "own-nodes-direct 172.22.1.0/24 VnetLocal -",
+        "own-pods-direct 100.64.16.0/20 VnetLocal -",
+        "system-nodes-direct 172.22.0.0/24 VnetLocal -",
+        "system-pods-direct 100.64.0.0/20 VnetLocal -",
+      ])
     )
-    error_message = "A zone's table (design D73) sends the default route and every other slot, occupied or free, to the hub's firewall."
-  }
-  assert {
-    condition = !anytrue([
-      for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route :
-      contains(["172.22.0.0/24", "172.22.1.0/24", "172.22.15.0/24"], r.address_prefix)
-    ])
-    error_message = "A zone's table routes neither the system pool's slot, nor the zone's own, nor the API server's to the firewall."
+    error_message = "A zone's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall, and keeps the zone's own and the system pool's slots inside the virtual network."
   }
   assert {
     condition = (
@@ -694,13 +693,15 @@ run "a_cell_has_pod_subnets_in_a_second_address_space" {
     condition = (
       contains(keys(azurerm_subnet_route_table_association.cell), "dev-int-stateless-az3/snet-system-pods") &&
       contains(keys(azurerm_subnet_route_table_association.cell), "dev-int-stateless-az3/snet-int-se-pods") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix}"], "int-fi-via-hub-firewall 10.100.1.0/24") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix}"], "int-fi-pods-via-hub-firewall 100.64.16.0/20") &&
-      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.32.0/20") &&
-      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.0.0/20") &&
-      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 1 + 13 + 13
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "nodes-via-hub-firewall 10.100.0.0/16 VirtualAppliance") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-nodes-direct 10.100.2.0/24 VnetLocal") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-pods-direct 100.64.32.0/20 VnetLocal") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "system-pods-direct 100.64.0.0/20 VnetLocal") &&
+      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "10.100.1.0/24") &&
+      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 7
     )
-    error_message = "A pod subnet takes its pool's route table, and the zone tables route the other zones' pod slots to the firewall too - never the zone's own or the system pool's."
+    error_message = "A pod subnet takes its pool's route table, and the zone table routes the cell's pod address space to the firewall too - the zone's own and the system pool's pod slots stay in the virtual network."
   }
 }
 
