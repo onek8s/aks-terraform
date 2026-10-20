@@ -234,12 +234,15 @@ resource "azurerm_subnet" "cell" {
   address_prefixes     = [each.value.prefix]
   # The internal load balancers' subnets may carry a Private Link Service later.
   private_link_service_network_policies_enabled = each.value.kind != "ilb"
-  # The system subnet holds the API server's private endpoint (a private cluster, design D58). Private
-  # endpoints ignore their subnet's NSG and route table unless told otherwise; with `Enabled` both apply
-  # to it, so its answers to the zones' nodes take the system table's route to the hub's firewall - the
-  # way their requests came - and never the VNet's own (design D73; an asymmetric flow is dropped by a
-  # stateful firewall).
-  private_endpoint_network_policies = each.value.kind == "system" ? "Enabled" : "Disabled"
+  # The system subnet holds the API server's private endpoint (a private cluster, design D58). A private
+  # endpoint ignores its subnet's route table (`Disabled`, Azure's default): every subnet of the VNet gets
+  # a /32 system route to it that wins over the user-defined routes, so the zones' nodes reach the API
+  # server directly and it answers them directly - the one Kubernetes flow the hub's firewall does not
+  # see (design D73). `Enabled` was tried on 2026-10-20 and took the cell down within a minute: the
+  # endpoint's answers to the system pool's own nodes and pods followed the table's address-space route
+  # to the firewall while their requests had stayed inside the subnet, the firewall dropped the
+  # asymmetric answers, and the system node's kubelet lost the API server.
+  private_endpoint_network_policies = "Disabled"
 
   # A pod subnet is delegated to AKS: dynamic IP allocation adds the delegation when the first pool joins it,
   # and Azure refuses an update that takes it away (SubnetMissingRequiredDelegation), so it is stated here.

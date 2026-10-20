@@ -531,11 +531,8 @@ run "a_cell_behind_the_hub_firewall" {
     error_message = "The system pool's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall and keeps its own slot inside the virtual network: a zone is reached through the firewall, like it reaches the system pool."
   }
   assert {
-    condition = (
-      azurerm_subnet.cell["dev-int-stateless-az1/snet-system"].private_endpoint_network_policies == "Enabled" &&
-      azurerm_subnet.cell["dev-int-stateless-az1/snet-int-fi-nodes"].private_endpoint_network_policies == "Disabled"
-    )
-    error_message = "The system subnet's NSG and route table apply to the API server's private endpoint too, so its answers to the zones take the firewall like their requests."
+    condition     = alltrue([for key, subnet in azurerm_subnet.cell : subnet.private_endpoint_network_policies == "Disabled"])
+    error_message = "No subnet applies its route table to a private endpoint: the API server's endpoint answers the system pool's own nodes directly, as they reach it (2026-10-20)."
   }
   assert {
     condition = (
