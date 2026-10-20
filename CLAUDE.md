@@ -64,9 +64,12 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 ## Current state of dev (design v2.0, 2026-10-19)
 
 - **One cell: `aks-dev-int-stateless-az3`** (stack `dev-int-stateless-az3`), germanywestcentral, availability zone 3,
-  internal exposure (`sub-aks-dev` plays `sub-aks-dev-int`), Sweden's zone `int-se`. Finland's `int-fi` stays defined
-  in shared/ (vault `kv-onek8s-gwc-int-fi`, DNS zone, gateway certificate) but no cell runs it. `dev-int-stateful` is
-  defined (a pod-subnet cluster too), never deployed. The ALZ bootstrap stays in swedencentral.
+  internal exposure (`sub-aks-dev` plays `sub-aks-dev-int`), **two zones since 2026-10-20**: Sweden's `int-se` and
+  Finland's `int-fi` (the user: two zones in one cell to test the isolation between them, D73/V31) - each with its
+  gateway, ESO, zone pools and an `<zone>-example` namespace running aks-hello from aks-fluxcd-example
+  (`firewall-egress/` Stockholm, `firewall-egress-int-fi/` Helsinki; rule files for both in azure-landing-zone).
+  `zone_node_pools.max_count = 1` per pool (quota). `dev-int-stateful` is defined (a pod-subnet cluster too), never
+  deployed. The ALZ bootstrap stays in swedencentral.
 - **Network: Azure CNI Pod Subnet with dynamic IP allocation + Cilium** (no overlay, no node subnet mode). Nodes and
   ILBs in /24 slots of `address_space` 10.100.0.0/16 (snet-system 10.100.0.0/24 - also the API server's private
   endpoint -, int-fi 10.100.1.0/24, int-se 10.100.2.0/24, ILB 10.100.2.128/27); pods in `pod_address_space`
@@ -92,12 +95,16 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   ACNS DNS proxy); platform namespaces go out on 443 to `world`, labfw decides.
 - **Hub: azure-landing-zone mode `labfw`** - VM `labfw-fw` (Standard_B2ats_v2, 10.0.1.4, public IP 4.184.103.12,
   `rg-hub-labfw-germanywestcentral` in sub-hub) enforces `afwp-hub-int-germanywestcentral` + parent. The cell is peered
-  with `vnet-hub-germanywestcentral`; `rt-<cell>` (0.0.0.0/0 -> 10.0.1.4) on the system subnets, `rt-<cell>-<zone>` on
-  each zone's node and pod subnets (seven routes since 2026-10-20: default route + the cell's `address_space` and
-  `pod_address_space` -> 10.0.1.4, the zone's own and the system pool's node and pod slots `VnetLocal`; D73) so
-  zone-to-zone traffic meets the firewall (V31 denial not tested yet). Between zones only an application rule
-  (FQDN, the caller's rule file) to the other zone's published name: the firewall proxies it from its own address,
-  so the gateway's answer returns through the hub; never a network rule between zone slots (asymmetric). VNet DNS = labfw's DNS proxy;
+  with `vnet-hub-germanywestcentral`. **Route tables (D73 (f), 2026-10-20): every node and pod subnet's table has the
+  same shape** - 0.0.0.0/0 + the cell's `address_space` and `pod_address_space` -> 10.0.1.4, its own node and pod
+  slots `VnetLocal`: `rt-<cell>` (system, 5 routes), `rt-<cell>-<zone>` (6: + the zone's own ILB /27 -> firewall).
+  `snet-system` has `private_endpoint_network_policies = Enabled` so the API server's PE answers via the table. So
+  zone-to-zone AND zone-to-system flows meet labfw: the Kubernetes flows are network rules of `rcg-aks-dev`
+  (`system-pool-to-zones` TCP */ICMP, `zones-to-cluster-dns` 53, `zones-to-api-server` 443, `zones-to-cilium-health`
+  4240, ping) - a new platform flow between the pools shows up as a labfw denial and needs a rule there. Between
+  zones nothing; an application reaches another zone's (or its own zone's) published name only as a client: an
+  application rule (FQDN) in its rule file, proxied by labfw, so the gateway's answer returns through the hub.
+  Never a network rule between zone slots (asymmetric). V31 denial not tested yet. VNet DNS = labfw's DNS proxy;
   `outbound_type = "userDefinedRouting"`. labfw SNATs what leaves 10.0.0.0/16, 10.100.0.0/16, 172.16.0.0/12,
   192.168.0.0/16, 100.64.0.0/10; zone IP groups list node + pod slots. Egress per application from azure-landing-zone
   `firewall-applications/<env>-<exposure>/<namespace>.yaml`; platform allow-lists in parent `rcg-platform` (AKS FQDN
@@ -180,7 +187,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Quotas** (germanywestcentral, sub-aks-dev): regional 38, Dpsv6 16, Daldv6 8 (system node 4 + two D2alds_v6),
   low-priority 3 (one spot D2alds_v6; raises get throttled - retry at most hourly). sub-hub: Basv2 4 (labfw).
 - **Backlog**: design section 7.1 "Backlog, in priority order". Pick from the top unless the user says otherwise;
-  update the list there when an item is done. V32 (spot fallback, labfw's log naming the pod) and V31 are open.
+  update the list there when an item is done. V32 (spot fallback, labfw's log naming the pod) and V31 are open -
+  V31 can now be tested: both zones run in az3 (Isolation tests, only when the user asks).
 
 ## Decisions already made (do not re-litigate)
 
