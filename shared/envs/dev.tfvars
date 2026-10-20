@@ -168,6 +168,13 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "7f0316f4528348555a2e817893740ea980ab1a33"
   }
+  # Network tools in the image (0.7.0) and the peers (0.8.0, /peers): the same application in the cell's other
+  # zone polled by its Service name and its published name, so the isolation between zones shows on the page
+  # and in labfw's log (design D73)
+  "aks-hello:0.8.0" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "a74539a019122b97ab4e4900900190d97f2907c1"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
