@@ -286,14 +286,15 @@ locals {
 # and the cell's two address spaces - the nodes' and load balancers', and the pods' - go to the hub's
 # firewall: a route for the whole address space takes precedence over the virtual network's system route
 # for the same prefix, so what one slot sends to another leaves for the firewall, which decides by rule and
-# logs it. Two more specific routes stay inside the virtual network (`VnetLocal`): the table's own node and
-# pod slots - Azure applies a route to the traffic within a subnet too, and the nodes and pods of one pool
-# talk to each other directly. A zone's table has one more: its own internal load balancer's subnet to the
-# firewall, so a zone's pod reaches its own zone's published name the way any client does, through the
-# firewall (an application rule, which the firewall proxies from its own address - the gateway, on the
-# system pool, then answers it through the hub, and the path is symmetric; delivered inside the VNet, the
-# load balancer would hand the request to the gateway directly and the gateway's answer would leave for
-# the firewall alone).
+# logs it. Two more specific routes stay inside the virtual network (`VnetLocal`): the table's own node
+# subnet (`snet-system`, the whole slot 0, or the zone's `snet-<zone>-nodes`, the first half of its slot)
+# and its own pod slot - Azure applies a route to the traffic within a subnet too, and the nodes and pods of
+# one pool talk to each other directly. Nothing else of a zone's slot is local: its internal load
+# balancer's subnet stays under the address space's route, so a zone's pod reaches its own zone's
+# published name the way any client does, through the firewall (an application rule, which the firewall
+# proxies from its own address - the gateway, on the system pool, then answers it through the hub, and the
+# path is symmetric; delivered inside the VNet, the load balancer would hand the request to the gateway
+# directly and the gateway's answer would leave for the firewall alone).
 #
 # Nothing is allowed between zones (design R5 and section 2.4): an application reaches another zone's
 # application only as a client of that zone's entry point, with an application rule (FQDN) in its own
@@ -326,9 +327,8 @@ locals {
             "default-via-hub-firewall" = { prefix = "0.0.0.0/0", direct = false }
             "nodes-via-hub-firewall"   = { prefix = settings.address_space, direct = false }
             "pods-via-hub-firewall"    = { prefix = settings.pod_address_space, direct = false }
-            "own-nodes-direct"         = { prefix = local.cell_slots[cell][z.index], direct = true }
+            "own-nodes-direct"         = { prefix = local.cell_subnets["${cell}/snet-${zone}-nodes"].prefix, direct = true }
             "own-pods-direct"          = { prefix = local.cell_pod_slots[cell][z.index], direct = true }
-            "own-ilb-via-hub-firewall" = { prefix = local.cell_subnets["${cell}/snet-${zone}-ilb"].prefix, direct = false }
           }
         }
       }

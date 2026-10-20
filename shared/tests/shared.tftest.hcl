@@ -538,17 +538,16 @@ run "a_cell_behind_the_hub_firewall" {
     condition = (
       keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
       !azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].bgp_route_propagation_enabled &&
-      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 6 &&
+      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 5 &&
       toset([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type} ${coalesce(r.next_hop_in_ip_address, "-")}"]) == toset([
         "default-via-hub-firewall 0.0.0.0/0 VirtualAppliance 10.0.1.4",
         "nodes-via-hub-firewall 172.22.0.0/20 VirtualAppliance 10.0.1.4",
         "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance 10.0.1.4",
-        "own-nodes-direct 172.22.1.0/24 VnetLocal -",
+        "own-nodes-direct 172.22.1.0/25 VnetLocal -",
         "own-pods-direct 100.64.16.0/20 VnetLocal -",
-        "own-ilb-via-hub-firewall 172.22.1.128/27 VirtualAppliance 10.0.1.4",
       ])
     )
-    error_message = "A zone's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall, keeps the zone's own node and pod slots inside the virtual network, and sends even its own load balancer to the firewall - the system pool's slot included, so the Kubernetes flows meet the firewall symmetrically."
+    error_message = "A zone's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall, keeps only the zone's own node subnet and pod slot inside the virtual network - its own load balancer, in the same slot, goes to the firewall - the system pool's slot included, so the Kubernetes flows meet the firewall symmetrically."
   }
   assert {
     condition = (
@@ -707,12 +706,11 @@ run "a_cell_has_pod_subnets_in_a_second_address_space" {
       contains(keys(azurerm_subnet_route_table_association.cell), "dev-int-stateless-az3/snet-int-se-pods") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "nodes-via-hub-firewall 10.100.0.0/16 VirtualAppliance") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-nodes-direct 10.100.2.0/24 VnetLocal") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-nodes-direct 10.100.2.0/25 VnetLocal") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-pods-direct 100.64.32.0/20 VnetLocal") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-ilb-via-hub-firewall 10.100.2.128/27 VirtualAppliance") &&
       !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "10.100.1.0/24") &&
       !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.0.0/20") &&
-      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 6 &&
+      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 5 &&
       contains([for r in azurerm_route_table.cell["dev-int-stateless-az3"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-pods-direct 100.64.0.0/20 VnetLocal") &&
       length(azurerm_route_table.cell["dev-int-stateless-az3"].route) == 5
     )

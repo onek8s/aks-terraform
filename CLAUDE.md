@@ -96,8 +96,10 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Hub: azure-landing-zone mode `labfw`** - VM `labfw-fw` (Standard_B2ats_v2, 10.0.1.4, public IP 4.184.103.12,
   `rg-hub-labfw-germanywestcentral` in sub-hub) enforces `afwp-hub-int-germanywestcentral` + parent. The cell is peered
   with `vnet-hub-germanywestcentral`. **Route tables (D73 (f), 2026-10-20): every node and pod subnet's table has the
-  same shape** - 0.0.0.0/0 + the cell's `address_space` and `pod_address_space` -> 10.0.1.4, its own node and pod
-  slots `VnetLocal`: `rt-<cell>` (system, 5 routes), `rt-<cell>-<zone>` (6: + the zone's own ILB /27 -> firewall).
+  same shape**, 5 routes - 0.0.0.0/0 + the cell's `address_space` and `pod_address_space` -> 10.0.1.4, its own node
+  subnet (`snet-system` /24, `snet-<zone>-nodes` /25) and pod slot `VnetLocal`: `rt-<cell>`, `rt-<cell>-<zone>`; a
+  zone's ILB /27 (rest of its slot) stays under the address space's route to the firewall (2026-10-20; before, the
+  whole /24 was local and a 6th route sent the ILB back).
   So zone-to-zone AND zone-to-system flows meet labfw: the Kubernetes flows are network rules of `rcg-aks-dev`
   (`system-pool-to-zones` TCP */ICMP, `zones-to-cluster-dns` 53, `zones-to-api-server` 443 (unused, see below),
   `zones-to-cilium-health` 4240, ping) - a new platform flow between the pools shows up as a labfw denial and needs
