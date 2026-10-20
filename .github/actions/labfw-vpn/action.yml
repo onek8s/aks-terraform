@@ -31,9 +31,9 @@ inputs:
   extra_allowed_ips:
     description: >-
       Routes added to the config's AllowedIPs (comma-separated): az3's system subnet (its API server's endpoint) and
-      int-se's slot (its internal load balancer) in 10.100.0.0/16 and its pod subnets in 100.64.0.0/16 (design D74), labfw's DNS proxy, the environment's private endpoints (shared/
+      int-fi's and int-se's slots (their internal load balancers) in 10.100.0.0/16 and its pod subnets in 100.64.0.0/16 (design D74), labfw's DNS proxy, the environment's private endpoints (shared/
       snet-shared-pe) and the management network's (snet-pe: Azure Monitor Private Link scope)
-    default: 10.100.0.0/24, 10.100.2.0/24, 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32, 172.20.2.0/26, 10.0.8.128/26
+    default: 10.100.0.0/24, 10.100.1.0/24, 10.100.2.0/24, 100.64.0.0/20, 100.64.16.0/20, 100.64.32.0/20, 10.0.12.1/32, 172.20.2.0/26, 10.0.8.128/26
   private_names:
     description: >-
       DNS names looked up at labfw's DNS proxy, space-separated: the private endpoints' services. Exact names
