@@ -13,11 +13,12 @@
 # stop: Cilium, in the platform repository. With `hub` (the build tenant's network mode `labfw`, or
 # `firewall`) every cell is peered with the landing zone's hub and its node subnets send everything
 # else to the hub's firewall, which decides what a cell reaches outside its own network - and, since
-# design D73, what one zone of the cell may reach in another: a zone's node and pod subnets have a
-# route table of their own, `rt-<cell>-<zone>`, that sends the cell's own address spaces to the
-# firewall as well, the zone's own and the system pool's slots excepted, while the system pool's
-# subnets keep `rt-<cell>` with the default route alone. Without a hub (`sandbox`) the nodes reach
-# the internet through the cluster's load balancer and the NSGs and Cilium are the boundaries.
+# design D73, what one slot of the cell may reach in another: every node and pod subnet has a route
+# table that sends the cell's own address spaces to the firewall as well, its own slot excepted -
+# `rt-<cell>` on the system pool's subnets, `rt-<cell>-<zone>` on a zone's - so the firewall sees,
+# allows by rule and logs every flow between two zones and between a zone and the platform's system
+# pool (the Kubernetes flows of design section 2.4). Without a hub (`sandbox`) the nodes reach the
+# internet through the cluster's load balancer and the NSGs and Cilium are the boundaries.
 #
 # Each cell's layout follows from its address space and the zones' indexes: a /24 per slot - the system
 # pool's first, then one per zone (index 1, 2, ...) - split into the zone's nodes (the first half) and its
@@ -233,6 +234,12 @@ resource "azurerm_subnet" "cell" {
   address_prefixes     = [each.value.prefix]
   # The internal load balancers' subnets may carry a Private Link Service later.
   private_link_service_network_policies_enabled = each.value.kind != "ilb"
+  # The system subnet holds the API server's private endpoint (a private cluster, design D58). Private
+  # endpoints ignore their subnet's NSG and route table unless told otherwise; with `Enabled` both apply
+  # to it, so its answers to the zones' nodes take the system table's route to the hub's firewall - the
+  # way their requests came - and never the VNet's own (design D73; an asymmetric flow is dropped by a
+  # stateful firewall).
+  private_endpoint_network_policies = each.value.kind == "system" ? "Enabled" : "Disabled"
 
   # A pod subnet is delegated to AKS: dynamic IP allocation adds the delegation when the first pool joins it,
   # and Azure refuses an update that takes it away (SubnetMissingRequiredDelegation), so it is stated here.
@@ -272,58 +279,78 @@ locals {
   }
 }
 
-# The system pool's route table: the default route to the hub's firewall, nothing else. Traffic to the
-# cell's own address space takes the virtual network's system route, which is more specific, so the
-# system pool reaches every zone's nodes directly: the kubelet tunnel, metrics-server and the API
-# server's private endpoint stay inside the cell (design section 2.4, flows 1 to 4).
+# The route tables (design D73): the same shape for the system pool and for every zone. The default route
+# and the cell's two address spaces - the nodes' and load balancers', and the pods' - go to the hub's
+# firewall: a route for the whole address space takes precedence over the virtual network's system route
+# for the same prefix, so what one slot sends to another leaves for the firewall, which decides by rule and
+# logs it. Two more specific routes stay inside the virtual network (`VnetLocal`): the table's own node and
+# pod slots - Azure applies a route to the traffic within a subnet too, and the nodes and pods of one pool
+# talk to each other directly. A zone's table has one more: its own internal load balancer's subnet to the
+# firewall, so a zone's pod reaches its own zone's published name the way any client does, through the
+# firewall (an application rule, which the firewall proxies from its own address - the gateway, on the
+# system pool, then answers it through the hub, and the path is symmetric; delivered inside the VNet, the
+# load balancer would hand the request to the gateway directly and the gateway's answer would leave for
+# the firewall alone).
+#
+# Nothing is allowed between zones (design R5 and section 2.4): an application reaches another zone's
+# application only as a client of that zone's entry point, with an application rule (FQDN) in its own
+# rule file. Between a zone and the system pool only the Kubernetes flows of design section 2.4, as
+# network rules of the landing zone's platform policy: the kubelet, node metrics, Cilium health and
+# the gateways from the system pool to the zone (TCP, ICMP), cluster DNS and the API server's private
+# endpoint from the zone to the system pool (53, 443). The tables are the same whatever the number
+# of zones: a new zone changes no existing table.
+locals {
+  cell_route_tables = var.hub == null ? {} : merge(
+    {
+      for cell, settings in local.cells : cell => {
+        cell = cell
+        zone = null
+        routes = {
+          "default-via-hub-firewall" = { prefix = "0.0.0.0/0", direct = false }
+          "nodes-via-hub-firewall"   = { prefix = settings.address_space, direct = false }
+          "pods-via-hub-firewall"    = { prefix = settings.pod_address_space, direct = false }
+          "own-nodes-direct"         = { prefix = local.cell_slots[cell][0], direct = true }
+          "own-pods-direct"          = { prefix = local.cell_pod_slots[cell][0], direct = true }
+        }
+      }
+    },
+    merge([
+      for cell, settings in local.cells : {
+        for zone, z in local.isolation_zones : "${cell}/${zone}" => {
+          cell = cell
+          zone = zone
+          routes = {
+            "default-via-hub-firewall" = { prefix = "0.0.0.0/0", direct = false }
+            "nodes-via-hub-firewall"   = { prefix = settings.address_space, direct = false }
+            "pods-via-hub-firewall"    = { prefix = settings.pod_address_space, direct = false }
+            "own-nodes-direct"         = { prefix = local.cell_slots[cell][z.index], direct = true }
+            "own-pods-direct"          = { prefix = local.cell_pod_slots[cell][z.index], direct = true }
+            "own-ilb-via-hub-firewall" = { prefix = local.cell_subnets["${cell}/snet-${zone}-ilb"].prefix, direct = false }
+          }
+        }
+      }
+    ]...),
+  )
+  cell_zone_route_tables = { for key, table in local.cell_route_tables : key => table if table.zone != null }
+}
+
 resource "azurerm_route_table" "cell" {
-  for_each = var.hub == null ? {} : local.cells
+  for_each = { for key, table in local.cell_route_tables : key => table if table.zone == null }
 
   name                          = local.names["route_table/${each.key}"]
   location                      = var.location
   resource_group_name           = local.resource_group_name
   bgp_route_propagation_enabled = false
 
-  route {
-    name                   = "default-via-hub-firewall"
-    address_prefix         = "0.0.0.0/0"
-    next_hop_type          = "VirtualAppliance"
-    next_hop_in_ip_address = var.hub.next_hop_ip
-  }
-}
-
-# A zone's route table (design D73): seven routes, the same for every zone and every number of zones.
-# The default route and the cell's two address spaces - the nodes' and load balancers', and the pods' -
-# go to the hub's firewall: a route for the whole address space takes precedence over the virtual
-# network's system route for the same prefix, so what one zone sends to another zone's nodes, load
-# balancer or pods leaves for the firewall, which denies and logs it. Nothing is allowed between
-# zones (design R5 and section 2.4); an application reaches another zone's application only as a
-# client of that zone's entry point, with an application rule (FQDN) in its own rule file, which the
-# firewall proxies from its own address (the answer comes back to it through the hub's peering and
-# the system subnets' default route). Four more specific routes stay inside the virtual network
-# (`VnetLocal`): the zone's own node and pod slots - Azure applies a route to the traffic within a
-# subnet too, and the nodes and pods of one zone talk to each other directly - and the system pool's
-# slot 0, nodes and pods: the kubelet tunnel, metrics-server, CoreDNS, the API server's private
-# endpoint and every zone's gateway pods are there (design section 2.4, flows 1 to 4). A new zone
-# changes no existing table.
-locals {
-  cell_zone_route_tables = var.hub == null ? {} : merge([
-    for cell, settings in local.cells : {
-      for zone, z in local.isolation_zones : "${cell}/${zone}" => {
-        cell = cell
-        zone = zone
-        routes = {
-          "default-via-hub-firewall" = { prefix = "0.0.0.0/0", direct = false }
-          "nodes-via-hub-firewall"   = { prefix = settings.address_space, direct = false }
-          "pods-via-hub-firewall"    = { prefix = settings.pod_address_space, direct = false }
-          "own-nodes-direct"         = { prefix = local.cell_slots[cell][z.index], direct = true }
-          "own-pods-direct"          = { prefix = local.cell_pod_slots[cell][z.index], direct = true }
-          "system-nodes-direct"      = { prefix = local.cell_slots[cell][0], direct = true }
-          "system-pods-direct"       = { prefix = local.cell_pod_slots[cell][0], direct = true }
-        }
-      }
+  dynamic "route" {
+    for_each = each.value.routes
+    content {
+      name                   = route.key
+      address_prefix         = route.value.prefix
+      next_hop_type          = route.value.direct ? "VnetLocal" : "VirtualAppliance"
+      next_hop_in_ip_address = route.value.direct ? null : var.hub.next_hop_ip
     }
-  ]...)
+  }
 }
 
 resource "azurerm_route_table" "zone" {

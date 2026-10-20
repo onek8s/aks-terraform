@@ -510,7 +510,7 @@ run "a_cell_behind_the_hub_firewall" {
   }
 
   assert {
-    condition     = [for r in azurerm_route_table.cell["dev-int-stateless-az1"].route : r.next_hop_in_ip_address] == ["10.0.1.4"] && !azurerm_route_table.cell["dev-int-stateless-az1"].bgp_route_propagation_enabled
+    condition     = contains([for r in azurerm_route_table.cell["dev-int-stateless-az1"].route : "${r.address_prefix} ${coalesce(r.next_hop_in_ip_address, "-")}"], "0.0.0.0/0 10.0.1.4") && !azurerm_route_table.cell["dev-int-stateless-az1"].bgp_route_propagation_enabled
     error_message = "The cell sends everything else to the hub's firewall."
   }
   assert {
@@ -518,25 +518,40 @@ run "a_cell_behind_the_hub_firewall" {
     error_message = "Every node and pod subnet - not the load balancer's - takes a route table."
   }
   assert {
-    condition     = length(azurerm_route_table.cell["dev-int-stateless-az1"].route) == 1
-    error_message = "The system pool's table holds the default route alone: the system pool reaches every zone directly."
+    condition = (
+      length(azurerm_route_table.cell["dev-int-stateless-az1"].route) == 5 &&
+      toset([for r in azurerm_route_table.cell["dev-int-stateless-az1"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type} ${coalesce(r.next_hop_in_ip_address, "-")}"]) == toset([
+        "default-via-hub-firewall 0.0.0.0/0 VirtualAppliance 10.0.1.4",
+        "nodes-via-hub-firewall 172.22.0.0/20 VirtualAppliance 10.0.1.4",
+        "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance 10.0.1.4",
+        "own-nodes-direct 172.22.0.0/24 VnetLocal -",
+        "own-pods-direct 100.64.0.0/20 VnetLocal -",
+      ])
+    )
+    error_message = "The system pool's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall and keeps its own slot inside the virtual network: a zone is reached through the firewall, like it reaches the system pool."
+  }
+  assert {
+    condition = (
+      azurerm_subnet.cell["dev-int-stateless-az1/snet-system"].private_endpoint_network_policies == "Enabled" &&
+      azurerm_subnet.cell["dev-int-stateless-az1/snet-int-fi-nodes"].private_endpoint_network_policies == "Disabled"
+    )
+    error_message = "The system subnet's NSG and route table apply to the API server's private endpoint too, so its answers to the zones take the firewall like their requests."
   }
   assert {
     condition = (
       keys(azurerm_route_table.zone) == ["dev-int-stateless-az1/int-fi"] &&
       !azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].bgp_route_propagation_enabled &&
-      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 7 &&
+      length(azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route) == 6 &&
       toset([for r in azurerm_route_table.zone["dev-int-stateless-az1/int-fi"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type} ${coalesce(r.next_hop_in_ip_address, "-")}"]) == toset([
         "default-via-hub-firewall 0.0.0.0/0 VirtualAppliance 10.0.1.4",
         "nodes-via-hub-firewall 172.22.0.0/20 VirtualAppliance 10.0.1.4",
         "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance 10.0.1.4",
         "own-nodes-direct 172.22.1.0/24 VnetLocal -",
         "own-pods-direct 100.64.16.0/20 VnetLocal -",
-        "system-nodes-direct 172.22.0.0/24 VnetLocal -",
-        "system-pods-direct 100.64.0.0/20 VnetLocal -",
+        "own-ilb-via-hub-firewall 172.22.1.128/27 VirtualAppliance 10.0.1.4",
       ])
     )
-    error_message = "A zone's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall, and keeps the zone's own and the system pool's slots inside the virtual network."
+    error_message = "A zone's table (design D73) sends the default route and the cell's two address spaces to the hub's firewall, keeps the zone's own node and pod slots inside the virtual network, and sends even its own load balancer to the firewall - the system pool's slot included, so the Kubernetes flows meet the firewall symmetrically."
   }
   assert {
     condition = (
@@ -697,11 +712,14 @@ run "a_cell_has_pod_subnets_in_a_second_address_space" {
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "pods-via-hub-firewall 100.64.0.0/16 VirtualAppliance") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-nodes-direct 10.100.2.0/24 VnetLocal") &&
       contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-pods-direct 100.64.32.0/20 VnetLocal") &&
-      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "system-pods-direct 100.64.0.0/20 VnetLocal") &&
+      contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-ilb-via-hub-firewall 10.100.2.128/27 VirtualAppliance") &&
       !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "10.100.1.0/24") &&
-      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 7
+      !contains([for r in azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route : r.address_prefix], "100.64.0.0/20") &&
+      length(azurerm_route_table.zone["dev-int-stateless-az3/int-se"].route) == 6 &&
+      contains([for r in azurerm_route_table.cell["dev-int-stateless-az3"].route : "${r.name} ${r.address_prefix} ${r.next_hop_type}"], "own-pods-direct 100.64.0.0/20 VnetLocal") &&
+      length(azurerm_route_table.cell["dev-int-stateless-az3"].route) == 5
     )
-    error_message = "A pod subnet takes its pool's route table, and the zone table routes the cell's pod address space to the firewall too - the zone's own and the system pool's pod slots stay in the virtual network."
+    error_message = "A pod subnet takes its pool's route table, and the zone table routes the cell's pod address space to the firewall too - only the zone's own pod slot stays in the virtual network; the system pool's table does the same for its own."
   }
 }
 
