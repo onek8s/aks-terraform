@@ -98,10 +98,14 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   with `vnet-hub-germanywestcentral`. **Route tables (D73 (f), 2026-10-20): every node and pod subnet's table has the
   same shape** - 0.0.0.0/0 + the cell's `address_space` and `pod_address_space` -> 10.0.1.4, its own node and pod
   slots `VnetLocal`: `rt-<cell>` (system, 5 routes), `rt-<cell>-<zone>` (6: + the zone's own ILB /27 -> firewall).
-  `snet-system` has `private_endpoint_network_policies = Enabled` so the API server's PE answers via the table. So
-  zone-to-zone AND zone-to-system flows meet labfw: the Kubernetes flows are network rules of `rcg-aks-dev`
-  (`system-pool-to-zones` TCP */ICMP, `zones-to-cluster-dns` 53, `zones-to-api-server` 443, `zones-to-cilium-health`
-  4240, ping) - a new platform flow between the pools shows up as a labfw denial and needs a rule there. Between
+  So zone-to-zone AND zone-to-system flows meet labfw: the Kubernetes flows are network rules of `rcg-aks-dev`
+  (`system-pool-to-zones` TCP */ICMP, `zones-to-cluster-dns` 53, `zones-to-api-server` 443 (unused, see below),
+  `zones-to-cilium-health` 4240, ping) - a new platform flow between the pools shows up as a labfw denial and needs
+  a rule there. **Not the API server's private endpoint**: its /32 system route wins over the UDRs in every subnet,
+  so every node reaches it and it answers directly; `private_endpoint_network_policies = Enabled` on snet-system
+  (tried 2026-10-20, #216) made its answers to the system pool follow the table to labfw while the requests had
+  not - the system node went NotReady within a minute (kubelet lost the API server, konnectivity and CoreDNS
+  evicted, every gateway unreachable); reverted in #217. Keep it `Disabled`. Between
   zones nothing; an application reaches another zone's (or its own zone's) published name only as a client: an
   application rule (FQDN) in its rule file, proxied by labfw, so the gateway's answer returns through the hub.
   Never a network rule between zone slots (asymmetric). V31 denial not tested yet. VNet DNS = labfw's DNS proxy;
@@ -304,5 +308,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `firewall-egress` egressDeny).
 - `kubectl debug` has no `-o`; `az aks install-cli` can hit GitHub's rate limit - re-run. Renew Certificate's DNS-01
   can fail once - re-run.
+- **A private endpoint's /32 system route beats every UDR**, and `private_endpoint_network_policies = Enabled`
+  makes its answers follow the subnet's table: with a table that sends the VNet's address space to a firewall,
+  same-subnet clients (the system node → the API server's endpoint) get asymmetric answers and the firewall drops
+  them. Never enable it on snet-system (2026-10-20 outage).
 - **Credentials handed over in chat** go to the vault with `store-secret.yml`, never into Git or a workflow input.
 - The auto-mode classifier refused Run Command on labfw for workflows; read labfw's denials from Log Analytics.
