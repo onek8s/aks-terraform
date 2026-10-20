@@ -166,7 +166,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   azure-landing-zone#66, left for the user). **Peers (0.8.0, 2026-10-20)**: each zone's aks-hello polls the other's
   by its Service name and its published name every minute (`PEERS`, `/peers`), so labfw's log shows the
   cross-zone flows: the Service name never answers (Cilium/labfw), the published name only with an application
-  rule for `hello.<zone>.dev.onek8s.lol` in the caller's rule file - none written yet, so both show as denied. `lab/scale/kustomization.yaml` is the Git-only replica switch.
+  rule for `hello.<zone>.dev.onek8s.lol` in the caller's rule file - none written yet, so labfw resets both at once
+  (`published-names-deny`). `lab/scale/kustomization.yaml` is the Git-only replica switch.
   Internal names by home cell: `hello.<zone>.dev.onek8s.lol` next to `hello-<cluster>...`; routes carry
   `platform/home-cell` and external-dns-int publishes only its own cluster's.
 - **Egress agent**: model gpt-4.1-mini on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID); Claude models are
@@ -326,5 +327,10 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   makes its answers follow the subnet's table: with a table that sends the VNet's address space to a firewall,
   same-subnet clients (the system node → the API server's endpoint) get asymmetric answers and the firewall drops
   them. Never enable it on snet-system (2026-10-20 outage).
+- **Cilium takes a LoadBalancer Service's address on every node** and sends a pod straight to its backends: a zone pod
+  calling a published name (the gateway ILB) never reached labfw and was dropped unanswered by the zone policies (a
+  timeout). The gateway Services carry `service.cilium.io/node-selector: "!platform/zone"` (Cilium 1.18+; Traefik here,
+  approuting-istio in the fleet), so on zone nodes the flow goes through labfw and back through the ILB (2026-10-20,
+  #223); azure-landing-zone's last collection `<spoke>-published-names-deny` resets what no rule file allows (17-32 ms).
 - **Credentials handed over in chat** go to the vault with `store-secret.yml`, never into Git or a workflow input.
 - The auto-mode classifier refused Run Command on labfw for workflows; read labfw's denials from Log Analytics.
