@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Key Vault role check of OneK8s design section 7.1 ("Requirement and isolation tests"), R7 / R7a:
+"""Key Vault role check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R7 / R7a:
 an application reads Key Vault only through its namespace's share, never with an identity of its own.
 
     check-key-vault-roles.py <resource group> <zone> [<zone>...]

@@ -4,7 +4,7 @@ The clusters of [OneK8s](https://onek8s.github.io/) - one Kubernetes platform fo
 Terraform for deploying AKS clusters with [Azure Verified Modules][avm], and the environment's
 container registry. Azure is the first cloud implemented; the applications and their deployment
 (Flux, the Gateway API, open standards - see the design's
-[open standards and portability](https://onek8s.github.io/docs/1.3-open-standards-and-portability.html))
+[open standards and portability](https://onek8s.github.io/design/1.3-open-standards-and-portability.html))
 are meant to move to another cloud unchanged.
 
 | Repository | Role |

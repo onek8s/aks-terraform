@@ -1,7 +1,7 @@
 name: CIS benchmark
 
 # The CIS Azure Kubernetes Service (AKS) Benchmark on one cluster of the dev environment (OneK8s design
-# sections 2.7 and 7.1): continuous evidence that the platform's hardening has not drifted, and the
+# section 2.7, requirements 0.3): continuous evidence that the platform's hardening has not drifted, and the
 # Cloud configuration review's CIS input. By hand only: the weekly run and the run after every Deploy
 # apply were turned off to keep the deploy-and-test loop short (2026-10-14); run it after a change that
 # can move the score.
