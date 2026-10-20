@@ -160,9 +160,12 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   the cluster-setting built-ins (no Deny effect, `audit_only`). The application rules leave out every platform
   namespace (`kubernetes_excluded_namespaces`, design 2.7). Promote a rule only after Cluster status shows 0
   violations for it. 2026-10-19: 0 violations in the cluster (Gatekeeper), CIS 0 failed, Isolation tests 0 failed;
-  Azure Policy 31 compliant, 11 exempt, and 2 stale results of what is no longer evaluated (the deleted
-  Deploy-MCSB2-Monitoring's Key Vault data plane, safeguards' disabled printMutationsAnnotations) that Azure's
-  clean-up removes within a day.
+  Azure Policy 31 compliant, 11 exempt. Deployment safeguards' warn-only `printMutationsAnnotations` reported every
+  mutated application pod ("resource was mutated by platform mutation"): disabled in the assignment
+  (azure-landing-zone#99), its results gone by 2026-10-20. Still listed non-compliant on 2026-10-20: 7 Key Vault
+  data-plane rules of the deleted `Deploy-MCSB2-Monitoring` on `kv-onek8s-gwc-platform`, with fresh timestamps
+  although `az policy assignment list --disable-scope-strict-match` finds no such assignment - Azure's own
+  clean-up; check again with Lab admin (`az policy state list --filter "complianceState eq 'NonCompliant'"`).
 - **Access**: namespace groups (D49) `managed_namespaces.<ns>.groups = { view, edit, admin }` -> a Flux configuration
   `<ns>-access` with a RoleBinding per role + `Azure Kubernetes Service Namespace User`; on the vault `admin` Secrets
   Officer, `edit` custom `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51), both under the `<ns>--` ABAC condition.
