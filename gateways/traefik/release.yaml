@@ -142,6 +142,12 @@ spec:
         service.beta.kubernetes.io/azure-load-balancer-internal-subnet: snet-${gateway_name}-ilb
         # The probe the load balancer sends, over TCP to the port: no plain HTTP path to probe.
         service.beta.kubernetes.io/port_443_health-probe_protocol: tcp
+        # Cilium installs this Service on the nodes outside the zones alone (design D73): on a zone node it does not
+        # take the load balancer's address for itself, so a zone pod that calls a published name goes out to its
+        # subnet's route table and the hub firewall like any other destination, and comes back through the load
+        # balancer - the firewall's application rules decide. Without it Cilium sends the pod straight to the Traefik
+        # pods and drops it there (the zones' policies), unanswered: a client waits for its timeout.
+        service.cilium.io/node-selector: "!platform/zone"
       labels:
         gateway.networking.k8s.io/gateway-name: ${gateway_name}
         platform/exposure: ${gateway_exposure}
