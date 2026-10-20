@@ -91,7 +91,7 @@ def main():
     if results:
         with open(results, "a") as f:
             for status, what, why in rows:
-                f.write(f"| {status} | R1, R5, R7a | Resource Graph {what} | {why} |\n")
+                f.write(f"| {status} | R4, R7, R9 | Resource Graph {what} | {why} |\n")
     print(f"{len(rows)} findings, {failures} not allowed")
     return 1 if failures else 0
 

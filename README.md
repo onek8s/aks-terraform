@@ -453,7 +453,7 @@ Traefik refuses with `Accepted: False`):
 | --- | --- | --- |
 | `traefik` (the dev cells, a non-production cost saving) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
 | `approuting-istio` (the default, production) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
-| null | No implementation: the stateful cluster (R9a), which states it. | - |
+| null | No implementation: the stateful cluster (R21), which states it. | - |
 
 Traefik's manifests live here rather than in the Flux repository so that the choice and everything
 it brings are one change of this repository. Switching re-creates the Gateways under their new class
@@ -491,7 +491,7 @@ cannot run beside the Istio service mesh add-on.
 
 The Gateway terminates TLS with certificates it reads from Kubernetes Secrets. App Routing's own Key
 Vault and Azure DNS integration is not used: it would read the vault through the Secrets Store CSI
-driver, which the design leaves off (R7b), and write DNS as one identity for every zone. So both are
+driver, which the design leaves off (R11), and write DNS as one identity for every zone. So both are
 done from inside the cluster, by workloads the Flux repository deploys, each acting as an identity
 created here:
 

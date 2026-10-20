@@ -220,7 +220,7 @@ platform_viewer_group_object_ids = ["75353964-033e-4ea2-8ec4-f44e89fee6a6"]
 # polls (every minute). An environment with external cells turns it on for their platform gateways.
 flux_github_webhook = false
 
-# The Isolation tests read this namespace's fixture secret as its own identity (R7)
+# The Isolation tests read this namespace's fixture secret as its own identity (R10)
 isolation_test_namespaces = ["int-se-example"]
 
 # The one zone the environment publishes in, public or private - the clusters say the same in their

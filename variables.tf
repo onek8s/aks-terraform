@@ -155,7 +155,7 @@ Flux repository (design section 4.1): `approuting-istio` (the default, productio
 API, the Azure standard offering, upgraded by AKS - D55) or `traefik` (Traefik Proxy, one small Deployment
 per Gateway from this repository's `gateways/traefik`, a non-production cost saving: istiod's untunable
 1 CPU and 4 GiB, Azure/AKS#5939, is what it saves); null for a cluster without Gateways (the stateful
-cluster, R9a). The Flux repository is told each Gateway's class as `gateway_class_name_<zone>`; switching
+cluster, R21). The Flux repository is told each Gateway's class as `gateway_class_name_<zone>`; switching
 re-creates the Gateways. See the README, "Ingress through the Gateway API".
 DESCRIPTION
 

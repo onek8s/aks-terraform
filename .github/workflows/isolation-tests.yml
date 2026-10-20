@@ -5,24 +5,24 @@ name: Isolation tests
 # held up the work as an automatic stage): no Deploy stage, no schedule - run it when the user asks for
 # it. Each check names the requirement it covers; the run's summary is the table of them.
 #
-#   - Cluster settings (R1, R19, R21): local accounts and SSH off, no ACNS (design D80),
+#   - Cluster settings (R6, R7, R28): local accounts and SSH off, no ACNS (design D80),
 #     customer-managed keys, no Secrets Store CSI driver; and `az aks get-credentials --admin` is
 #     refused.
-#   - Policies in the cluster (R14): the platform's constraint templates and mutations from Azure
+#   - Policies in the cluster (R15): the platform's constraint templates and mutations from Azure
 #     Policy (azure-landing-zone stacks/aks-policy) are present.
-#   - Placement (R17, R4): a probe pod in a test namespace of the cell's zone ($ZONE) that states only
+#   - Placement (R3, R8): a probe pod in a test namespace of the cell's zone ($ZONE) that states only
 #     `platform/capacity: spot` is placed on the zone's nodes by the mutations alone.
-#   - Isolation from that pod (R2, R3, R5, R6, R7b): the other zones' gateway and External Secrets
+#   - Isolation from that pod (R1, R2, R4, R11, R13): the other zones' gateway and External Secrets
 #     pods and load balancers, another application of the same zone, the node, every zone's and the
 #     platform's Key Vault, and the instance metadata service are unreachable; the cluster DNS works.
-#   - Egress (R20): what leaves the cluster meets the hub firewall, which denies what no rule file
+#   - Egress (R29): what leaves the cluster meets the hub firewall, which denies what no rule file
 #     names (design D61, D80).
-#   - Forbidden manifests (R7, R7b, R8, R9b, R11, R12, R14, R17, R20): each manifest of the policy table is
+#   - Forbidden manifests (R8, R10, R11, R15, R17, R22, R23, R26, R29): each manifest of the policy table is
 #     sent as a server-side dry run. Rules in effect `deny` must refuse it; rules still in audit (the
 #     build tenant, until phase 3) are reported as AUDIT, and must at least be in the cluster.
-#   - From the internet (R9b, R24): the external application's names answer /healthz over HTTPS, in
+#   - From the internet (R22, R24): the external application's names answer /healthz over HTTPS, in
 #     the cell and behind Traffic Manager; plain HTTP does not.
-#   - Supply chain (R7a, R14): the registry has no admin user and no anonymous pull, and the cell's
+#   - Supply chain (R9, R15): the registry has no admin user and no anonymous pull, and the cell's
 #     kubelet identity may only pull from it; Image Integrity's Ratify runs as the identity
 #     aks-terraform federates and its configuration is healthy; every image in the registry and every
 #     image an application runs carries a signature by the platform's certificate that verifies (the
@@ -30,22 +30,22 @@ name: Isolation tests
 #     signed application; and, in a cell with the Flux webhook (design D78), its receiver refuses a delivery
 #     without GitHub's signature but takes a signed one. The test pods run curl imported into the registry
 #     as `isolation/curl` by digest - every rule in deny admits nothing else - deliberately unsigned.
-#   - Azure Resource Graph (R1, R5, R7a): public IPs, public PaaS endpoints and local authentication -
+#   - Azure Resource Graph (R4, R7, R9): public IPs, public PaaS endpoints and local authentication -
 #     none but the designed ones and the recorded lab exceptions (tests/isolation/).
-#   - Namespace access (R6, R7): each Entra ID group of managed_namespaces[*].groups has its RoleBinding
+#   - Namespace access (R10, R13): each Entra ID group of managed_namespaces[*].groups has its RoleBinding
 #     (view, edit, admin) in its namespace, and a member - impersonated, and signed in for real as a
 #     tester application where one is recorded - has exactly that role there and nothing elsewhere;
 #     on the namespace's Key Vault share view sees names only, edit and admin manage its secrets.
-#   - Key Vault (R7, R7a): a namespace's own identity - a token for its `key-vault` service account,
+#   - Key Vault (R9, R10): a namespace's own identity - a token for its `key-vault` service account,
 #     exchanged at Entra ID as External Secrets Operator does - reads its own secret and gets 403
 #     for another namespace's and another zone's; no application identity holds a Key Vault
 #     data-plane role, and each namespace reader only Secrets User under its ABAC prefix.
-#   - Cells (R11, R13): system pool in the cell's own availability zone, zone pools autoscaled from 0, the VPA add-on, the
+#   - Cells (R23, R25): system pool in the cell's own availability zone, zone pools autoscaled from 0, the VPA add-on, the
 #     Kubernetes version of the tfvars; Flux at the head of its repositories with everything Ready;
 #     every cell's tfvars and fleet directory the same but for its name and availability zone.
-#   - Certificates (R15): every gateway's wildcard in the platform vault, valid for two more weeks,
+#   - Certificates (R12): every gateway's wildcard in the platform vault, valid for two more weeks,
 #     the very certificate in the gateway's Secret, on its listener and served on the external names.
-#   - Zones (R16): every isolation zone is the complete pattern - namespaces, Gateway, ESO, Cilium
+#   - Zones (R5): every isolation zone is the complete pattern - namespaces, Gateway, ESO, Cilium
 #     baseline, node pools, subnet with NSG, vault - so adding one is adding the same again.
 #
 # It imports its test image into the registry (isolation/curl), creates a test namespace in the cell's zone,
@@ -153,48 +153,48 @@ jobs:
           . "$RUNNER_TEMP/lib.sh"
           check() { if [ "$3" = "$4" ]; then result PASS "$1" "$2" "$3"; else result FAIL "$1" "$2" "$3, expected $4"; fi; }
           c="$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" -o json)"
-          check R1 "local accounts disabled" "$(jq -r .disableLocalAccounts <<<"$c")" true
-          check R1 "Entra ID with Azure RBAC" "$(jq -r '.aadProfile.enableAzureRbac' <<<"$c")" true
-          check R1 "SSH off on the system pool" "$(jq -r '.agentPoolProfiles[0].securityProfile.sshAccess' <<<"$c")" Disabled
-          check R21 "encryption at host" "$(jq -r '.agentPoolProfiles[0].enableEncryptionAtHost' <<<"$c")" true
-          check R21 "KMS with the cluster's key" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
-          check R21 "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
-          check R19 "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
+          check R7 "local accounts disabled" "$(jq -r .disableLocalAccounts <<<"$c")" true
+          check R7 "Entra ID with Azure RBAC" "$(jq -r '.aadProfile.enableAzureRbac' <<<"$c")" true
+          check R7 "SSH off on the system pool" "$(jq -r '.agentPoolProfiles[0].securityProfile.sshAccess' <<<"$c")" Disabled
+          check R28 "encryption at host" "$(jq -r '.agentPoolProfiles[0].enableEncryptionAtHost' <<<"$c")" true
+          check R28 "KMS with the cluster's key" "$(jq -r '.securityProfile.azureKeyVaultKms.enabled' <<<"$c")" true
+          check R28 "disk encryption set" "$(jq -r '.diskEncryptionSetId != null' <<<"$c")" true
+          check R6 "Azure Linux" "$(jq -r '.agentPoolProfiles[0].osSku' <<<"$c")" AzureLinux
           # ACNS is not used (design D80): no Hubble, FQDN policies or eBPF host routing - the hub firewall decides egress.
-          check R19 "no ACNS (D80)" "$(jq -r '.networkProfile.advancedNetworking.enabled // false' <<<"$c")" false
-          check R7b "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
-          check R14 "Azure Policy add-on" "$(jq -r '.addonProfiles.azurepolicy.enabled // false' <<<"$c")" true
+          check R6 "no ACNS (D80)" "$(jq -r '.networkProfile.advancedNetworking.enabled // false' <<<"$c")" false
+          check R11 "no Secrets Store CSI driver" "$(jq -r '.addonProfiles.azureKeyvaultSecretsProvider.enabled // false' <<<"$c")" false
+          check R15 "Azure Policy add-on" "$(jq -r '.addonProfiles.azurepolicy.enabled // false' <<<"$c")" true
           # A preview property: the Azure CLI's API version leaves it out, the cluster's preview API has it.
-          check R14 "Image Integrity (Ratify checks image signatures)" \
+          check R15 "Image Integrity (Ratify checks image signatures)" \
             "$(az rest --method get --url "$(jq -r .id <<<"$c")?api-version=2025-09-02-preview" --query 'properties.securityProfile.imageIntegrity.enabled' -o tsv 2>/dev/null || echo false)" true
-          check R8 "stateless: no CSI drivers" "$(jq -r '[.storageProfile.diskCsiDriver.enabled, .storageProfile.fileCsiDriver.enabled] | map(. // false) | any' <<<"$c")" false
-          check R12 "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
-          # One cell per availability zone, zone pools and the VPA add-on (R11); the cell as its tfvars say (R13).
+          check R17 "stateless: no CSI drivers" "$(jq -r '[.storageProfile.diskCsiDriver.enabled, .storageProfile.fileCsiDriver.enabled] | map(. // false) | any' <<<"$c")" false
+          check R26 "no auto-upgrade" "$(jq -r '.autoUpgradeProfile.upgradeChannel' <<<"$c")" none
+          # One cell per availability zone, zone pools and the VPA add-on (R23); the cell as its tfvars say (R25).
           # The cell's file, and the file every stateless cell shares (envs/dev-int-stateless.tfvars).
           tfvars="envs/${CLUSTER#aks-}.tfvars"
           tfvars_common="envs/${CLUSTER#aks-}.tfvars"; tfvars_common="${tfvars_common%-az[0-9].tfvars}.tfvars"
           az_wanted="$(sed -nE 's/^[[:space:]]*availability_zones[[:space:]]*=[[:space:]]*\["([0-9])"\].*/\1/p' "$tfvars" | head -1)"
-          check R11 "system pool in one availability zone, the cell's ($tfvars)" "$(jq -r '.agentPoolProfiles[0].availabilityZones | join(",")' <<<"$c")" "$az_wanted"
-          check R11 "zone pools autoscaled from 0 (cluster autoscaler)" "$(jq -r '[.agentPoolProfiles[] | select(.mode == "User") | (.enableAutoScaling == true and .minCount == 0)] | length > 0 and all' <<<"$c")" true
+          check R23 "system pool in one availability zone, the cell's ($tfvars)" "$(jq -r '.agentPoolProfiles[0].availabilityZones | join(",")' <<<"$c")" "$az_wanted"
+          check R23 "zone pools autoscaled from 0 (cluster autoscaler)" "$(jq -r '[.agentPoolProfiles[] | select(.mode == "User") | (.enableAutoScaling == true and .minCount == 0)] | length > 0 and all' <<<"$c")" true
           # The VPA add-on as the tfvars say: on unless vertical_pod_autoscaler_enabled = false (the dev
           # cells' lab cost exception).
           vpa_wanted="$(sed -nE 's/^vertical_pod_autoscaler_enabled[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$tfvars" "$tfvars_common" | head -1)"
-          check R11 "VPA add-on (in-place right-sizing) as $tfvars says" "$(jq -r '.workloadAutoScalerProfile.verticalPodAutoscaler.enabled // false' <<<"$c")" "${vpa_wanted:-true}"
+          check R23 "VPA add-on (in-place right-sizing) as $tfvars says" "$(jq -r '.workloadAutoScalerProfile.verticalPodAutoscaler.enabled // false' <<<"$c")" "${vpa_wanted:-true}"
           version_wanted="$(sed -nE 's/^kubernetes_version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$tfvars" "$tfvars_common" | head -1)"
           version="$(jq -r .currentKubernetesVersion <<<"$c")"
-          case "$version" in "$version_wanted"|"$version_wanted".*) result PASS R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; *) result FAIL R13 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; esac
+          case "$version" in "$version_wanted"|"$version_wanted".*) result PASS R25 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; *) result FAIL R25 "Kubernetes version as $tfvars says ($version_wanted)" "$version" ;; esac
           if out="$(az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER" --admin --file "$RUNNER_TEMP/admin.kubeconfig" 2>&1)"; then
             rm -f "$RUNNER_TEMP/admin.kubeconfig"
-            result FAIL R1 "local admin credential (get-credentials --admin) refused" "Azure handed it out"
+            result FAIL R7 "local admin credential (get-credentials --admin) refused" "Azure handed it out"
           else
-            result PASS R1 "local admin credential (get-credentials --admin) refused" "$(head -c 200 <<<"$out" | tr '\n' ' ')"
+            result PASS R7 "local admin credential (get-credentials --admin) refused" "$(head -c 200 <<<"$out" | tr '\n' ' ')"
           fi
 
       # The private API server, through the hub firewall's VPN
       - uses: ./.github/actions/labfw-vpn
         with:
           config: ${{ secrets.LABFW_VPN_GITHUB_RUNNERS }}
-          # The zone's application names (R15, R24): an internal zone's resolve only in the hub's private DNS zones
+          # The zone's application names (R12, R24): an internal zone's resolve only in the hub's private DNS zones
           extra_private_names: hello-${{ env.CLUSTER }}.${{ env.ZONE_DOMAIN }} hello.${{ env.ZONE_DOMAIN }}
 
       - name: Credentials
@@ -226,19 +226,19 @@ jobs:
           for t in $templates; do
             if kubectl get constrainttemplate "$t" >/dev/null 2>&1; then
               actions="$(kubectl get "$t" -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
-              result PASS R14 "constraint template $t" "constraints: ${actions:-none}"
+              result PASS R15 "constraint template $t" "constraints: ${actions:-none}"
             else
-              result FAIL R14 "constraint template $t" "not in the cluster"
+              result FAIL R15 "constraint template $t" "not in the cluster"
             fi
           done
           # Stateless: the storage rule is enforced in every environment (it replaced the fleet's
           # ValidatingAdmissionPolicy).
           storage="$(kubectl get k8splatformnopersistentstorage -o jsonpath='{.items[*].spec.enforcementAction}' 2>/dev/null)"
-          case "$storage" in *deny*) result PASS "R8, R14" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R8, R14" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
-          if [ "${mutations:-0}" -ge "$want" ]; then result PASS R14 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R14 "platform mutations" "${mutations:-0} of $want"; fi
+          case "$storage" in *deny*) result PASS "R15, R17" "no-persistent-storage denies" "$storage" ;; *) result FAIL "R15, R17" "no-persistent-storage denies" "${storage:-no constraint}" ;; esac
+          if [ "${mutations:-0}" -ge "$want" ]; then result PASS R15 "platform mutations" "$mutations Assign/ModifySet"; else result FAIL R15 "platform mutations" "${mutations:-0} of $want"; fi
           kubectl get constrainttemplates -o custom-columns=NAME:.metadata.name,CREATED:.status.created || true
 
-      # Key Vault ABAC (R7): a namespace's identity - the `key-vault` service account's, what its
+      # Key Vault ABAC (R10): a namespace's identity - the `key-vault` service account's, what its
       # SecretStore reads as - gets its own secrets and no other namespace's. The runner asks the
       # cluster for that service account's token, exchanges it at Entra ID as the External Secrets
       # Operator does, and calls Key Vault. Secret values are never printed: a read goes to
@@ -269,29 +269,29 @@ jobs:
           # in the same vault (ABAC refuses by name, whether it exists or not); the platform vault.
           if token="$(vault_token "$ZONE-example")" && [ -n "$token" ]; then
             echo "::add-mask::$token"
-            read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 200
-            read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-other--isolation-test" 403
-            read_secret R7 "$ZONE-example" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
+            read_secret R10 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 200
+            read_secret R10 "$ZONE-example" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-other--isolation-test" 403
+            read_secret R10 "$ZONE-example" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
             # Soft multi-tenancy: it reads its own by name and lists nothing - no other namespace's names.
             code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "https://$VAULT_PREFIX-$ZONE.vault.azure.net/secrets?api-version=7.4" || true)"
-            if [ "$code" = 403 ]; then result PASS R7 "$ZONE-example lists no secret names in $VAULT_PREFIX-$ZONE" "HTTP $code"
-            else result FAIL R7 "$ZONE-example lists no secret names in $VAULT_PREFIX-$ZONE" "HTTP $code"; fi
+            if [ "$code" = 403 ]; then result PASS R10 "$ZONE-example lists no secret names in $VAULT_PREFIX-$ZONE" "HTTP $code"
+            else result FAIL R10 "$ZONE-example lists no secret names in $VAULT_PREFIX-$ZONE" "HTTP $code"; fi
           else
-            result FAIL R7 "$ZONE-example's Key Vault identity signs in" "no token for its key-vault service account"
+            result FAIL R10 "$ZONE-example's Key Vault identity signs in" "no token for its key-vault service account"
           fi
           # A gateway namespace: its own certificate in the platform vault, another zone's
           # certificate and flux-system's secret next to it, and its zone's application vault.
           if token="$(vault_token "$ZONE-gateway")" && [ -n "$token" ]; then
             echo "::add-mask::$token"
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$ZONE-gateway--wildcard" 200
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$OTHER_ZONE-gateway--wildcard" 403
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
-            read_secret R7 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 403
+            read_secret R10 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$ZONE-gateway--wildcard" 200
+            read_secret R10 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" "$OTHER_ZONE-gateway--wildcard" 403
+            read_secret R10 "$ZONE-gateway" "$token" "$VAULT_PREFIX-platform" flux-system--github-webhook-token 403
+            read_secret R10 "$ZONE-gateway" "$token" "$VAULT_PREFIX-$ZONE" "$ZONE-example--isolation-test" 403
           else
-            result FAIL R7 "$ZONE-gateway's Key Vault identity signs in" "no token for its key-vault service account"
+            result FAIL R10 "$ZONE-gateway's Key Vault identity signs in" "no token for its key-vault service account"
           fi
 
-      # Namespace access (R6, R7): the Entra ID groups of managed_namespaces[*].groups get Kubernetes'
+      # Namespace access (R10, R13): the Entra ID groups of managed_namespaces[*].groups get Kubernetes'
       # view, edit or admin in their namespace and nothing elsewhere - by impersonating a member, and
       # signed in as a real member where tests/isolation/namespace-access-testers.yaml names one - and
       # the matching rights on the namespace's secrets in its Key Vault.
@@ -312,7 +312,7 @@ jobs:
           # shellcheck disable=SC2086
           python3 tests/isolation/check-key-vault-roles.py "$RESOURCE_GROUP" $ZONES || echo x >> "$RUNNER_TEMP/failures"
 
-      # Certificates through the platform vault (R15): every gateway's wildcard is in the vault and
+      # Certificates through the platform vault (R12): every gateway's wildcard is in the vault and
       # valid for two more weeks, the gateway's Secret is that certificate, the Gateway's listener
       # names it and is Programmed, and the external names serve it.
       - name: Certificates - from the platform vault to every gateway
@@ -327,31 +327,31 @@ jobs:
           # The platform gateway exists only in a cell with the Flux webhook (flux_github_webhook, design D78)
           gateways="$ZONES"
           if kubectl get namespace platform-gateway >/dev/null 2>&1; then gateways="$gateways platform"
-          else result PASS R15 "no platform gateway: the Flux webhook is off in this cell (design D78)"; fi
+          else result PASS R12 "no platform gateway: the Flux webhook is off in this cell (design D78)"; fi
           for zone in $gateways; do
             ns="$zone-gateway"
             cert="$(az keyvault certificate show --vault-name "$VAULT_PREFIX-platform" -n "$ns--wildcard" --query '{t: x509ThumbprintHex, e: attributes.expires}' -o json 2>/dev/null)"
-            if [ -z "$cert" ]; then result FAIL R15 "$ns--wildcard in the platform vault" "missing"; continue; fi
+            if [ -z "$cert" ]; then result FAIL R12 "$ns--wildcard in the platform vault" "missing"; continue; fi
             thumbprint="$(jq -r .t <<<"$cert" | tr a-f A-F)"
             days=$(( ($(date -d "$(jq -r .e <<<"$cert")" +%s) - $(date +%s)) / 86400 ))
-            if [ "$days" -ge 14 ]; then result PASS R15 "$ns--wildcard valid for two more weeks" "$days days"; else result FAIL R15 "$ns--wildcard valid for two more weeks" "$days days left"; fi
+            if [ "$days" -ge 14 ]; then result PASS R12 "$ns--wildcard valid for two more weeks" "$days days"; else result FAIL R12 "$ns--wildcard valid for two more weeks" "$days days left"; fi
             in_cluster="$(kubectl -n "$ns" get secret gateway-tls -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d | fingerprint)"
-            if [ "$in_cluster" = "$thumbprint" ]; then result PASS R15 "$ns: Secret gateway-tls is the vault's certificate" "${thumbprint:0:12}"
-            else result FAIL R15 "$ns: Secret gateway-tls is the vault's certificate" "cluster ${in_cluster:-none}, vault $thumbprint"; fi
+            if [ "$in_cluster" = "$thumbprint" ]; then result PASS R12 "$ns: Secret gateway-tls is the vault's certificate" "${thumbprint:0:12}"
+            else result FAIL R12 "$ns: Secret gateway-tls is the vault's certificate" "cluster ${in_cluster:-none}, vault $thumbprint"; fi
             gw="$(kubectl -n "$ns" get gateway -o json 2>/dev/null)"
             refs="$(jq -r '[.items[].spec.listeners[].tls.certificateRefs[]?.name] | unique | join(",")' <<<"$gw")"
             programmed="$(jq -r '[.items[].status.conditions[]? | select(.type == "Programmed") | .status] | join(",")' <<<"$gw")"
-            if [ "$refs" = gateway-tls ] && [ "$programmed" = True ]; then result PASS R15 "$ns: the listener serves gateway-tls, Programmed"
-            else result FAIL R15 "$ns: the listener serves gateway-tls, Programmed" "certificateRefs=${refs:-none} Programmed=${programmed:-none}"; fi
+            if [ "$refs" = gateway-tls ] && [ "$programmed" = True ]; then result PASS R12 "$ns: the listener serves gateway-tls, Programmed"
+            else result FAIL R12 "$ns: the listener serves gateway-tls, Programmed" "certificateRefs=${refs:-none} Programmed=${programmed:-none}"; fi
             host="$(external_host "$zone")"
             if [ -n "$host" ]; then
               got="$(served "$host")"
-              if [ "$got" = "$thumbprint" ]; then result PASS R15 "https://$host serves the vault's certificate" "${got:0:12}"
-              else result FAIL R15 "https://$host serves the vault's certificate" "served ${got:-nothing}, vault $thumbprint"; fi
+              if [ "$got" = "$thumbprint" ]; then result PASS R12 "https://$host serves the vault's certificate" "${got:0:12}"
+              else result FAIL R12 "https://$host serves the vault's certificate" "served ${got:-nothing}, vault $thumbprint"; fi
             fi
           done
 
-      # Countries online (R16): every zone is the complete pattern - so a new one is a new index in
+      # Countries online (R5): every zone is the complete pattern - so a new one is a new index in
       # aks-terraform and a Kustomization in the fleet, the others untouched.
       - name: Every isolation zone complete
         if: ${{ !cancelled() }}
@@ -374,11 +374,11 @@ jobs:
               [ -n "$nsg" ] || missing="$missing subnet+NSG(${subnet##*/})"
             fi
             az keyvault show -n "$VAULT_PREFIX-$zone" --query id -o tsv >/dev/null 2>&1 || missing="$missing vault/$VAULT_PREFIX-$zone"
-            if [ -z "$missing" ]; then result PASS R16 "zone $zone complete" "namespaces, Gateway, ESO, Cilium baseline, node pools $pool/${pool}spot, subnet ${subnet##*/} with NSG, vault"
-            else result FAIL R16 "zone $zone complete" "missing:$missing"; fi
+            if [ -z "$missing" ]; then result PASS R5 "zone $zone complete" "namespaces, Gateway, ESO, Cilium baseline, node pools $pool/${pool}spot, subnet ${subnet##*/} with NSG, vault"
+            else result FAIL R5 "zone $zone complete" "missing:$missing"; fi
           done
 
-      # Internal and external apart (R2, design decision D52): the cell holds the zones of its own
+      # Internal and external apart (R1, design decision D52): the cell holds the zones of its own
       # exposure only - namespaces, node pools, zone Gateways - and its subscription has no vault or
       # subnet of the other exposure.
       - name: One exposure per cluster and subscription
@@ -390,14 +390,14 @@ jobs:
                       az aks nodepool list -g "$RESOURCE_GROUP" --cluster-name "$CLUSTER" --query '[].nodeLabels."platform/zone"' -o tsv
                       kubectl get gateways.gateway.networking.k8s.io -A -o jsonpath='{range .items[*]}{.metadata.labels.platform/zone}{"\n"}{end}'; } | sort -u | grep . )"
           foreign="$(grep -v "^$EXPOSURE-" <<<"$zones" | tr '\n' ' ')"
-          if [ -z "$foreign" ]; then result PASS R2 "the cluster holds only $EXPOSURE zones" "$(echo $zones)"
-          else result FAIL R2 "the cluster holds only $EXPOSURE zones" "other zones: $foreign"; fi
+          if [ -z "$foreign" ]; then result PASS R1 "the cluster holds only $EXPOSURE zones" "$(echo $zones)"
+          else result FAIL R1 "the cluster holds only $EXPOSURE zones" "other zones: $foreign"; fi
           vaults="$(az keyvault list --query "[?starts_with(name, '$VAULT_PREFIX-$other-')].name" -o tsv | tr '\n' ' ')"
           subnets="$(az network vnet list --query "[].subnets[?starts_with(name, 'snet-$other-')].id[]" -o tsv | tr '\n' ' ')"
-          if [ -z "$vaults$subnets" ]; then result PASS R2 "no $other vault or subnet in the $EXPOSURE subscription"
-          else result FAIL R2 "no $other vault or subnet in the $EXPOSURE subscription" "$vaults $subnets"; fi
+          if [ -z "$vaults$subnets" ]; then result PASS R1 "no $other vault or subnet in the $EXPOSURE subscription"
+          else result FAIL R1 "no $other vault or subnet in the $EXPOSURE subscription" "$vaults $subnets"; fi
 
-      # Environments in sync (R13): the cell runs what Git says - Flux at the head of the fleet and
+      # Environments in sync (R25): the cell runs what Git says - Flux at the head of the fleet and
       # the team repository, everything reconciled - and every cell of the environment is built from
       # the same tfvars and fleet directory but for its name and availability zone.
       - name: In sync with Git and with the other cells
@@ -419,13 +419,13 @@ jobs:
               committed="$(curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${url#https://github.com/}/commits/$head" | jq -r '.commit.committer.date // empty')"
               age=$(( $(date +%s) - $(date -d "${committed:-1970-01-01}" +%s) ))
             fi
-            if [ "$applied" = "$head" ]; then result PASS R13 "Flux $source at the head of $branch" "${head:0:12}"
-            elif [ "$age" -lt 900 ]; then result PASS R13 "Flux $source at the head of $branch" "head ${head:0:12} pushed ${age}s ago, applied ${applied:0:12}"
-            else result FAIL R13 "Flux $source at the head of $branch" "applied ${applied:-nothing}, head $head"; fi
+            if [ "$applied" = "$head" ]; then result PASS R25 "Flux $source at the head of $branch" "${head:0:12}"
+            elif [ "$age" -lt 900 ]; then result PASS R25 "Flux $source at the head of $branch" "head ${head:0:12} pushed ${age}s ago, applied ${applied:0:12}"
+            else result FAIL R25 "Flux $source at the head of $branch" "applied ${applied:-nothing}, head $head"; fi
           done
           stale="$(kubectl get kustomizations.kustomize.toolkit.fluxcd.io,helmreleases.helm.toolkit.fluxcd.io -A -o json \
             | jq -r '.items[] | select(([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length) == 0) | "\(.kind)/\(.metadata.namespace)/\(.metadata.name)"' | paste -sd, -)"
-          if [ -z "$stale" ]; then result PASS R13 "every Flux Kustomization and HelmRelease Ready"; else result FAIL R13 "every Flux Kustomization and HelmRelease Ready" "$stale"; fi
+          if [ -z "$stale" ]; then result PASS R25 "every Flux Kustomization and HelmRelease Ready"; else result FAIL R25 "every Flux Kustomization and HelmRelease Ready" "$stale"; fi
 
       # The test pods' image: curl, imported into the environment's registry and named by digest - the platform
       # admits nothing else in an application namespace (k8s-allowed-images, in deny). Deliberately unsigned:
@@ -491,16 +491,16 @@ jobs:
           EOF
           pod="$(kubectl -n "$NAMESPACE" get pod probe -o json)"
           check() { if [ "$3" = "$4" ]; then result PASS "$1" "$2" "$3"; else result FAIL "$1" "$2" "$3, expected $4"; fi; }
-          check R4 "mutation: zone nodeSelector" "$(jq -r '.spec.nodeSelector["platform/zone"] // "none"' <<<"$pod")" "$ZONE"
-          check R17 "mutation: default architecture" "$(jq -r '.spec.nodeSelector["kubernetes.io/arch"] // "none"' <<<"$pod")" amd64
-          check R17 "mutation: spot toleration from platform/capacity" "$(jq -r '[.spec.tolerations[] | select(.key == "platform/capacity" and .value == "spot")] | length' <<<"$pod")" 1
-          check R17 "mutation: spot preferred" "$(jq -r '[.spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[]?.preference.matchExpressions[] | select(.key == "kubernetes.azure.com/scalesetpriority")] | length' <<<"$pod")" 1
+          check R3 "mutation: zone nodeSelector" "$(jq -r '.spec.nodeSelector["platform/zone"] // "none"' <<<"$pod")" "$ZONE"
+          check R8 "mutation: default architecture" "$(jq -r '.spec.nodeSelector["kubernetes.io/arch"] // "none"' <<<"$pod")" amd64
+          check R8 "mutation: spot toleration from platform/capacity" "$(jq -r '[.spec.tolerations[] | select(.key == "platform/capacity" and .value == "spot")] | length' <<<"$pod")" 1
+          check R8 "mutation: spot preferred" "$(jq -r '[.spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution[]?.preference.matchExpressions[] | select(.key == "kubernetes.azure.com/scalesetpriority")] | length' <<<"$pod")" 1
           if kubectl -n "$NAMESPACE" wait pod/probe --for=condition=Ready --timeout=600s; then
             node="$(kubectl -n "$NAMESPACE" get pod probe -o jsonpath='{.spec.nodeName}')"
-            check R4 "probe runs on a node of its zone ($node)" "$(kubectl get node "$node" -o jsonpath='{.metadata.labels.platform/zone}')" "$ZONE"
+            check R3 "probe runs on a node of its zone ($node)" "$(kubectl get node "$node" -o jsonpath='{.metadata.labels.platform/zone}')" "$ZONE"
           else
             kubectl -n "$NAMESPACE" describe pod probe | tail -20
-            result FAIL R4 "probe pod scheduled on the zone's nodes" "not ready after 10 minutes"
+            result FAIL R3 "probe pod scheduled on the zone's nodes" "not ready after 10 minutes"
             exit 1
           fi
 
@@ -508,25 +508,25 @@ jobs:
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: |
           . "$RUNNER_TEMP/lib.sh"
-          reachable R5 "cluster DNS" "nslookup kubernetes.default.svc.cluster.local"
-          blocked R5 "the instance metadata service (IMDS token)" "curl -sS -m 5 -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/'"
+          reachable R4 "cluster DNS" "nslookup kubernetes.default.svc.cluster.local"
+          blocked R4 "the instance metadata service (IMDS token)" "curl -sS -m 5 -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/'"
           for zone in $ZONES $OTHER_ZONE; do
-            blocked R7b "Key Vault $VAULT_PREFIX-$zone" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-$zone.vault.azure.net/healthstatus"
+            blocked R11 "Key Vault $VAULT_PREFIX-$zone" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-$zone.vault.azure.net/healthstatus"
             [ "$zone" = "$ZONE" ] && continue
             gw_pod="$(kubectl -n "$zone-gateway" get pod -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
             gw_lb="$(kubectl -n "$zone-gateway" get svc -l gateway.networking.k8s.io/gateway-name="$zone" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
             eso_pod="$(kubectl -n "$zone-secrets" get pod -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-            [ -z "$gw_pod" ] || blocked "R3, R5" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:443"
-            [ -z "$gw_lb" ] || blocked "R3, R5" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
-            [ -z "$eso_pod" ] || blocked "R3, R5" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
+            [ -z "$gw_pod" ] || blocked "R2, R4" "zone $zone: its gateway pod ($gw_pod)" "curl -sS -m 5 -k -o /dev/null https://$gw_pod:443"
+            [ -z "$gw_lb" ] || blocked "R2, R4" "zone $zone: its gateway load balancer ($gw_lb)" "curl -sS -m 5 -k -o /dev/null https://$gw_lb"
+            [ -z "$eso_pod" ] || blocked "R2, R4" "zone $zone: its External Secrets pod ($eso_pod)" "curl -sS -m 5 -k -o /dev/null http://$eso_pod:8080/metrics"
           done
-          blocked R7b "the platform Key Vault" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-platform.vault.azure.net/healthstatus"
+          blocked R11 "the platform Key Vault" "curl -sS -m 5 -o /dev/null https://$VAULT_PREFIX-platform.vault.azure.net/healthstatus"
           app_pod="$(kubectl -n "$ZONE-example" get pod -l app.kubernetes.io/name=aks-hello -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)"
-          [ -z "$app_pod" ] || blocked R6 "another application of the same zone ($ZONE-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
+          [ -z "$app_pod" ] || blocked R13 "another application of the same zone ($ZONE-example, $app_pod)" "curl -sS -m 5 -o /dev/null http://$app_pod:8080/healthz"
           node_ip="$(kubectl get nodes -l kubernetes.azure.com/mode=system -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
-          [ -z "$node_ip" ] || blocked R5 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
-          blocked R20 "the internet by IP" "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://1.1.1.1"
-          blocked R20 "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
+          [ -z "$node_ip" ] || blocked R4 "the system node's kubelet ($node_ip)" "curl -sS -m 5 -k -o /dev/null https://$node_ip:10250/pods"
+          blocked R29 "the internet by IP" "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://1.1.1.1"
+          blocked R29 "the internet by name" "curl -sS -m 5 -o /dev/null https://www.microsoft.com"
 
       - name: Forbidden manifests
         if: ${{ !cancelled() }}
@@ -581,42 +581,42 @@ jobs:
             printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s %s, containers: [%s]}\n' \
               "$1" "${2:+$2,}" "$pod_security" "$(container "$PROBE_IMAGE" "${3:-$restricted}")"
           }
-          pod privileged "" "{privileged: true}" | forbidden R5 "privileged pod" always
-          pod host-path "volumes: [{name: h, hostPath: {path: /}}]" | forbidden R5 "hostPath volume" always
-          pod host-network "hostNetwork: true" | forbidden R5 "hostNetwork pod" always
+          pod privileged "" "{privileged: true}" | forbidden R4 "privileged pod" always
+          pod host-path "volumes: [{name: h, hostPath: {path: /}}]" | forbidden R4 "hostPath volume" always
+          pod host-network "hostNetwork: true" | forbidden R4 "hostNetwork pod" always
           printf 'apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata: {name: data}\nspec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}\n' \
-            | forbidden R8 "PersistentVolumeClaim on a stateless cluster" always
+            | forbidden R17 "PersistentVolumeClaim on a stateless cluster" always
           printf 'apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata: {name: isolation-test}\nprovisioner: disk.csi.azure.com\n' \
-            | forbidden R8 "StorageClass on a stateless cluster" always
-          pod csi "volumes: [{name: v, csi: {driver: secrets-store.csi.k8s.io}}]" | forbidden "R7b, R8" "inline csi volume (Secrets Store)" always
+            | forbidden R17 "StorageClass on a stateless cluster" always
+          pod csi "volumes: [{name: v, csi: {driver: secrets-store.csi.k8s.io}}]" | forbidden "R11, R17" "inline csi volume (Secrets Store)" always
           printf 'apiVersion: secrets-store.csi.x-k8s.io/v1\nkind: SecretProviderClass\nmetadata: {name: kv}\nspec: {provider: azure}\n' \
-            | forbidden R7b "SecretProviderClass" always
+            | forbidden R11 "SecretProviderClass" always
           printf 'apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata: {name: web}\nspec: {defaultBackend: {service: {name: web, port: {number: 80}}}}\n' \
-            | forbidden R9b "Ingress" builtin
+            | forbidden R22 "Ingress" builtin
           printf 'apiVersion: v1\nkind: Service\nmetadata: {name: lb}\nspec: {type: LoadBalancer, selector: {app: x}, ports: [{port: 80}]}\n' \
-            | forbidden R9b "LoadBalancer Service outside a gateway namespace" k8splatformgatewayonly
+            | forbidden R22 "LoadBalancer Service outside a gateway namespace" k8splatformgatewayonly
           printf 'apiVersion: v1\nkind: Service\nmetadata: {name: np}\nspec: {type: NodePort, selector: {app: x}, ports: [{port: 80}]}\n' \
-            | forbidden R9b "NodePort Service" k8splatformgatewayonly
+            | forbidden R22 "NodePort Service" k8splatformgatewayonly
           printf 'apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: other-zone}\nspec: {parentRefs: [{namespace: %s-gateway, name: %s}], hostnames: [x.%s.dev.onek8s.lol], rules: [{backendRefs: [{name: x, port: 80}]}]}\n' "$OTHER_ZONE" "$OTHER_ZONE" "$OTHER_ZONE" \
-            | forbidden "R3, R9b" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
+            | forbidden "R2, R22" "HTTPRoute on another zone's Gateway" k8splatformgatewayonly
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: cidr}\nspec: {endpointSelector: {}, egress: [{toCIDR: [1.1.1.1/32]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy toCIDR" k8splatformappegress
+            | forbidden R29 "CiliumNetworkPolicy toCIDR" k8splatformappegress
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: world}\nspec: {endpointSelector: {}, egress: [{toEntities: [world]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy toEntities world" k8splatformappegress
+            | forbidden R29 "CiliumNetworkPolicy toEntities world" k8splatformappegress
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: fqdn}\nspec: {endpointSelector: {}, egress: [{toFQDNs: [{matchName: api.github.com}], toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy toFQDNs (the firewall decides, D80)" k8splatformappegress
+            | forbidden R29 "CiliumNetworkPolicy toFQDNs (the firewall decides, D80)" k8splatformappegress
           printf 'apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata: {name: ports-only}\nspec: {endpointSelector: {}, egress: [{toPorts: [{ports: [{port: "443", protocol: TCP}]}]}]}\n' \
-            | forbidden R20 "CiliumNetworkPolicy egress rule without a peer" k8splatformappegress
+            | forbidden R29 "CiliumNetworkPolicy egress rule without a peer" k8splatformappegress
           printf 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata: {name: ipblock}\nspec: {podSelector: {}, policyTypes: [Egress], egress: [{to: [{ipBlock: {cidr: 0.0.0.0/0}}]}]}\n' \
-            | forbidden R20 "NetworkPolicy egress ipBlock" k8splatformappegress
-          pod own-dns "dnsPolicy: Default" | forbidden R20 "pod with its own DNS (dnsPolicy Default)" k8splatformappegress
+            | forbidden R29 "NetworkPolicy egress ipBlock" k8splatformappegress
+          pod own-dns "dnsPolicy: Default" | forbidden R29 "pod with its own DNS (dnsPolicy Default)" k8splatformappegress
           pod system-pool "nodeSelector: {kubernetes.azure.com/mode: system}, tolerations: [{key: CriticalAddonsOnly, operator: Exists}]" \
-            | forbidden R4 "zone pod on the system pool" k8splatformzoneplacement
-          pod other-zone "nodeSelector: {platform/zone: $OTHER_ZONE}" | forbidden "R3, R4" "zone pod selecting another zone's nodes" k8splatformzoneplacement
-          pod own-arch "nodeSelector: {kubernetes.io/arch: arm64}" | forbidden R17 "pod selecting an architecture without platform/arch" k8splatformplacementlabels
+            | forbidden R3 "zone pod on the system pool" k8splatformzoneplacement
+          pod other-zone "nodeSelector: {platform/zone: $OTHER_ZONE}" | forbidden "R2, R3" "zone pod selecting another zone's nodes" k8splatformzoneplacement
+          pod own-arch "nodeSelector: {kubernetes.io/arch: arm64}" | forbidden R8 "pod selecting an architecture without platform/arch" k8splatformplacementlabels
           pod sneaky-spot "tolerations: [{key: platform/capacity, operator: Equal, value: spot, effect: NoSchedule}]" \
-            | forbidden R17 "spot toleration without platform/capacity: spot" k8splatformplacementlabels
-          # GPUs (R17, decision D42): asked for with nvidia.com/gpu and the label platform/accelerator:
+            | forbidden R8 "spot toleration without platform/capacity: spot" k8splatformplacementlabels
+          # GPUs (R8, decision D42): asked for with nvidia.com/gpu and the label platform/accelerator:
           # nvidia-gpu, which the mutation turns into the GPU pool's toleration. A dry run of such
           # a pod shows the toleration added; the request alone, the label alone and the toleration
           # alone are refused.
@@ -626,66 +626,66 @@ jobs:
           }
           if out="$(gpu_pod gpu "platform/accelerator: nvidia-gpu" "nvidia.com/gpu: 1" | kubectl create --dry-run=server -n "$NAMESPACE" -o json -f - 2>&1)"; then
             if jq -e '.spec.tolerations[]? | select(.key == "platform/accelerator" and .value == "nvidia-gpu")' <<<"$out" >/dev/null; then
-              result PASS R17 "GPU pod admitted with the GPU toleration from the mutation" "$(jq -c '[.spec.nodeSelector, [.spec.tolerations[] | .key]]' <<<"$out")"
+              result PASS R8 "GPU pod admitted with the GPU toleration from the mutation" "$(jq -c '[.spec.nodeSelector, [.spec.tolerations[] | .key]]' <<<"$out")"
             else
-              result FAIL R17 "GPU pod admitted with the GPU toleration from the mutation" "no toleration: $(jq -c '.spec.tolerations' <<<"$out")"
+              result FAIL R8 "GPU pod admitted with the GPU toleration from the mutation" "no toleration: $(jq -c '.spec.tolerations' <<<"$out")"
             fi
           else
-            result FAIL R17 "GPU pod admitted with the GPU toleration from the mutation" "$(tail -1 <<<"$out" | head -c 300)"
+            result FAIL R8 "GPU pod admitted with the GPU toleration from the mutation" "$(tail -1 <<<"$out" | head -c 300)"
           fi
-          gpu_pod gpu-unlabelled "" "nvidia.com/gpu: 1" | forbidden R17 "GPU request without platform/accelerator" k8splatformplacementlabels
-          gpu_pod gpu-idle "platform/accelerator: nvidia-gpu" "" | forbidden R17 "platform/accelerator without a GPU request" k8splatformplacementlabels
+          gpu_pod gpu-unlabelled "" "nvidia.com/gpu: 1" | forbidden R8 "GPU request without platform/accelerator" k8splatformplacementlabels
+          gpu_pod gpu-idle "platform/accelerator: nvidia-gpu" "" | forbidden R8 "platform/accelerator without a GPU request" k8splatformplacementlabels
           gpu_pod gpu-sneaky "" "" "tolerations: [{key: platform/accelerator, operator: Equal, value: nvidia-gpu, effect: NoSchedule}]" \
-            | forbidden R17 "GPU toleration without platform/accelerator" k8splatformplacementlabels
-          # Every namespace names its owner, cost centre and contact (R25).
+            | forbidden R8 "GPU toleration without platform/accelerator" k8splatformplacementlabels
+          # Every namespace names its owner, cost centre and contact (R14).
           printf 'apiVersion: v1\nkind: Namespace\nmetadata: {name: %s-unowned, labels: {platform/zone: %s}}\n' "$ZONE" "$ZONE" \
-            | forbidden R25 "namespace without owner, cost centre and contact" k8splatformnamespaceownership
+            | forbidden R14 "namespace without owner, cost centre and contact" k8splatformnamespaceownership
           # Images by digest from the environment's registry only (built-in, k8s-allowed-images).
           image_pod() {
             printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: %s, labels: {app: forbidden}}\nspec: {%s, containers: [%s]}\n' \
               "$1" "$pod_security" "$(container "$2" "$restricted")"
           }
-          image_pod other-registry docker.io/library/nginx:1.27 | forbidden R14 "image from outside the environment's registry" builtin
-          image_pod by-tag "$REGISTRY.azurecr.io/aks-hello:0.3.0" | forbidden R14 "image from the registry by tag, not by digest" builtin
-          # Secrets only through the zone's External Secrets Operator (R7b): this runner is not it.
+          image_pod other-registry docker.io/library/nginx:1.27 | forbidden R15 "image from outside the environment's registry" builtin
+          image_pod by-tag "$REGISTRY.azurecr.io/aks-hello:0.3.0" | forbidden R15 "image from the registry by tag, not by digest" builtin
+          # Secrets only through the zone's External Secrets Operator (R11): this runner is not it.
           printf 'apiVersion: v1\nkind: Secret\nmetadata: {name: handmade}\nstringData: {password: x}\n' \
-            | forbidden R7b "Secret written by someone other than the zone's ESO" k8splatformsecretsviaeso
-          # The namespace's ESO objects read only its own share (R7, R7b).
+            | forbidden R11 "Secret written by someone other than the zone's ESO" k8splatformsecretsviaeso
+          # The namespace's ESO objects read only its own share (R10, R11).
           store() { printf 'apiVersion: external-secrets.io/v1\nkind: SecretStore\nmetadata: {name: %s}\nspec: {controller: %s, provider: {azurekv: {authType: %s, vaultUrl: "https://%s.vault.azure.net/", serviceAccountRef: {name: key-vault}}}}\n' "$@"; }
-          store other-vault "$ZONE" WorkloadIdentity "$VAULT_PREFIX-$OTHER_ZONE" | forbidden R7 "SecretStore on another zone's vault" k8splatformesoobjects
-          store other-controller "$OTHER_ZONE" WorkloadIdentity "$VAULT_PREFIX-$ZONE" | forbidden "R3, R7" "SecretStore served by another zone's ESO" k8splatformesoobjects
+          store other-vault "$ZONE" WorkloadIdentity "$VAULT_PREFIX-$OTHER_ZONE" | forbidden R10 "SecretStore on another zone's vault" k8splatformesoobjects
+          store other-controller "$OTHER_ZONE" WorkloadIdentity "$VAULT_PREFIX-$ZONE" | forbidden "R2, R10" "SecretStore served by another zone's ESO" k8splatformesoobjects
           # Otherwise complete, so that only the platform's rule can refuse it (not ESO's own webhook).
           printf 'apiVersion: external-secrets.io/v1\nkind: SecretStore\nmetadata: {name: client-secret}\nspec: {controller: %s, provider: {azurekv: {authType: ServicePrincipal, tenantId: 00000000-0000-0000-0000-000000000000, vaultUrl: "https://%s.vault.azure.net/", authSecretRef: {clientId: {name: sp, key: id}, clientSecret: {name: sp, key: secret}}}}}\n' "$ZONE" "$VAULT_PREFIX-$ZONE" \
-            | forbidden R7a "SecretStore with a client secret, not workload identity" k8splatformesoobjects
+            | forbidden R9 "SecretStore with a client secret, not workload identity" k8splatformesoobjects
           printf 'apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata: {name: other}\nspec: {secretStoreRef: {kind: SecretStore, name: key-vault}, target: {name: other}, data: [{secretKey: k, remoteRef: {key: secret/%s-example--github-webhook-token}}]}\n' "$ZONE" \
-            | forbidden R7 "ExternalSecret reading another namespace's secret" k8splatformesoobjects
+            | forbidden R10 "ExternalSecret reading another namespace's secret" k8splatformesoobjects
           printf 'apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata: {name: cluster-store}\nspec: {secretStoreRef: {kind: ClusterSecretStore, name: platform}, target: {name: s}, data: [{secretKey: k, remoteRef: {key: x}}]}\n' \
-            | forbidden R7 "ExternalSecret against a ClusterSecretStore" k8splatformesoobjects
-          # Pods neither run as the vault reader nor pull with a credential (R7, R14).
+            | forbidden R10 "ExternalSecret against a ClusterSecretStore" k8splatformesoobjects
+          # Pods neither run as the vault reader nor pull with a credential (R10, R15).
           printf 'apiVersion: v1\nkind: ServiceAccount\nmetadata: {name: key-vault}\nautomountServiceAccountToken: false\n' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
-          pod as-reader "serviceAccountName: key-vault" | forbidden R7 "pod running as the vault reader's service account" k8splatformserviceaccounts
-          pod pull-secret "imagePullSecrets: [{name: regcred}]" | forbidden R14 "pod with imagePullSecrets" k8splatformserviceaccounts
+          pod as-reader "serviceAccountName: key-vault" | forbidden R10 "pod running as the vault reader's service account" k8splatformserviceaccounts
+          pod pull-secret "imagePullSecrets: [{name: regcred}]" | forbidden R15 "pod with imagePullSecrets" k8splatformserviceaccounts
           printf 'apiVersion: v1\nkind: ServiceAccount\nmetadata: {name: puller}\nimagePullSecrets: [{name: regcred}]\n' \
-            | forbidden R14 "ServiceAccount with imagePullSecrets" k8splatformserviceaccounts
-          # Replica and rollout guardrails (R11, R12).
+            | forbidden R15 "ServiceAccount with imagePullSecrets" k8splatformserviceaccounts
+          # Replica and rollout guardrails (R23, R26).
           deployment() { # name replicas maxUnavailable
             printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: %s}\nspec: {replicas: %s, strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: %s, maxSurge: 1}}, selector: {matchLabels: {app: %s}}, template: {metadata: {labels: {app: %s}}, spec: {topologySpreadConstraints: [{maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: %s}}}], %s, containers: [%s]}}}\n' \
               "$1" "$2" "$3" "$1" "$1" "$1" "$pod_security" "$(container "$PROBE_IMAGE" "$restricted")"
           }
-          deployment one-replica 1 0 | forbidden R11 "Deployment with one replica" k8splatformrolloutguardrails
-          deployment drops-capacity 2 1 | forbidden R12 "Deployment rolling out with maxUnavailable 1" k8splatformrolloutguardrails
+          deployment one-replica 1 0 | forbidden R23 "Deployment with one replica" k8splatformrolloutguardrails
+          deployment drops-capacity 2 1 | forbidden R26 "Deployment rolling out with maxUnavailable 1" k8splatformrolloutguardrails
           printf 'apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata: {name: no-drain}\nspec: {maxUnavailable: 0, selector: {matchLabels: {app: x}}}\n' \
-            | forbidden R12 "PodDisruptionBudget that blocks every drain" k8splatformrolloutguardrails
+            | forbidden R26 "PodDisruptionBudget that blocks every drain" k8splatformrolloutguardrails
           printf 'apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata: {name: one}\nspec: {minReplicas: 1, maxReplicas: 3, scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: x}}\n' \
-            | forbidden R11 "HorizontalPodAutoscaler with minReplicas 1" k8splatformrolloutguardrails
-          # Right-sizing within bounds (R11) - where the VPA add-on runs, which brings the CRD.
+            | forbidden R23 "HorizontalPodAutoscaler with minReplicas 1" k8splatformrolloutguardrails
+          # Right-sizing within bounds (R23) - where the VPA add-on runs, which brings the CRD.
           if kubectl api-resources --api-group=autoscaling.k8s.io -o name 2>/dev/null | grep -q '^verticalpodautoscalers'; then
             printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: evicts}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: Recreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly, maxAllowed: {cpu: 100m, memory: 128Mi}}]}}\n' \
-              | forbidden R11 "VerticalPodAutoscaler that evicts (Recreate)" k8splatformverticalpodautoscalers
+              | forbidden R23 "VerticalPodAutoscaler that evicts (Recreate)" k8splatformverticalpodautoscalers
             printf 'apiVersion: autoscaling.k8s.io/v1\nkind: VerticalPodAutoscaler\nmetadata: {name: unbounded}\nspec: {targetRef: {apiVersion: apps/v1, kind: Deployment, name: x}, updatePolicy: {updateMode: InPlaceOrRecreate}, resourcePolicy: {containerPolicies: [{containerName: "*", controlledValues: RequestsOnly}]}}\n' \
-              | forbidden R11 "VerticalPodAutoscaler without maxAllowed" k8splatformverticalpodautoscalers
+              | forbidden R23 "VerticalPodAutoscaler without maxAllowed" k8splatformverticalpodautoscalers
           else
-            result AUDIT R11 "refused: VerticalPodAutoscalers out of bounds" "no VPA add-on in this cell (vertical_pod_autoscaler_enabled = false)"
+            result AUDIT R23 "refused: VerticalPodAutoscalers out of bounds" "no VPA add-on in this cell (vertical_pod_autoscaler_enabled = false)"
           fi
 
       # The Azure CLI signed in with the job's GitHub OIDC token, which expires after a few minutes: a
@@ -708,20 +708,20 @@ jobs:
 
           # The registry: Entra ID only, and the cell's nodes may pull but not push.
           r="$(az acr show -n "$REGISTRY" -o json)"
-          check R7a "registry: no admin user" "$(jq -r .adminUserEnabled <<<"$r")" false
-          check R7a "registry: no anonymous pull" "$(jq -r '.anonymousPullEnabled // false' <<<"$r")" false
+          check R9 "registry: no admin user" "$(jq -r .adminUserEnabled <<<"$r")" false
+          check R9 "registry: no anonymous pull" "$(jq -r '.anonymousPullEnabled // false' <<<"$r")" false
           kubelet="$(az aks show -g "$RESOURCE_GROUP" -n "$CLUSTER" --query identityProfile.kubeletidentity.objectId -o tsv)"
           roles="$(az role assignment list --assignee "$kubelet" --scope "$(jq -r .id <<<"$r")" --include-inherited --query '[].roleDefinitionName' -o tsv | sort -u | paste -sd, -)"
-          check R14 "registry: the kubelet identity only pulls" "${roles:-none}" AcrPull
+          check R15 "registry: the kubelet identity only pulls" "${roles:-none}" AcrPull
 
           # Ratify, run by AKS for Image Integrity: as the service account aks-terraform federates
           # (image_integrity_service_account), with its configuration from the fleet in good order.
           ratify="$(kubectl get pods -A -o json | jq -c '[.items[] | select(.metadata.name | test("ratify"))]')"
           ready="$(jq '[.[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length' <<<"$ratify")"
-          if [ "$ready" -ge 1 ]; then result PASS R14 "Ratify running" "$ready ready"; else result FAIL R14 "Ratify running" "$(jq -r 'map(.metadata.namespace + "/" + .metadata.name + " " + .status.phase) | join(", ")' <<<"$ratify")"; fi
-          check R14 "Ratify's service account is the federated one" \
+          if [ "$ready" -ge 1 ]; then result PASS R15 "Ratify running" "$ready ready"; else result FAIL R15 "Ratify running" "$(jq -r 'map(.metadata.namespace + "/" + .metadata.name + " " + .status.phase) | join(", ")' <<<"$ratify")"; fi
+          check R15 "Ratify's service account is the federated one" \
             "$(jq -r 'map(.metadata.namespace + "/" + .spec.serviceAccountName) | unique | join(",")' <<<"$ratify")" gatekeeper-system/ratify-admin
-          check R14 "Ratify gets a workload identity token" \
+          check R15 "Ratify gets a workload identity token" \
             "$(jq -r '[.[].spec.containers[].env[]? | select(.name == "AZURE_FEDERATED_TOKEN_FILE")] | length > 0' <<<"$ratify")" true
           # Ratify can miss writing an object's status (when it reconciles the object before its cache
           # has it); then its log says whether it loaded the object.
@@ -733,11 +733,11 @@ jobs:
               stores) loaded="store '$(jq -r '.spec.name' <<<"$status")' added to store map" ;;
               verifiers) loaded="verifier 'platform' added to verifier map" ;;
             esac
-            if [ -z "$status" ]; then result FAIL R14 "Ratify $kind/platform" "not in the cluster"
-            elif [ "$(jq -r '.status.issuccess' <<<"$status")" = true ]; then result PASS R14 "Ratify $kind/platform" "healthy"
+            if [ -z "$status" ]; then result FAIL R15 "Ratify $kind/platform" "not in the cluster"
+            elif [ "$(jq -r '.status.issuccess' <<<"$status")" = true ]; then result PASS R15 "Ratify $kind/platform" "healthy"
             elif [ "$(jq -r '.status.issuccess // "none"' <<<"$status")" = none ] && grep -qE "$loaded" <<<"$ratify_log"; then
-              result PASS R14 "Ratify $kind/platform" "loaded (Ratify's log; it wrote no status)"
-            else result FAIL R14 "Ratify $kind/platform" "$(jq -r '.status.brieferror // .status.error // "no status, and not loaded"' <<<"$status" | head -c 200)"; fi
+              result PASS R15 "Ratify $kind/platform" "loaded (Ratify's log; it wrote no status)"
+            else result FAIL R15 "Ratify $kind/platform" "$(jq -r '.status.brieferror // .status.error // "no status, and not loaded"' <<<"$status" | head -c 200)"; fi
           done
 
           # Signatures, checked with the trust policy Ratify has: every image in the registry, and the
@@ -753,17 +753,17 @@ jobs:
               case "$repository" in isolation/*) continue ;; esac
               # Without the referrers API a signature is also kept under a tag `sha256-<digest>`: not an image.
               for tag in $(az acr repository show-tags -n "$REGISTRY" --repository "$repository" -o tsv | grep -v '^sha256-'); do
-                verify R14 "registry image $repository:$tag" "$REGISTRY.azurecr.io/$repository@$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
+                verify R15 "registry image $repository:$tag" "$REGISTRY.azurecr.io/$repository@$(az acr repository show -n "$REGISTRY" --image "$repository:$tag" --query digest -o tsv)"
               done
             done
             kubectl get pods -A -o json \
               | jq -r --arg server "$REGISTRY.azurecr.io/" --arg test "$NAMESPACE" '.items[] | select((.metadata.namespace | test("^(int|ext)-(fi|se)-")) and .metadata.namespace != $test) | .metadata.namespace as $ns
                   | .status.containerStatuses[]? | select(.image | startswith($server)) | "\($ns) \(.image) \(.imageID | sub("^.*@"; ""))"' \
               | sort -u | while read -r ns image digest; do
-                  verify R14 "running in $ns: $image" "${image%%[:@]*}@$digest"
+                  verify R15 "running in $ns: $image" "${image%%[:@]*}@$digest"
                 done
           else
-            result FAIL R14 "Notation set up with the platform's certificate" "$(tail -3 "$RUNNER_TEMP/notation.log" | tr '\n' ' ' | head -c 250)"
+            result FAIL R15 "Notation set up with the platform's certificate" "$(tail -3 "$RUNNER_TEMP/notation.log" | tr '\n' ' ' | head -c 250)"
           fi
 
           # Admission (audit while Image Integrity is in preview): every constraint of the policy
@@ -780,36 +780,36 @@ jobs:
             sleep 30
           done
           if [ "$(jq length <<<"$constraints")" -eq 0 ]; then
-            result FAIL R14 "Image Integrity constraint in the cluster" "no constraint of the Notation signature policy"
+            result FAIL R15 "Image Integrity constraint in the cluster" "no constraint of the Notation signature policy"
           else
-            result PASS R14 "Image Integrity constraint in the cluster" "$(jq -r 'map(.metadata.name + " (" + (.spec.enforcementAction // "deny") + ")") | join(", ")' <<<"$constraints")"
+            result PASS R15 "Image Integrity constraint in the cluster" "$(jq -r 'map(.metadata.name + " (" + (.spec.enforcementAction // "deny") + ")") | join(", ")' <<<"$constraints")"
             if [ "${{ steps.probe.outcome }}" = success ]; then
               if probe_reported; then
-                result PASS R14 "an unsigned image is reported (probe pod, isolation/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.[].status.violations[]? | select(.namespace == $ns)][0].message' <<<"$constraints" | head -c 160)"
+                result PASS R15 "an unsigned image is reported (probe pod, isolation/curl)" "$(jq -r --arg ns "$NAMESPACE" '[.[].status.violations[]? | select(.namespace == $ns)][0].message' <<<"$constraints" | head -c 160)"
               else
-                result FAIL R14 "an unsigned image is reported (probe pod, isolation/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
+                result FAIL R15 "an unsigned image is reported (probe pod, isolation/curl)" "not reported by every constraint after 5 minutes: $(jq -r --arg ns "$NAMESPACE" 'map(.metadata.name + "=" + (any(.status.violations[]?; .namespace == $ns) | tostring)) | join(", ")' <<<"$constraints")"
               fi
             fi
             reported="$(jq -r --arg ns "$ZONE-example" '[.[].status.violations[]? | select(.namespace == $ns)] | length' <<<"$constraints")"
-            check R14 "the signed application is not reported ($ZONE-example)" "$reported violations" "0 violations"
+            check R15 "the signed application is not reported ($ZONE-example)" "$reported violations" "0 violations"
           fi
 
           # The Flux webhook receiver: a delivery must carry GitHub's signature with the shared token.
           host="$(kubectl -n flux-system get configmap cluster-settings -o jsonpath='{.data.flux_webhook_hostname}')"
           path="$(kubectl -n flux-system get receiver github -o jsonpath='{.status.webhookPath}' 2>/dev/null)"
           if [ -z "$host" ] && [ -z "$path" ]; then
-            result PASS R14 "no Flux webhook receiver: the webhook is off in this cell (design D78)"
+            result PASS R15 "no Flux webhook receiver: the webhook is off in this cell (design D78)"
           elif [ -z "$host" ] || [ -z "$path" ]; then
-            result FAIL R14 "Flux webhook receiver" "no hostname ($host) or receiver path ($path)"
+            result FAIL R15 "Flux webhook receiver" "no hostname ($host) or receiver path ($path)"
           else
             body='{"zen":"isolation test","hook_id":0}'
             deliver() { curl -sS -m 15 -o /dev/null -w '%{http_code}' -X POST "https://$host$path" -H 'Content-Type: application/json' -H 'X-GitHub-Event: ping' -H "X-Hub-Signature-256: sha256=$1" --data "$body" || true; }
             code="$(deliver 0000000000000000000000000000000000000000000000000000000000000000)"
-            case "$code" in 4??) result PASS R14 "Flux webhook refuses a delivery with a wrong signature" "$code" ;; *) result FAIL R14 "Flux webhook refuses a delivery with a wrong signature" "$code" ;; esac
+            case "$code" in 4??) result PASS R15 "Flux webhook refuses a delivery with a wrong signature" "$code" ;; *) result FAIL R15 "Flux webhook refuses a delivery with a wrong signature" "$code" ;; esac
             token="$(az keyvault secret show --vault-name "$VAULT_PREFIX-platform" -n flux-system--github-webhook-token --query value -o tsv 2>/dev/null)"
             if [ -n "$token" ]; then
               code="$(deliver "$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$token" | sed 's/^.*= //')")"
-              check R14 "Flux webhook takes a delivery signed with the token" "$code" 200
+              check R15 "Flux webhook takes a delivery signed with the token" "$code" 200
             fi
           fi
 
@@ -822,7 +822,7 @@ jobs:
             if [ "$code" = 200 ]; then result PASS R24 "https://$host/healthz" 200; else result FAIL R24 "https://$host/healthz" "$code"; fi
             # Nothing listens on 80; from this VPN client the hub firewall answers a plain HTTP request itself with 470
             code="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://$host/" 2>/dev/null || true)"
-            case "$code" in 000|470) result PASS R9b "no plain HTTP on $host" "${code/000/no connection}" ;; *) result FAIL R9b "no plain HTTP on $host" "HTTP $code" ;; esac
+            case "$code" in 000|470) result PASS R22 "no plain HTTP on $host" "${code/000/no connection}" ;; *) result FAIL R22 "no plain HTTP on $host" "HTTP $code" ;; esac
           done
 
       - name: Azure Resource Graph - public endpoints and local authentication

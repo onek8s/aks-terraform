@@ -75,7 +75,7 @@ log_analytics_workspace_name = "log-dev-platform"
 private_cluster_public_fqdn_enabled = true
 private_dns_zone_mode               = "none"
 
-# No Gateway API implementation: the stateful cluster has no gateway of its own (design R9a), whatever
+# No Gateway API implementation: the stateful cluster has no gateway of its own (design R21), whatever
 # the environment - not a cost saving.
 gateway_implementation = null
 

@@ -296,7 +296,7 @@ locals {
 # path is symmetric; delivered inside the VNet, the load balancer would hand the request to the gateway
 # directly and the gateway's answer would leave for the firewall alone).
 #
-# Nothing is allowed between zones (design R5 and section 2.4): an application reaches another zone's
+# Nothing is allowed between zones (design R4 and section 2.4): an application reaches another zone's
 # application only as a client of that zone's entry point, with an application rule (FQDN) in its own
 # rule file. Between a zone and the system pool only the Kubernetes flows of design section 2.4, as
 # network rules of the landing zone's platform policy: the kubelet, node metrics, Cilium health and
