@@ -149,10 +149,14 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Flux GitHub webhook** (D78): root `flux_github_webhook` brings the platform gateway and flux-system's vault share;
   token in shared/. **Off in the lab** (no public entry point behind labfw; Flux polls every minute). GitHub delivers
   over HTTP/1.1: the receiver is the one exemption of `h2c-upstream` (`flux-system/webhook-receiver`).
-- **Apps**: aks-hello (2 replicas, rollout guardrails) in `int-se-example` from aks-fluxcd-example `firewall-egress/`
-  on int-se's zone nodes, fetching a Stockholm forecast (api.open-meteo.com) and its public IP (api.ipify.org) - both
-  allowed only once azure-landing-zone's `firewall-applications/dev-int/int-se-example.yaml` names them (egress agent
-  PR azure-landing-zone#66, left for the user). `lab/scale/kustomization.yaml` is the Git-only replica switch.
+- **Apps**: aks-hello 0.8.0 (2 replicas, rollout guardrails) in `int-se-example` from aks-fluxcd-example
+  `firewall-egress/` and in `int-fi-example` from `firewall-egress-int-fi/`, each on its zone's nodes, fetching a
+  forecast (api.open-meteo.com) and its public IP (api.ipify.org) - allowed only once azure-landing-zone's
+  `firewall-applications/dev-int/<ns>.yaml` names them (open-meteo yes, ipify not: egress agent PR
+  azure-landing-zone#66, left for the user). **Peers (0.8.0, 2026-10-20)**: each zone's aks-hello polls the other's
+  by its Service name and its published name every minute (`PEERS`, `/peers`), so labfw's log shows the
+  cross-zone flows: the Service name never answers (Cilium/labfw), the published name only with an application
+  rule for `hello.<zone>.dev.onek8s.lol` in the caller's rule file - none written yet, so both show as denied. `lab/scale/kustomization.yaml` is the Git-only replica switch.
   Internal names by home cell: `hello.<zone>.dev.onek8s.lol` next to `hello-<cluster>...`; routes carry
   `platform/home-cell` and external-dns-int publishes only its own cluster's.
 - **Egress agent**: model gpt-4.1-mini on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID); Claude models are
