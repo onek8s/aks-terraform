@@ -39,7 +39,7 @@ vertical_pod_autoscaler_enabled = false
 # End of the non-production cost savings
 # ---------------------------------------------------------------------------------------------------
 
-# Every cluster starts on 1.36, the platform floor (design R12a). AKS never upgrades a cell on its
+# Every cluster starts on 1.36, the platform floor (design R27). AKS never upgrades a cell on its
 # own: the version pipeline changes it while the cell is drained (section 3.5).
 kubernetes_version = "1.36"
 auto_upgrade = {

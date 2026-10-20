@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Namespace access check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R6:
+"""Namespace access check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R13:
 the Entra ID groups of `managed_namespaces[*].groups` (view, edit, admin) get exactly their
 Kubernetes role in their own namespace and nothing anywhere else.
 
@@ -46,7 +46,7 @@ import urllib.request
 import hcl2
 import yaml
 
-REQ = "R6"
+REQ = "R13"
 ROLES = ["view", "edit", "admin"]
 # What each role may do in its own namespace: (verb, resource, view, edit, admin).
 MATRIX = [

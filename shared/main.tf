@@ -333,7 +333,7 @@ resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
   }
 }
 
-# The Isolation tests' fixture (design section 7.1, R7): a secret in the share of each namespace of
+# The Isolation tests' fixture (design section 7.1, R10): a secret in the share of each namespace of
 # isolation_test_namespaces, which the tests read as the namespace's own identity - and which every
 # other namespace's identity must be refused.
 resource "random_password" "isolation_test" {

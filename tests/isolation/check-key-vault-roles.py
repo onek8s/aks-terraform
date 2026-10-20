@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Key Vault role check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R7 / R7a:
+"""Key Vault role check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R10 / R9:
 an application reads Key Vault only through its namespace's share, never with an identity of its own.
 
     check-key-vault-roles.py <resource group> <zone> [<zone>...]
@@ -73,13 +73,13 @@ def main():
         what = f"{'namespace reader' if reader else 'application identity'} {identity['name']} ({names})"
         if problems:
             failed += 1
-            result("FAIL", "R7, R7a", f"{what}: Key Vault roles", "; ".join(sorted(set(problems)))[:300])
+            result("FAIL", "R9, R10", f"{what}: Key Vault roles", "; ".join(sorted(set(problems)))[:300])
         elif reader:
-            result("PASS", "R7, R7a", f"{what}: Key Vault roles", f"{len(roles)} Secrets User, each under its prefix")
+            result("PASS", "R9, R10", f"{what}: Key Vault roles", f"{len(roles)} Secrets User, each under its prefix")
         else:
-            result("PASS", "R7a", f"{what}: no Key Vault data-plane role")
+            result("PASS", "R9", f"{what}: no Key Vault data-plane role")
     if checked == 0:
-        result("FAIL", "R7a", "identities federated with application namespaces", f"none found in {group}")
+        result("FAIL", "R9", "identities federated with application namespaces", f"none found in {group}")
         failed += 1
     sys.exit(1 if failed else 0)
 

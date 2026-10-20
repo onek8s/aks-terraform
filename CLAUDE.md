@@ -28,7 +28,7 @@ reads; job logs via `get_job_logs`).
 |---|---|
 | `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-int-stateless-az3` / `dev-int-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. A stateless cell is planned with `envs/dev-int-stateless.tfvars` (what every cell shares) then the cell's own file. Registers the providers and preview features (Gateway API CRDs, encryption at host, Image Integrity). Run stacks one at a time: each joins the labfw VPN as the one peer `github-deploy`. |
 | `cluster-status.yml` (Cluster status) | Read-only status of one cluster: nodes, pods, cluster autoscaler, Flux, DNS, vCPU quota, every policy constraint's violations per object and excluded namespaces, who wrote each Secret of the zone namespaces (managed fields), every route through its gateway and as a VPN client (edge protocols: h2, ALPN http/1.1, TLS 1.2, TLS 1.3). Options `route_path` (e.g. `/weather`), `node_iptables`, `cilium_drops` (Cilium's drop monitor, for a cell without Hubble). Read it before promoting a policy to deny. |
-| `isolation-tests.yml` | The negative requirement and isolation tests of requirements 0.3 on the cell (zone int-se, other zone int-fi), each tagged with its R-number. Test pods run `isolation/curl` imported into the ACR by digest (deliberately unsigned; Sign images and the signature checks skip `isolation/`) and meet every rule in deny; R7 reads shared/'s fixture `<ns>--isolation-test` (`isolation_test_namespaces`); the internal app names are pinned through the VPN action's `extra_private_names`: cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / vaults blocked, egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), supply chain (ACR, Ratify, signatures, Flux webhook), Resource Graph public endpoints against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC and roles (`check-key-vault-roles.py`), R6 namespace access (`check-namespace-access.py`, testers in `tests/isolation/namespace-access-testers.yaml`), R11 cell settings (AZ, zone pools autoscaled from 0, VPA), R13 sync (`check-cells-in-sync.py`), R15 certificates, R16 every zone complete, R2 one exposure. **Only when the user asks for it** (runs take 10-30 min) - never dispatched on your own. |
+| `isolation-tests.yml` | The negative requirement and isolation tests of requirements 0.3 on the cell (zone int-se, other zone int-fi), each tagged with its R-number. Test pods run `isolation/curl` imported into the ACR by digest (deliberately unsigned; Sign images and the signature checks skip `isolation/`) and meet every rule in deny; R10 reads shared/'s fixture `<ns>--isolation-test` (`isolation_test_namespaces`); the internal app names are pinned through the VPN action's `extra_private_names`: cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / vaults blocked, egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), supply chain (ACR, Ratify, signatures, Flux webhook), Resource Graph public endpoints against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC and roles (`check-key-vault-roles.py`), R13 namespace access (`check-namespace-access.py`, testers in `tests/isolation/namespace-access-testers.yaml`), R23 cell settings (AZ, zone pools autoscaled from 0, VPA), R25 sync (`check-cells-in-sync.py`), R12 certificates, R5 every zone complete, R1 one exposure. **Only when the user asks for it** (runs take 10-30 min) - never dispatched on your own. |
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node, section 3), Kubescape `cis-aks-t1.8.0` (section 4), Azure settings (sections 2 and 5). `tests/cis/report.py` scores it; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only, when the user asks.** |
 | `sign-images.yml` (Sign images) | Notation-signs every image in the ACR with `image-signing` in the platform vault; skips what already verifies. After every Deploy apply of dev-shared, and by hand. |
 | `renew-certificate.yml` | Let's Encrypt wildcards into the platform vault (matrix, max-parallel 1); a zone's gateway needs `<zone>-gateway--wildcard`. |
@@ -90,7 +90,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `envs/dev-int-stateless.tfvars`: Free tier, `gateway_implementation = "traefik"`, VPA add-on off (aks-hello's
   VerticalPodAutoscaler is patched out in the example repo). variables.tf defaults are production (Standard,
   `approuting-istio`, VPA on, 2 x Standard_D4ds_v5) - README "Production defaults and
-  non-production cost savings". The stateful tfvars state `gateway_implementation = null` (R9a).
+  non-production cost savings". The stateful tfvars state `gateway_implementation = null` (R21).
 - **No ACNS** (D80, cell rebuilt 2026-10-19): `advanced_networking = null` is the default - no Hubble, FQDN policies or
   eBPF host routing. The fleet's Cilium policies are layer 3 and 4 only (no `toFQDNs`, no DNS rules - both need the
   ACNS DNS proxy); platform namespaces go out on 443 to `world`, labfw decides.
@@ -201,7 +201,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   Officer, `edit` custom `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51), both under the `<ns>--` ABAC condition.
   No namespace identity or group can list a vault (D50); platform viewers (`grp-onek8s-dev-platform-viewers`
   `75353964-...`) get custom `OneK8s Platform Viewer (rg-aks-dev)` at the resource group. Every namespace carries
-  `platform/team`, `platform/cost-center`, annotation `platform/contact` (R25). shared/ `monthly_budget` 600/month.
+  `platform/team`, `platform/cost-center`, annotation `platform/contact` (R14). shared/ `monthly_budget` 600/month.
 - **Identity**: Deploy runs as `id-aks-dev-apply-germanywestcentral` (client ID b975d49a-...), the `dev` environment's
   AZURE_CLIENT_ID; set it again with Lab admin (gh) after any rebuild of sub-mgmt.
 - **Quotas** (germanywestcentral, sub-aks-dev): regional 38, Dpsv6 16, Daldv6 8 (system node 4 + two D2alds_v6),
@@ -229,7 +229,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Zone nodes only for applications.** Each zone's gateway pods and ESO run on the system pool, so a zone without
   application pods has zero nodes. The system subnet NSG allows 443 from Internet *and* (a separate rule) from
   VirtualNetwork.
-- **Spot, architecture and GPUs are the application's choice** (R17), stated only as pod labels `platform/arch`,
+- **Spot, architecture and GPUs are the application's choice** (R8), stated only as pod labels `platform/arch`,
   `platform/capacity: spot`, `platform/accelerator: nvidia-gpu` (+ `nvidia.com/gpu`); the policy mutations do the rest.
   A spot pod falls back to on-demand. amd64 and arm64 both offered; aks-hello is amd64 only.
 - **No ACNS** (D80): Hubble, FQDN filtering and eBPF host routing are options kept open (design 5.1; the outlook is in the design's unpublished archive/ since v4.0). eBPF host routing
@@ -239,10 +239,10 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   Basic registry (D62).
 - **Secrets only through ESO**; vault shares by ABAC prefix `<namespace>--`; gateway certs `<zone>-gateway--wildcard`
   and `platform-gateway--wildcard`. No Secrets Store CSI driver.
-- **One policy engine (R14)**: no ValidatingAdmissionPolicies in the fleet; every admission rule is an Azure Policy
+- **One policy engine (R15)**: no ValidatingAdmissionPolicies in the fleet; every admission rule is an Azure Policy
   definition.
 - **No AKS cost analysis add-on** (D46): cost per team from OpenCost in Grafana's k8s-monitoring; namespaces name their
-  owner (R25).
+  owner (R14).
 - **Cluster basics**: Azure Linux, SSH off, system pool tainted `CriticalAddonsOnly`, Kubernetes 1.36, auto-upgrade none,
   Free tier only as a lab saving.
 - **A hub VNet and Azure Firewall Premium per exposure, no route between them** (D53, plan only; the lab runs labfw).

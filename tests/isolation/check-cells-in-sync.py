@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cells-in-sync check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R13: every
+"""Cells-in-sync check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R25: every
 stateless cell of an environment is built from the same IaC and the same fleet configuration -
 only its name and its availability zone differ.
 
@@ -41,7 +41,7 @@ def main():
     tfvars = sorted(glob.glob(f"{terraform}/envs/{env}-stateless-az*.tfvars"))
     cells = [re.search(r"stateless-az(\d+)", p).group(1) for p in tfvars]
     if len(cells) < 2:
-        result("PASS" if cells else "FAIL", "R13", f"{env}: stateless cells to compare", f"{len(cells)} in envs/")
+        result("PASS" if cells else "FAIL", "R25", f"{env}: stateless cells to compare", f"{len(cells)} in envs/")
         sys.exit(0 if cells else 1)
     failed = 0
     first = cells[0]
@@ -54,14 +54,14 @@ def main():
             what = f"az{first} and az{other}: {label}"
             if not (os.path.exists(a) and os.path.exists(b)):
                 failed += 1
-                result("FAIL", "R13", f"{what} the same", f"only in {'az' + first if os.path.exists(a) else 'az' + other}")
+                result("FAIL", "R25", f"{what} the same", f"only in {'az' + first if os.path.exists(a) else 'az' + other}")
                 continue
             diff = [d for d in difflib.unified_diff(normalized(a, first), normalized(b, other), lineterm="", n=0) if d[:1] in "+-" and d[:3] not in ("+++", "---")]
             if diff:
                 failed += 1
-                result("FAIL", "R13", f"{what} the same", "; ".join(diff)[:300])
+                result("FAIL", "R25", f"{what} the same", "; ".join(diff)[:300])
             else:
-                result("PASS", "R13", f"{what} the same", "but the cell's name and availability zone")
+                result("PASS", "R25", f"{what} the same", "but the cell's name and availability zone")
     sys.exit(1 if failed else 0)
 
 

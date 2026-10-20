@@ -167,7 +167,7 @@ variable "isolation_test_namespaces" {
   default     = []
   description = <<DESCRIPTION
 Namespaces whose Key Vault share holds the Isolation tests' fixture `<namespace>--isolation-test`, which
-the tests read as the namespace's own identity (R7: its own share, 200) and as others' (403). Each needs
+the tests read as the namespace's own identity (R10: its own share, 200) and as others' (403). Each needs
 a share in `key_vault_namespaces`.
 DESCRIPTION
   nullable    = false

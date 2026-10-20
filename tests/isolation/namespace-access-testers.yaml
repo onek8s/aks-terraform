@@ -1,4 +1,4 @@
-# Testers of managed_namespaces[*].groups, for check-namespace-access.py (Isolation tests, R6): per
+# Testers of managed_namespaces[*].groups, for check-namespace-access.py (Isolation tests, R13): per
 # namespace and role, the client ID of an Entra ID application that is a member of that role's group
 # and has a federated credential for this repository's GitHub environment `dev`
 # (repo:onek8s/aks-terraform:environment:dev). The test signs in as it with the workflow's OIDC token
