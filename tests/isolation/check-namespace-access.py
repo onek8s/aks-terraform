@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Namespace access check of OneK8s design section 7.1 ("Requirement and isolation tests"), R6:
+"""Namespace access check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R6:
 the Entra ID groups of `managed_namespaces[*].groups` (view, edit, admin) get exactly their
 Kubernetes role in their own namespace and nothing anywhere else.
 
