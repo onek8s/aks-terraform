@@ -6,8 +6,9 @@ name: Design tags
 # moved, so a run changes nothing until the design's version changes. Merge a round's code pull requests
 # before the design's, then run this (or wait for the hourly run).
 #
-# GH_OWNER (an admin token of the organization) creates the tags, so tag workflows run: azure-lab-fw's
-# release builds a labfw release of each tag (azure-landing-zone pins the one labfw runs).
+# GH_OWNER (an admin token of the organization) creates the tags. Not azure-lab-fw: its tags are labfw's
+# own releases (vMAJOR.MINOR.PATCH, which its release workflow builds and azure-landing-zone pins), and a
+# design tag there only made that workflow fail (v2.0 to v3.6, 2026-10-19/20).
 
 on:
   schedule:
@@ -35,6 +36,7 @@ jobs:
           tag="v$version"
           echo "Design version: $tag" >> "$GITHUB_STEP_SUMMARY"
           for repo in $(gh repo list onek8s --no-archived --limit 100 --json name --jq '.[].name'); do
+            case "$repo" in azure-lab-fw) continue ;; esac
             if gh api "repos/onek8s/$repo/git/ref/tags/$tag" >/dev/null 2>&1; then
               echo "$repo: $tag exists"
               continue
