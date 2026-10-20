@@ -58,6 +58,8 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - uses: actions/checkout@v7
+
       # The vault (no public network access), through the hub firewall's VPN
       - uses: ./.github/actions/labfw-vpn
         with:
@@ -76,7 +78,11 @@ jobs:
           user="$(jq -r '."remote-config-username"' <<<"$creds")"
           # Reading works with the collectors' token; changing a pipeline needs an access policy token with
           # fleet-management:write, stored in the same secret as fleet-management-write-token (Store secret)
-          password="$(jq -r 'if $a == "match-clusters" and ."fleet-management-write-token" then ."fleet-management-write-token" else ."remote-config-password" end' --arg a "$ACTION" <<<"$creds")"
+          if [ "$ACTION" = match-clusters ] && [ "$(jq -r '."fleet-management-write-token" // ""' <<<"$creds")" = "" ]; then
+            echo "::error::match-clusters needs fleet-management-write-token in the vault secret flux-system--grafana-cloud (Store secret): the collectors' token only reads"
+            exit 1
+          fi
+          password="$(jq -r 'if $a == "match-clusters" then ."fleet-management-write-token" else ."remote-config-password" end' --arg a "$ACTION" <<<"$creds")"
           echo "::add-mask::$password"
           unset creds
           rpc() { curl -sS --fail-with-body -u "$user:$password" -H 'Content-Type: application/json' -d "$2" "${url%/}/$1"; }
