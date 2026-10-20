@@ -123,7 +123,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `Zone` from the source address (the zone slots, `system`, `shared`, `management`, `client`, `vpn`, `hub`, `other`),
   generated from the stack's spoke prefixes. Hourly tables keep 90 days, the daily one 395; a bin lands 1-2 h after
   the flow (the daily one the next day); run log in `LASummaryLogs`. The egress agent keeps reading the raw table.
-  V33 (the summaries fill, attributed to the right zone) is open - the user checks it in the portal or over the VPN.
+  V34 (the summaries fill, attributed to the right zone) is open - the user checks it in the portal or over the VPN.
 - **Private API server** (D58): classic private cluster over Private Link (endpoint in snet-system),
   `private_dns_zone_mode = "none"` + public FQDN resolving to the private IP. Not API Server VNet Integration (Azure
   refuses it on encrypted VNets with v4+ sizes, H14). `az aks command invoke` is the break-glass (namespace
