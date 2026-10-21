@@ -89,13 +89,6 @@ log_analytics_workspace_name = "log-dev-platform"
 # are shared/'s (image_signing).
 image_integrity_enabled = true
 
-# The private API server (design D58) over Private Link: its private endpoint is in snet-system, reached
-# by the nodes directly and by the management network, the labfw VPN and the GitHub runners (which join
-# that VPN) through the hub. No private DNS zone: the cell resolves through labfw's DNS proxy in the hub,
-# so the public FQDN names the private address.
-private_cluster_public_fqdn_enabled = true
-private_dns_zone_mode               = "none"
-
 # No Flux webhook: an internal cell has no public entry point for GitHub's deliveries (behind labfw a
 # public load balancer cannot answer), so no platform gateway either. Flux polls every minute.
 flux_github_webhook = false

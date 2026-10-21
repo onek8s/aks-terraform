@@ -643,7 +643,8 @@ run "no_private_dns_zone_needs_the_public_fqdn" {
   command = plan
 
   variables {
-    private_dns_zone_mode = "none"
+    private_dns_zone_mode               = "none"
+    private_cluster_public_fqdn_enabled = false
   }
 
   expect_failures = [var.private_dns_zone_mode]
@@ -1982,6 +1983,14 @@ run "defaults_are_production_settings" {
   assert {
     condition     = var.vertical_pod_autoscaler_enabled
     error_message = "The VPA add-on should be on by default."
+  }
+  assert {
+    condition     = var.auto_upgrade.kubernetes_channel == "none" && var.auto_upgrade.node_os_channel == "None"
+    error_message = "AKS should upgrade nothing by itself (design section 3.5)."
+  }
+  assert {
+    condition     = var.private_dns_zone_mode == "none" && var.private_cluster_public_fqdn_enabled
+    error_message = "The private API server should resolve by its public FQDN, without an AKS-managed private zone (design section 2.2)."
   }
   assert {
     condition = (

@@ -953,19 +953,19 @@ DESCRIPTION
 
 variable "private_cluster_public_fqdn_enabled" {
   type        = bool
-  default     = false
-  description = "Whether the private API server also gets a public FQDN resolving to its private address."
+  default     = true
+  description = "Whether the private API server also gets a public FQDN resolving to its private address - the design's choice (section 2.2), which `private_dns_zone_mode = \"none\"` needs."
   nullable    = false
 }
 
 variable "private_dns_zone_mode" {
   type        = string
-  default     = "system"
+  default     = "none"
   description = <<DESCRIPTION
-How the private API server's name resolves (design D58): `system` - an AKS-managed private DNS zone,
-linked to the cluster's network only; `none` - no private zone, the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address
-from anywhere, which suits a network that resolves through a DNS server elsewhere, such as the hub
-firewall's DNS proxy (the dev lab behind labfw).
+How the private API server's name resolves (design section 2.2): `none` - the default - no private zone,
+the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address from
+anywhere, so no AKS-managed zone has to be linked to every network that resolves through the hub
+firewall's DNS proxy; `system` - an AKS-managed private DNS zone, linked to the cluster's network only.
 DESCRIPTION
   nullable    = false
 
