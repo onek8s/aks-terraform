@@ -921,11 +921,11 @@ DESCRIPTION
 
 variable "persistent_storage_enabled" {
   type        = bool
-  default     = true
+  default     = false
   description = <<DESCRIPTION
-Whether the cluster has persistent storage at all. Set to `false` for a stateless cluster: AKS runs
-none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot controller, so a
-PersistentVolumeClaim has nothing to be provisioned from. AKS still creates its StorageClasses `default`
+Whether the cluster has persistent storage at all. Off by default, as in a stateless cell (design
+section 3.1): AKS runs none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot
+controller, so a PersistentVolumeClaim has nothing to be provisioned from; the stateful cluster turns it on. AKS still creates its StorageClasses `default`
 and `managed-csi-premium-v2`; Deploy deletes them after every apply, and the landing zone's
 `no-persistent-storage` policy refuses them back. Pods
 keep `emptyDir` and the other volumes that live and die with them. Cannot be combined with
@@ -1035,7 +1035,7 @@ variable "advanced_networking" {
   description = <<DESCRIPTION
 Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium. Off by default: OneK8s
 does not use ACNS (design D80) - the hub firewall decides egress, Cilium keeps the in-cluster rules at
-layers 3 and 4. Each part is an option kept open with a measured trigger (design section 7.4); an
+layers 3 and 4. Each part is an option the design does not take (section 5.1); an
 object turns ACNS on with the parts it names (each on unless set to false). eBPF host routing is
 decided when the cluster is created.
 
@@ -1064,7 +1064,7 @@ variable "customer_managed_keys" {
   })
   default     = null
   description = <<DESCRIPTION
-Encryption at rest with customer-managed keys - OneK8s design section 18. Two keys of the cluster's
+Encryption at rest with customer-managed keys - OneK8s design section 4.2. Two keys of the cluster's
 own are created in the vault: `key-<cluster>-kms`, with which the control plane encrypts the
 Kubernetes secrets in etcd (KMS), and `key-<cluster>-disk`, the key of a disk encryption set for the
 OS disks of every node - the system pool and the zones' pools. Null leaves both to platform-managed keys.

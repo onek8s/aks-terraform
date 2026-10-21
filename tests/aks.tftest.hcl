@@ -1771,7 +1771,8 @@ run "portable_disks_get_a_role_for_disks_only" {
   command = plan
 
   variables {
-    portable_disks_enabled = true
+    persistent_storage_enabled = true
+    portable_disks_enabled     = true
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -1983,6 +1984,10 @@ run "defaults_are_production_settings" {
   assert {
     condition     = var.vertical_pod_autoscaler_enabled
     error_message = "The VPA add-on should be on by default."
+  }
+  assert {
+    condition     = !var.persistent_storage_enabled
+    error_message = "A cluster should have no persistent storage unless it says so: the stateless cells (design section 3.1)."
   }
   assert {
     condition     = var.auto_upgrade.kubernetes_channel == "none" && var.auto_upgrade.node_os_channel == "None"

@@ -56,10 +56,12 @@ dns_zone_name                = "onek8s.lol"
 dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
-# The disks of the platform's `portable-disk` StorageClass go to resource_group_name rather than the
-# node resource group, so they outlive this cluster. The cluster identity is granted a role of its
-# own for disks there, and nothing else.
-portable_disks_enabled = true
+# Persistent storage - the CSI drivers and the snapshot controller, off in a stateless cell - and the
+# disks of the platform's `portable-disk` StorageClass in resource_group_name rather than the node
+# resource group, so they outlive this cluster. The cluster identity is granted a role of its own for
+# disks there, and nothing else.
+persistent_storage_enabled = true
+portable_disks_enabled     = true
 
 # SHARED. The environment's container registry, created by shared/ and looked up here - not part of
 # the landing zone. The kubelet pulls the images from it as this cluster's identity, with AcrPull -

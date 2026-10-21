@@ -64,11 +64,6 @@ dns_zone_name                = "onek8s.lol"
 dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
-# Stateless: no CSI driver - Azure Disk, Azure Files, Azure Blob - and no snapshot controller, so
-# the cluster has no StorageClass and nothing to provision a PersistentVolumeClaim from.
-persistent_storage_enabled = false
-portable_disks_enabled     = false
-
 # The environment's container registry, created by shared/. The kubelet pulls the images from it as
 # the cluster's identity, with AcrPull - no image pull secret.
 container_registry_name = "acronek8sdev"
