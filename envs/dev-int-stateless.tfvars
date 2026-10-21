@@ -40,12 +40,8 @@ vertical_pod_autoscaler_enabled = false
 # ---------------------------------------------------------------------------------------------------
 
 # Every cluster starts on 1.36, the platform floor (design R27). AKS never upgrades a cell on its
-# own: the version pipeline changes it while the cell is drained (section 3.5).
+# own (the default auto_upgrade): the version pipeline changes it while the cell is drained (section 3.5).
 kubernetes_version = "1.36"
-auto_upgrade = {
-  kubernetes_channel = "none"
-  node_os_channel    = "None"
-}
 
 # The dev environment's resource group, created by shared/. It holds every cluster of the environment
 # and what they share. Every cell's system pool is in its network's snet-system.

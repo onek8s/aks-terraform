@@ -75,6 +75,12 @@ log_analytics_workspace_name = "log-dev-platform"
 private_cluster_public_fqdn_enabled = true
 private_dns_zone_mode               = "none"
 
+# OS patches in place (design section 3.5): the SecurityPatch channel patches the running nodes inside the
+# maintenance window; Kubernetes versions move only through the pipeline (the default channel none).
+auto_upgrade = {
+  node_os_channel = "SecurityPatch"
+}
+
 # No Gateway API implementation: the stateful cluster has no gateway of its own (design R21), whatever
 # the environment - not a cost saving.
 gateway_implementation = null

@@ -355,10 +355,10 @@ See the `managed_namespaces` variable.
 
 ## Upgrade window
 
-The cluster upgrades itself - by default the `stable` channel for the Kubernetes version and the
-`NodeImage` channel for node OS patching, both configurable through `auto_upgrade`. Those upgrades,
-together with the weekly AKS release of the control plane and add-ons, are confined to a single
-weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
+By default the cluster does not upgrade itself (`auto_upgrade` channels `none` and `None`, design section
+3.5: the version pipeline moves a cell while it is drained); the stateful cluster takes OS patches in place
+with `node_os_channel = "SecurityPatch"`. Such upgrades, together with the weekly AKS release of the
+control plane and add-ons, are confined to a single weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
 Wednesday, 22:00 - 06:00 UTC.
 
 Change it per environment in the variables file:
@@ -736,7 +736,7 @@ The `dev` stateless clusters are the design's cells. Beyond the [zone node pools
 | `advanced_networking` | Advanced Container Networking Services, **off by default** (`null`, design D80: the hub firewall decides egress, Cilium keeps layer 3 and 4 rules in the cluster). An object turns on Hubble (`observability`), FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`) - the options of design section 7.4, each with its measured trigger. eBPF host routing is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 7.4 |
 | `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 4.2 |
 | `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 2.2, 2.3, 4.2 |
-| `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 3.5 |
+| `kubernetes_version` | Every cell starts on 1.36; AKS never upgrades a cell on its own (the default `auto_upgrade`) | section 3.5 |
 | `internal_dns_zone_names` | The internal zones' private DNS, which an internal cell's external-dns writes | section 4.1 |
 
 Always, on every cluster: the Secrets Store CSI driver add-on is off - secrets reach pods only as

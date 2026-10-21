@@ -101,12 +101,14 @@ variable "virtual_network_name" {
 
 variable "auto_upgrade" {
   type = object({
-    kubernetes_channel = optional(string, "stable")
-    node_os_channel    = optional(string, "NodeImage")
+    kubernetes_channel = optional(string, "none")
+    node_os_channel    = optional(string, "None")
   })
   default     = {}
   description = <<DESCRIPTION
-How the cluster upgrades itself. Both run inside the `maintenance_window`.
+How the cluster upgrades itself. Both run inside the `maintenance_window`. By default neither does
+(design section 3.5): the version pipeline moves a stateless cell while it is drained, so AKS never
+changes one on its own; the stateful cluster takes OS patches in place with `SecurityPatch`.
 
 - `kubernetes_channel` - Kubernetes version upgrades. `stable` follows the second newest minor
   version AKS offers, `rapid` the newest, `patch` stays on the current minor version and takes its
