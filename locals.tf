@@ -239,7 +239,11 @@ locals {
     security_profile = var.default_node_pool.ssh_access == null ? null : {
       ssh_access = var.default_node_pool.ssh_access
     }
+    # Stated, not inherited (design section 2.3): AKS turns LocalDNS on by itself where it can.
+    local_dns_profile = local.local_dns_profile
   }
+
+  local_dns_profile = { mode = "Disabled" }
 
   # The cluster's identity, by the naming policy's `user_assigned_identity` (modules/conventions) -
   # `id-<region code>-<environment>-<function>` by default - worked out from the cluster name and the

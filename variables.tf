@@ -246,19 +246,20 @@ variable "default_node_pool" {
     node_soak_duration_minutes = optional(number)
 
     os_sku             = optional(string, "AzureLinux")
-    encryption_at_host = optional(bool)
-    ssh_access         = optional(string)
-    node_taints        = optional(list(string))
+    encryption_at_host = optional(bool, true)
+    ssh_access         = optional(string, "Disabled")
+    node_taints        = optional(list(string), ["CriticalAddonsOnly=true:NoSchedule"])
   })
   default     = {}
   description = <<DESCRIPTION
-The system node pool. The defaults are the production setting (design section 2.3): two `Standard_D4ds_v5`
-nodes on Azure Linux 3.0; the dev lab's one 8 GiB node is a cost saving (README, "Production defaults and
-non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed` (null: AKS chooses),
-`encryption_at_host`, `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `node_taints`
-(`CriticalAddonsOnly=true:NoSchedule` keeps every pod but the platform's off it), `max_pods`, and the upgrade roll: `max_surge`, `drain_timeout_minutes`,
-`node_soak_duration_minutes` (README, "Node pool upgrades"). The size, OS and disk type
-cannot change on a running pool.
+The system node pool. The defaults are the design's (sections 2.2, 2.3 and 4.2): two `Standard_D4ds_v5`
+nodes on Azure Linux 3.0 with encryption at host, SSH off and the `CriticalAddonsOnly=true:NoSchedule`
+taint, which keeps every pod but the platform's off it; the dev lab's one 8 GiB node is a cost saving
+(README, "Production defaults and non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed`
+(null: AKS chooses), `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `max_pods`, and the upgrade roll:
+`max_surge`, `drain_timeout_minutes`, `node_soak_duration_minutes` (README, "Node pool upgrades"). The
+size, OS and disk type cannot change on a running pool. Every pool - this one and the zones' - states
+LocalDNS `Disabled`, so an AKS minor that turns the node-level DNS proxy on by itself changes nothing.
 DESCRIPTION
   nullable    = false
 

@@ -1984,6 +1984,15 @@ run "defaults_are_production_settings" {
     error_message = "The VPA add-on should be on by default."
   }
   assert {
+    condition = (
+      local.default_agent_pool.enable_encryption_at_host &&
+      local.default_agent_pool.security_profile.ssh_access == "Disabled" &&
+      local.default_agent_pool.node_taints == tolist(["CriticalAddonsOnly=true:NoSchedule"]) &&
+      local.default_agent_pool.local_dns_profile.mode == "Disabled"
+    )
+    error_message = "The system pool should default to encryption at host, SSH off, CriticalAddonsOnly and LocalDNS Disabled (design sections 2.2, 2.3, 4.2)."
+  }
+  assert {
     condition     = var.advanced_networking == null && !can(local.network_profile.advanced_networking)
     error_message = "ACNS should be off by default (design D80): no Hubble, no FQDN policies, no eBPF host routing."
   }
@@ -2144,7 +2153,8 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
       local.zone_agent_pools["intse"].pod_subnet_id != null &&
       local.zone_agent_pools["intsespot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/capacity" = "spot" }) &&
       local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
-      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
+      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"]) &&
+      local.zone_agent_pools["intse"].local_dns_profile.mode == "Disabled"
     )
     error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted for the placement mutations, their pods in the zone's pod subnet."
   }

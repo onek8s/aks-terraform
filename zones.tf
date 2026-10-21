@@ -16,7 +16,7 @@ locals {
       }
       # eBPF host routing. Sent with the cluster's create request: AKS refuses to turn it on for a
       # running cluster ("User-installed iptables rules found"), even one whose only iptables rules
-      # are its own - so changing it means building the cell again (design section 7.4).
+      # are its own - so changing it means building the cell again (design section 5.1).
       performance = {
         acceleration_mode = var.advanced_networking.ebpf_host_routing ? "BpfVeth" : "None"
       }
@@ -92,8 +92,9 @@ locals {
         security_profile = var.default_node_pool.ssh_access == null ? null : {
           ssh_access = var.default_node_pool.ssh_access
         }
-        vnet_subnet_id = data.azurerm_subnet.zone[zone].id
-        pod_subnet_id  = data.azurerm_subnet.zone_pods[zone].id
+        local_dns_profile = local.local_dns_profile
+        vnet_subnet_id    = data.azurerm_subnet.zone[zone].id
+        pod_subnet_id     = data.azurerm_subnet.zone_pods[zone].id
         node_labels = merge(
           { "platform/zone" = zone },
           kind.spot ? { "platform/capacity" = "spot" } : {},
