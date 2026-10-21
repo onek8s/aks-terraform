@@ -2225,6 +2225,9 @@ run "an_external_cluster_refuses_an_internal_zone" {
       ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
       int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
   }
 
   expect_failures = [var.exposure]
@@ -2271,6 +2274,9 @@ run "isolation_zones_without_zone_node_pools_are_warned_about" {
   variables {
     isolation_zones = {
       int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
     }
   }
 
