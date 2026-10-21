@@ -1977,8 +1977,8 @@ run "defaults_are_production_settings" {
     error_message = "The default system pool should be two Standard_D4ds_v5 nodes on Azure Linux."
   }
   assert {
-    condition     = var.gateway_implementation == "approuting-istio"
-    error_message = "The default Gateway API implementation should be App Routing (D55)."
+    condition     = var.gateway_implementation == "traefik"
+    error_message = "The default Gateway API implementation should be Traefik, in every environment (design section 4.1)."
   }
   assert {
     condition     = var.vertical_pod_autoscaler_enabled

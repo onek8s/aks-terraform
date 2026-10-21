@@ -150,15 +150,16 @@ DESCRIPTION
 
 variable "gateway_implementation" {
   type        = string
-  default     = "approuting-istio"
+  default     = "traefik"
   description = <<DESCRIPTION
 The Gateway API implementation that serves the cluster's Gateways, one per isolation zone, deployed by the
-Flux repository (design section 4.1): `approuting-istio` (the default, production: App Routing's Gateway
-API, the Azure standard offering, upgraded by AKS - D55) or `traefik` (Traefik Proxy, one small Deployment
-per Gateway from this repository's `gateways/traefik`, a non-production cost saving: istiod's untunable
-1 CPU and 4 GiB, Azure/AKS#5939, is what it saves); null for a cluster without Gateways (the stateful
-cluster, R21). The Flux repository is told each Gateway's class as `gateway_class_name_<zone>`; switching
-re-creates the Gateways. See the README, "Ingress through the Gateway API".
+Flux repository (design section 4.1): `traefik` (the default, in every environment: Traefik Proxy, one small
+Deployment per Gateway from this repository's `gateways/traefik`, offering HTTP/2 alone and TLS 1.3 alone at
+the edge) or `approuting-istio` (App Routing's Gateway API, the Azure standard offering, upgraded by AKS -
+once it can offer the same at the edge; its istiod requests an untunable 1 CPU and 4 GiB, Azure/AKS#5939);
+null for a cluster without Gateways (the stateful cluster, R21). The Flux repository is told each Gateway's
+class as `gateway_class_name_<zone>`; switching re-creates the Gateways. See the README, "Ingress through
+the Gateway API".
 DESCRIPTION
 
   validation {
