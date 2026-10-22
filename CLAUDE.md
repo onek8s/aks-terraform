@@ -334,5 +334,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   timeout). The gateway Services carry `service.cilium.io/node-selector: "!platform/zone"` (Cilium 1.18+; Traefik here,
   approuting-istio in the fleet), so on zone nodes the flow goes through labfw and back through the ILB (2026-10-20,
   #223); azure-landing-zone's last collection `<spoke>-published-names-deny` resets what no rule file allows (17-32 ms).
+- **A node pool's `localDNSProfile` change reimages its running nodes** (#229, 2026-10-22: `mode = "Disabled"` stated on
+  every pool reimaged the one system node in place, ~11 min, and every running zone node; empty pools took ~1-3 min).
+  Plan a LocalDNS change like a node image step: the cell out of traffic first.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml`, never into Git or a workflow input.
 - The auto-mode classifier refused Run Command on labfw for workflows; read labfw's denials from Log Analytics.
