@@ -1,5 +1,5 @@
 # KMS data encryption (preview, Kubernetes 1.33+) with the cluster's own key - customer_managed_keys
-# .kms_data_encryption, OneK8s design section 18. The Kubernetes secrets (and other resource objects) in etcd
+# .kms_data_encryption, OneK8s design section 4.2. The Kubernetes secrets (and other resource objects) in etcd
 # are encrypted with key-<cluster>-kms like classic KMS does, but AKS reaches a vault without public network
 # access through its trusted services exception (the vault's bypass AzureServices) - classic KMS reaches a
 # private vault only with API Server VNet Integration, which Azure refuses on an encrypted network with v4+ VM

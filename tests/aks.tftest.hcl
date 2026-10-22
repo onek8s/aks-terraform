@@ -643,7 +643,8 @@ run "no_private_dns_zone_needs_the_public_fqdn" {
   command = plan
 
   variables {
-    private_dns_zone_mode = "none"
+    private_dns_zone_mode               = "none"
+    private_cluster_public_fqdn_enabled = false
   }
 
   expect_failures = [var.private_dns_zone_mode]
@@ -1770,7 +1771,8 @@ run "portable_disks_get_a_role_for_disks_only" {
   command = plan
 
   variables {
-    portable_disks_enabled = true
+    persistent_storage_enabled = true
+    portable_disks_enabled     = true
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -1976,12 +1978,33 @@ run "defaults_are_production_settings" {
     error_message = "The default system pool should be two Standard_D4ds_v5 nodes on Azure Linux."
   }
   assert {
-    condition     = var.gateway_implementation == "approuting-istio"
-    error_message = "The default Gateway API implementation should be App Routing (D55)."
+    condition     = var.gateway_implementation == "traefik"
+    error_message = "The default Gateway API implementation should be Traefik, in every environment (design section 4.1)."
   }
   assert {
     condition     = var.vertical_pod_autoscaler_enabled
     error_message = "The VPA add-on should be on by default."
+  }
+  assert {
+    condition     = !var.persistent_storage_enabled
+    error_message = "A cluster should have no persistent storage unless it says so: the stateless cells (design section 3.1)."
+  }
+  assert {
+    condition     = var.auto_upgrade.kubernetes_channel == "none" && var.auto_upgrade.node_os_channel == "None"
+    error_message = "AKS should upgrade nothing by itself (design section 3.5)."
+  }
+  assert {
+    condition     = var.private_dns_zone_mode == "none" && var.private_cluster_public_fqdn_enabled
+    error_message = "The private API server should resolve by its public FQDN, without an AKS-managed private zone (design section 2.2)."
+  }
+  assert {
+    condition = (
+      local.default_agent_pool.enable_encryption_at_host &&
+      local.default_agent_pool.security_profile.ssh_access == "Disabled" &&
+      local.default_agent_pool.node_taints == tolist(["CriticalAddonsOnly=true:NoSchedule"]) &&
+      local.default_agent_pool.local_dns_profile.mode == "Disabled"
+    )
+    error_message = "The system pool should default to encryption at host, SSH off, CriticalAddonsOnly and LocalDNS Disabled (design sections 2.2, 2.3, 4.2)."
   }
   assert {
     condition     = var.advanced_networking == null && !can(local.network_profile.advanced_networking)
@@ -2144,7 +2167,8 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
       local.zone_agent_pools["intse"].pod_subnet_id != null &&
       local.zone_agent_pools["intsespot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/capacity" = "spot" }) &&
       local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
-      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
+      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"]) &&
+      local.zone_agent_pools["intse"].local_dns_profile.mode == "Disabled"
     )
     error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted for the placement mutations, their pods in the zone's pod subnet."
   }
@@ -2201,6 +2225,9 @@ run "an_external_cluster_refuses_an_internal_zone" {
       ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
       int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
     }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
   }
 
   expect_failures = [var.exposure]
@@ -2247,6 +2274,9 @@ run "isolation_zones_without_zone_node_pools_are_warned_about" {
   variables {
     isolation_zones = {
       int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
     }
   }
 

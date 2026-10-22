@@ -14,21 +14,14 @@ location = "germanywestcentral"
 # Every setting in this block departs from the module's defaults, which are the production settings
 # of the OneK8s design (acc and prd use the defaults). Together they let a lab cell run on ONE small
 # system node instead of two larger ones (default_node_pool, in each cell's file), at the price of an
-# SLA, of Azure's standard gateway and of pod right-sizing. Do not copy this block to an acceptance or
-# production environment. They depend on each other: the single 8 GiB system node (~5.8 GiB
-# allocatable) holds the platform only with Traefik and without the VPA add-on. Going back to
-# production means all of them together.
+# SLA and of pod right-sizing. Do not copy this block to an acceptance or production environment. They
+# depend on each other: the single 8 GiB system node (~5.8 GiB allocatable) holds the platform only
+# without the VPA add-on (and with Traefik, the default gateway in every environment, design section
+# 4.1). Going back to production means all of them together.
 # ---------------------------------------------------------------------------------------------------
 
 # AKS Free tier: no uptime SLA, API server not scaled for load. Production: "Standard" (design D31).
 sku_tier = "Free"
-
-# Gateway API implementation: Traefik Proxy, one small Deployment per Gateway (2 x 25m/64Mi), no
-# control plane (gateways/traefik of this repository, deployed by Flux). Production:
-# "approuting-istio" - App Routing's Gateway API, the Azure standard offering, upgraded by AKS - whose
-# istiod alone requests 1 CPU and 4 GiB that cannot be tuned (https://github.com/Azure/AKS/issues/5939;
-# design D55). Switching re-creates the cell's Gateways (minutes without them).
-gateway_implementation = "traefik"
 
 # No Vertical Pod Autoscaler add-on: its recommender, updater and admission controller request
 # ~2.4 GiB on the system pool. aks-hello's VerticalPodAutoscaler is left out with it
@@ -40,12 +33,8 @@ vertical_pod_autoscaler_enabled = false
 # ---------------------------------------------------------------------------------------------------
 
 # Every cluster starts on 1.36, the platform floor (design R27). AKS never upgrades a cell on its
-# own: the version pipeline changes it while the cell is drained (section 3.5).
+# own (the default auto_upgrade): the version pipeline changes it while the cell is drained (section 3.5).
 kubernetes_version = "1.36"
-auto_upgrade = {
-  kubernetes_channel = "none"
-  node_os_channel    = "None"
-}
 
 # The dev environment's resource group, created by shared/. It holds every cluster of the environment
 # and what they share. Every cell's system pool is in its network's snet-system.
@@ -75,11 +64,6 @@ dns_zone_name                = "onek8s.lol"
 dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
-# Stateless: no CSI driver - Azure Disk, Azure Files, Azure Blob - and no snapshot controller, so
-# the cluster has no StorageClass and nothing to provision a PersistentVolumeClaim from.
-persistent_storage_enabled = false
-portable_disks_enabled     = false
-
 # The environment's container registry, created by shared/. The kubelet pulls the images from it as
 # the cluster's identity, with AcrPull - no image pull secret.
 container_registry_name = "acronek8sdev"
@@ -92,13 +76,6 @@ log_analytics_workspace_name = "log-dev-platform"
 # Policy add-on, which reports unsigned ones (audit only). Its identity and the signing certificate
 # are shared/'s (image_signing).
 image_integrity_enabled = true
-
-# The private API server (design D58) over Private Link: its private endpoint is in snet-system, reached
-# by the nodes directly and by the management network, the labfw VPN and the GitHub runners (which join
-# that VPN) through the hub. No private DNS zone: the cell resolves through labfw's DNS proxy in the hub,
-# so the public FQDN names the private address.
-private_cluster_public_fqdn_enabled = true
-private_dns_zone_mode               = "none"
 
 # No Flux webhook: an internal cell has no public entry point for GitHub's deliveries (behind labfw a
 # public load balancer cannot answer), so no platform gateway either. Flux polls every minute.

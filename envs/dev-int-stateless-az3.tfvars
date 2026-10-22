@@ -15,9 +15,9 @@ virtual_network_name = "vnet-dev-int-stateless-az3"
 # encryption) - fits only with the cost savings of the shared file - on an ephemeral OS disk on the size's
 # local NVMe disk: no managed OS disk, so no Premium SSD. Production: node_count = 2 on the default
 # Standard_D4ds_v5 (16 GiB) - room for istiod and the VPA add-on, and a node to spare during an upgrade
-# (design section 2.3). The other attributes are the design's in every environment: Azure Linux 3.0 (eBPF
-# host routing needs it on every node), encryption at host, SSH off, and the CriticalAddonsOnly taint - only
-# the platform's own controllers run here, every isolation zone's pods on that zone's nodes.
+# (design section 2.3). Azure Linux 3.0, encryption at host, SSH off and the CriticalAddonsOnly taint - only
+# the platform's own controllers run here, every isolation zone's pods on that zone's nodes - are the
+# defaults, the design's in every environment.
 # The system pool's pods take addresses of snet-system-pods (100.64.0.0/20), handed to the node in batches
 # of 16 as it needs them (dynamic IP allocation), so a high limit reserves nothing. 250 pods a node, the most
 # AKS allows; it cannot change on a running pool.
@@ -27,10 +27,6 @@ default_node_pool = {
   availability_zones  = ["3"]
   enable_auto_scaling = false
   node_count          = 1
-  os_sku              = "AzureLinux"
-  encryption_at_host  = true
-  ssh_access          = "Disabled"
-  node_taints         = ["CriticalAddonsOnly=true:NoSchedule"]
   max_pods            = 250
 }
 pod_subnet_name = "snet-system-pods"

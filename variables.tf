@@ -101,12 +101,14 @@ variable "virtual_network_name" {
 
 variable "auto_upgrade" {
   type = object({
-    kubernetes_channel = optional(string, "stable")
-    node_os_channel    = optional(string, "NodeImage")
+    kubernetes_channel = optional(string, "none")
+    node_os_channel    = optional(string, "None")
   })
   default     = {}
   description = <<DESCRIPTION
-How the cluster upgrades itself. Both run inside the `maintenance_window`.
+How the cluster upgrades itself. Both run inside the `maintenance_window`. By default neither does
+(design section 3.5): the version pipeline moves a stateless cell while it is drained, so AKS never
+changes one on its own; the stateful cluster takes OS patches in place with `SecurityPatch`.
 
 - `kubernetes_channel` - Kubernetes version upgrades. `stable` follows the second newest minor
   version AKS offers, `rapid` the newest, `patch` stays on the current minor version and takes its
@@ -148,15 +150,16 @@ DESCRIPTION
 
 variable "gateway_implementation" {
   type        = string
-  default     = "approuting-istio"
+  default     = "traefik"
   description = <<DESCRIPTION
 The Gateway API implementation that serves the cluster's Gateways, one per isolation zone, deployed by the
-Flux repository (design section 4.1): `approuting-istio` (the default, production: App Routing's Gateway
-API, the Azure standard offering, upgraded by AKS - D55) or `traefik` (Traefik Proxy, one small Deployment
-per Gateway from this repository's `gateways/traefik`, a non-production cost saving: istiod's untunable
-1 CPU and 4 GiB, Azure/AKS#5939, is what it saves); null for a cluster without Gateways (the stateful
-cluster, R21). The Flux repository is told each Gateway's class as `gateway_class_name_<zone>`; switching
-re-creates the Gateways. See the README, "Ingress through the Gateway API".
+Flux repository (design section 4.1): `traefik` (the default, in every environment: Traefik Proxy, one small
+Deployment per Gateway from this repository's `gateways/traefik`, offering HTTP/2 alone and TLS 1.3 alone at
+the edge) or `approuting-istio` (App Routing's Gateway API, the Azure standard offering, upgraded by AKS -
+once it can offer the same at the edge; its istiod requests an untunable 1 CPU and 4 GiB, Azure/AKS#5939);
+null for a cluster without Gateways (the stateful cluster, R21). The Flux repository is told each Gateway's
+class as `gateway_class_name_<zone>`; switching re-creates the Gateways. See the README, "Ingress through
+the Gateway API".
 DESCRIPTION
 
   validation {
@@ -246,19 +249,20 @@ variable "default_node_pool" {
     node_soak_duration_minutes = optional(number)
 
     os_sku             = optional(string, "AzureLinux")
-    encryption_at_host = optional(bool)
-    ssh_access         = optional(string)
-    node_taints        = optional(list(string))
+    encryption_at_host = optional(bool, true)
+    ssh_access         = optional(string, "Disabled")
+    node_taints        = optional(list(string), ["CriticalAddonsOnly=true:NoSchedule"])
   })
   default     = {}
   description = <<DESCRIPTION
-The system node pool. The defaults are the production setting (design section 2.3): two `Standard_D4ds_v5`
-nodes on Azure Linux 3.0; the dev lab's one 8 GiB node is a cost saving (README, "Production defaults and
-non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed` (null: AKS chooses),
-`encryption_at_host`, `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `node_taints`
-(`CriticalAddonsOnly=true:NoSchedule` keeps every pod but the platform's off it), `max_pods`, and the upgrade roll: `max_surge`, `drain_timeout_minutes`,
-`node_soak_duration_minutes` (README, "Node pool upgrades"). The size, OS and disk type
-cannot change on a running pool.
+The system node pool. The defaults are the design's (sections 2.2, 2.3 and 4.2): two `Standard_D4ds_v5`
+nodes on Azure Linux 3.0 with encryption at host, SSH off and the `CriticalAddonsOnly=true:NoSchedule`
+taint, which keeps every pod but the platform's off it; the dev lab's one 8 GiB node is a cost saving
+(README, "Production defaults and non-production cost savings"). `os_disk_type` `Ephemeral` or `Managed`
+(null: AKS chooses), `ssh_access` (`Disabled`, `LocalUser`, `EntraId`), `max_pods`, and the upgrade roll:
+`max_surge`, `drain_timeout_minutes`, `node_soak_duration_minutes` (README, "Node pool upgrades"). The
+size, OS and disk type cannot change on a running pool. Every pool - this one and the zones' - states
+LocalDNS `Disabled`, so an AKS minor that turns the node-level DNS proxy on by itself changes nothing.
 DESCRIPTION
   nullable    = false
 
@@ -917,11 +921,11 @@ DESCRIPTION
 
 variable "persistent_storage_enabled" {
   type        = bool
-  default     = true
+  default     = false
   description = <<DESCRIPTION
-Whether the cluster has persistent storage at all. Set to `false` for a stateless cluster: AKS runs
-none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot controller, so a
-PersistentVolumeClaim has nothing to be provisioned from. AKS still creates its StorageClasses `default`
+Whether the cluster has persistent storage at all. Off by default, as in a stateless cell (design
+section 3.1): AKS runs none of its CSI drivers - Azure Disk, Azure Files, Azure Blob - nor the snapshot
+controller, so a PersistentVolumeClaim has nothing to be provisioned from; the stateful cluster turns it on. AKS still creates its StorageClasses `default`
 and `managed-csi-premium-v2`; Deploy deletes them after every apply, and the landing zone's
 `no-persistent-storage` policy refuses them back. Pods
 keep `emptyDir` and the other volumes that live and die with them. Cannot be combined with
@@ -950,19 +954,19 @@ DESCRIPTION
 
 variable "private_cluster_public_fqdn_enabled" {
   type        = bool
-  default     = false
-  description = "Whether the private API server also gets a public FQDN resolving to its private address."
+  default     = true
+  description = "Whether the private API server also gets a public FQDN resolving to its private address - the design's choice (section 2.2), which `private_dns_zone_mode = \"none\"` needs."
   nullable    = false
 }
 
 variable "private_dns_zone_mode" {
   type        = string
-  default     = "system"
+  default     = "none"
   description = <<DESCRIPTION
-How the private API server's name resolves (design D58): `system` - an AKS-managed private DNS zone,
-linked to the cluster's network only; `none` - no private zone, the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address
-from anywhere, which suits a network that resolves through a DNS server elsewhere, such as the hub
-firewall's DNS proxy (the dev lab behind labfw).
+How the private API server's name resolves (design section 2.2): `none` - the default - no private zone,
+the public FQDN (`private_cluster_public_fqdn_enabled = true`) resolves to the private address from
+anywhere, so no AKS-managed zone has to be linked to every network that resolves through the hub
+firewall's DNS proxy; `system` - an AKS-managed private DNS zone, linked to the cluster's network only.
 DESCRIPTION
   nullable    = false
 
@@ -1031,7 +1035,7 @@ variable "advanced_networking" {
   description = <<DESCRIPTION
 Advanced Container Networking Services (ACNS) on Azure CNI powered by Cilium. Off by default: OneK8s
 does not use ACNS (design D80) - the hub firewall decides egress, Cilium keeps the in-cluster rules at
-layers 3 and 4. Each part is an option kept open with a measured trigger (design section 7.4); an
+layers 3 and 4. Each part is an option the design does not take (section 5.1); an
 object turns ACNS on with the parts it names (each on unless set to false). eBPF host routing is
 decided when the cluster is created.
 
@@ -1060,7 +1064,7 @@ variable "customer_managed_keys" {
   })
   default     = null
   description = <<DESCRIPTION
-Encryption at rest with customer-managed keys - OneK8s design section 18. Two keys of the cluster's
+Encryption at rest with customer-managed keys - OneK8s design section 4.2. Two keys of the cluster's
 own are created in the vault: `key-<cluster>-kms`, with which the control plane encrypts the
 Kubernetes secrets in etcd (KMS), and `key-<cluster>-disk`, the key of a disk encryption set for the
 OS disks of every node - the system pool and the zones' pools. Null leaves both to platform-managed keys.

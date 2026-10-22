@@ -355,10 +355,10 @@ See the `managed_namespaces` variable.
 
 ## Upgrade window
 
-The cluster upgrades itself - by default the `stable` channel for the Kubernetes version and the
-`NodeImage` channel for node OS patching, both configurable through `auto_upgrade`. Those upgrades,
-together with the weekly AKS release of the control plane and add-ons, are confined to a single
-weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
+By default the cluster does not upgrade itself (`auto_upgrade` channels `none` and `None`, design section
+3.5: the version pipeline moves a cell while it is drained); the stateful cluster takes OS patches in place
+with `node_os_channel = "SecurityPatch"`. Such upgrades, together with the weekly AKS release of the
+control plane and add-ons, are confined to a single weekly [planned maintenance][maintenance] window. It defaults to the night between Tuesday and
 Wednesday, 22:00 - 06:00 UTC.
 
 Change it per environment in the variables file:
@@ -451,8 +451,8 @@ Traefik refuses with `Accepted: False`):
 
 | `gateway_implementation` | What runs | Cost |
 | --- | --- | --- |
-| `traefik` (the dev cells, a non-production cost saving) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
-| `approuting-istio` (the default, production) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
+| `traefik` (the default, every environment: HTTP/2 alone and TLS 1.3 alone at the edge, design section 4.1) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
+| `approuting-istio` (once App Routing can offer the same at the edge) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
 | null | No implementation: the stateful cluster (R21), which states it. | - |
 
 Traefik's manifests live here rather than in the Flux repository so that the choice and everything
@@ -733,10 +733,10 @@ The `dev` stateless clusters are the design's cells. Beyond the [zone node pools
 | --- | --- | --- |
 | `exposure` | `int` or `ext`: internal and external workloads never share a cluster (decision D52), so every zone and every managed namespace's `platform/zone` is of the cluster's exposure, and only an internal cluster writes the internal zones' private DNS - validated at plan. The Flux repository is told it as `cluster_exposure`. The `dev` cells are internal | sections 3.1, 3.2 |
 | `isolation_zones` | Each zone's node and pod subnets in the cell's network, so a zone's nodes and pods are in the zone's subnets behind the zone's NSG and route table | sections 2.1, 2.3, 2.4 |
-| `advanced_networking` | Advanced Container Networking Services, **off by default** (`null`, design D80: the hub firewall decides egress, Cilium keeps layer 3 and 4 rules in the cluster). An object turns on Hubble (`observability`), FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`) - the options of design section 7.4, each with its measured trigger. eBPF host routing is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 7.4 |
+| `advanced_networking` | Advanced Container Networking Services, **off by default** (`null`, design D80: the hub firewall decides egress, Cilium keeps layer 3 and 4 rules in the cluster). An object turns on Hubble (`observability`), FQDN network policies (`advancedNetworkPolicies: FQDN`) and eBPF host routing (`accelerationMode: BpfVeth`) - which the design does not take (section 5.1). eBPF host routing is sent in the create request - AKS refuses it for a running cluster, even one with only its own iptables rules - through the AVM module's `network_profile.advanced_networking.performance` input (0.8.5 and later); changing it means building the cell again. Needs Azure Linux 3.0 or Ubuntu 24.04 on every node - a check says so | section 5.1 |
 | `customer_managed_keys` | `key-<cluster>-kms` for KMS etcd encryption and `key-<cluster>-disk` for the disk encryption set of every node's OS disk, in the platform vault - see [`encryption.tf`](encryption.tf). Only at creation: a cluster built without them is built again | section 4.2 |
 | `default_node_pool.os_sku`, `encryption_at_host`, `ssh_access`, `node_taints` | Azure Linux 3.0, encryption at host (the subscription feature `Microsoft.Compute/EncryptionAtHost`, which the Deploy workflow registers), SSH off, and `CriticalAddonsOnly` so that only the platform's controllers run on the system pool - the Flux extension is told to tolerate it | sections 2.2, 2.3, 4.2 |
-| `auto_upgrade` `none` / `None`, `kubernetes_version` | AKS never upgrades a cell on its own; every cell starts on 1.36 | section 3.5 |
+| `kubernetes_version` | Every cell starts on 1.36; AKS never upgrades a cell on its own (the default `auto_upgrade`) | section 3.5 |
 | `internal_dns_zone_names` | The internal zones' private DNS, which an internal cell's external-dns writes | section 4.1 |
 
 Always, on every cluster: the Secrets Store CSI driver add-on is off - secrets reach pods only as
@@ -754,13 +754,11 @@ pool in each cell's file.
 | Variable | Production default | Non-production cost saving (dev lab) | What the saving gives up |
 | --- | --- | --- | --- |
 | `sku_tier` | `Standard` - uptime SLA, API server scaled for load (D31) | `Free` | The control plane SLA; cost analysis. |
-| `gateway_implementation` | `approuting-istio` - App Routing's Gateway API, the Azure standard offering, upgraded by AKS (D55) | `traefik` | A gateway Azure upgrades and supports; istiod's 1 CPU / 4 GiB of requests ([Azure/AKS#5939][aks5939]) is what is saved. |
 | `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 2.3) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
-| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | A second node during upgrades and failures; room for istiod and the VPA add-on. Fits only together with `traefik` and the VPA add-on off. With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
+| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | A second node during upgrades and failures; room for the VPA add-on. Fits only with the VPA add-on off (and Traefik, the default gateway: istiod's 1 CPU / 4 GiB, [Azure/AKS#5939][aks5939], would not). With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
 
-The savings depend on each other - the one 8 GiB system node holds the platform only with Traefik and
-without the VPA add-on - so going back to production means all of them: delete the block and apply.
-Changing the gateway implementation re-creates the cell's Gateways; the rest are in-place updates.
+The savings depend on each other - the one 8 GiB system node holds the platform only without the VPA
+add-on - so going back to production means all of them: delete the block and apply; all are in-place updates.
 
 ## GitOps with Flux
 

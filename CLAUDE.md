@@ -87,9 +87,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   in the lab** (quota stays 0).
 - **System pool**: one `Standard_D4alds_v6` node, `os_disk_type = "Ephemeral"`, Azure Linux, SSH off,
   `CriticalAddonsOnly`. It fits only with the lab's cost savings, stated in one "Non-production cost savings" block of
-  `envs/dev-int-stateless.tfvars`: Free tier, `gateway_implementation = "traefik"`, VPA add-on off (aks-hello's
+  `envs/dev-int-stateless.tfvars`: Free tier and VPA add-on off (aks-hello's
   VerticalPodAutoscaler is patched out in the example repo). variables.tf defaults are production (Standard,
-  `approuting-istio`, VPA on, 2 x Standard_D4ds_v5) - README "Production defaults and
+  VPA on, 2 x Standard_D4ds_v5; Traefik is the default gateway everywhere) - README "Production defaults and
   non-production cost savings". The stateful tfvars state `gateway_implementation = null` (R21).
 - **No ACNS** (D80, cell rebuilt 2026-10-19): `advanced_networking = null` is the default - no Hubble, FQDN policies or
   eBPF host routing. The fleet's Cilium policies are layer 3 and 4 only (no `toFQDNs`, no DNS rules - both need the
@@ -217,8 +217,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   Automatic.** The lab is one cell.
 - **Traffic Manager, not Front Door.** External zones get a public LB per zone per cell; one Traffic Manager profile
   per global hostname (Subnet routing with nested Priority profiles in the design; Weighted in a lab).
-- **Gateway API implementation is a flag, `gateway_implementation`**: `traefik` (dev; `gateways/traefik`, a Flux
-  configuration `traefik-<gateway>` per Gateway) or `approuting-istio` (the production default: App Routing's
+- **Gateway API implementation is a flag, `gateway_implementation`**: `traefik` (the default in every environment since
+  design v4, section 4.1: HTTP/2 and TLS 1.3 alone at the edge; `gateways/traefik`, a Flux
+  configuration `traefik-<gateway>` per Gateway) or `approuting-istio` (once it offers the same at the edge: App Routing's
   sidecar-less istiod, an Envoy Deployment + LB + HPA min 2 + PDB per Gateway, shaped by the ConfigMap in
   `parametersRef`; no rate limits / request size limits / EnvoyFilter; istiod requests 2 x 500m/2 GiB, not tunable,
   Azure/AKS#5939). Traefik refuses a `parametersRef`, so the fleet adds it only in its `approuting-istio` component.
@@ -333,5 +334,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   timeout). The gateway Services carry `service.cilium.io/node-selector: "!platform/zone"` (Cilium 1.18+; Traefik here,
   approuting-istio in the fleet), so on zone nodes the flow goes through labfw and back through the ILB (2026-10-20,
   #223); azure-landing-zone's last collection `<spoke>-published-names-deny` resets what no rule file allows (17-32 ms).
+- **A node pool's `localDNSProfile` change reimages its running nodes** (#229, 2026-10-22: `mode = "Disabled"` stated on
+  every pool reimaged the one system node in place, ~11 min, and every running zone node; empty pools took ~1-3 min).
+  Plan a LocalDNS change like a node image step: the cell out of traffic first.
 - **Credentials handed over in chat** go to the vault with `store-secret.yml`, never into Git or a workflow input.
 - The auto-mode classifier refused Run Command on labfw for workflows; read labfw's denials from Log Analytics.

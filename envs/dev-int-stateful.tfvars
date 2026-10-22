@@ -56,10 +56,12 @@ dns_zone_name                = "onek8s.lol"
 dns_zone_private             = false
 dns_zone_resource_group_name = "rg-onek8s-dns"
 
-# The disks of the platform's `portable-disk` StorageClass go to resource_group_name rather than the
-# node resource group, so they outlive this cluster. The cluster identity is granted a role of its
-# own for disks there, and nothing else.
-portable_disks_enabled = true
+# Persistent storage - the CSI drivers and the snapshot controller, off in a stateless cell - and the
+# disks of the platform's `portable-disk` StorageClass in resource_group_name rather than the node
+# resource group, so they outlive this cluster. The cluster identity is granted a role of its own for
+# disks there, and nothing else.
+persistent_storage_enabled = true
+portable_disks_enabled     = true
 
 # SHARED. The environment's container registry, created by shared/ and looked up here - not part of
 # the landing zone. The kubelet pulls the images from it as this cluster's identity, with AcrPull -
@@ -70,10 +72,11 @@ container_registry_name = "acronek8sdev"
 # audit log (kube-audit-admin and guard) - design section 6.2, CIS AKS Benchmark 2.1.1.
 log_analytics_workspace_name = "log-dev-platform"
 
-# The private API server (design D58) over Private Link, like the cells': no private DNS zone, the
-# public FQDN names the private address through the hub's DNS proxy.
-private_cluster_public_fqdn_enabled = true
-private_dns_zone_mode               = "none"
+# OS patches in place (design section 3.5): the SecurityPatch channel patches the running nodes inside the
+# maintenance window; Kubernetes versions move only through the pipeline (the default channel none).
+auto_upgrade = {
+  node_os_channel = "SecurityPatch"
+}
 
 # No Gateway API implementation: the stateful cluster has no gateway of its own (design R21), whatever
 # the environment - not a cost saving.
