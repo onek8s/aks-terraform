@@ -101,7 +101,7 @@ jobs:
         run: pip install --quiet ./aks-ai-agents
 
       - name: The previous run's state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: state
           key: ${{ env.STATE_CACHE }}-${{ github.run_id }}
@@ -172,7 +172,7 @@ jobs:
 
       - name: Keep the state
         if: always() && steps.new.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: state
           key: ${{ env.STATE_CACHE }}-${{ github.run_id }}-${{ github.run_attempt }}
