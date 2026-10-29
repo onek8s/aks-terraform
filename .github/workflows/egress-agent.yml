@@ -93,7 +93,7 @@ jobs:
           repository: onek8s/aks-ai-agents
           path: aks-ai-agents
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
