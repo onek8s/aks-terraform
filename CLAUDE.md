@@ -79,7 +79,11 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   100.64.32.0/20), delegated to AKS. Root: `pod_subnet_name`, `isolation_zones.<zone>.{node,pod}_subnet_name`. Pods
   keep their addresses to labfw (fleet `pod-addresses-to-firewall`: AKS's `azure-ip-masq-agent-config` translates
   nothing; `infrastructure/zones/firewall-egress` lets the zone's apps out to `world` - labfw decides).
-- **Zone nodes: classic pools** (`zone_node_pools`): `intse`, `intsespot`, `intsearm`, `intsearmspot`
+- **Zone nodes: classic pools** (`zone_node_pools`), per zone and generation `<country><generation>[spot|arm|armspot]`:
+  `se1`, `se1spot`, `se1arm`, `se1armspot`, `fi1`, ... (since 2026-11-09, before `intse`, `intsespot`, ...; label
+  `platform/node-generation`). **Blue/green pool upgrades** (design 3.6): `zone_node_pools.generations` - a new generation
+  beside the old (its own `kubernetes_version`, VM sizes, max pods), the old one `retiring_zones` (taint
+  `platform/retiring=true:NoSchedule`), then removed (README "Blue/green node pool upgrades")
   (Standard_D2alds_v6 / D2pds_v6, ephemeral OS disk, 250 pods), min 0, labels/taints `platform/zone` and
   `platform/capacity=spot`; the cluster autoscaler's `priority` expander takes spot first (fleet
   `infrastructure/autoscaler-priority`). No node auto provisioning: it does not support a pod subnet

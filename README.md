@@ -717,13 +717,53 @@ their pool's node subnet, the pods of its pod subnet - `pod_subnet_name` for the
 `shared/`'s `cells.<cell>.pod_address_space` - and keep them up to the hub's firewall, so it sees
 which zone and which pod a flow comes from (design section 5.2). Node subnet mode is not offered.
 
-`zone_node_pools` gives each zone four classic node pools - `<zone>`, `<zone>spot`, `<zone>arm`,
-`<zone>armspot` (`intse`, ...) - from 0 nodes in the cell's availability zone, labelled and tainted
-`platform/zone=<zone>` (and `platform/capacity=spot` on the spot pools), which the platform's placement
-mutations target. The cluster autoscaler takes the `priority` expander; the Flux repository's
-`infrastructure/autoscaler-priority` ConfigMap puts the spot pools first. Node auto provisioning is not
-used: it does not support a pod subnet (Azure/karpenter-provider-azure issue 1351). The cluster identity
-gets Network Contributor on the virtual network.
+`zone_node_pools` gives each zone four classic node pools per generation - `<country><generation>`,
+`...spot`, `...arm`, `...armspot` (`se1`, `se1spot`, `se1arm`, `se1armspot` for int-se in generation 1:
+AKS allows 12 characters, and the exposure is the cluster's own) - from 0 nodes in the cell's availability
+zone, labelled and tainted `platform/zone=<zone>` (and `platform/capacity=spot` on the spot pools), which
+the platform's placement mutations target, and labelled `platform/node-generation`. The cluster autoscaler
+takes the `priority` expander; the Flux repository's `infrastructure/autoscaler-priority` ConfigMap puts
+the spot pools (`.*spot.*`) first. Node auto provisioning is not used: it does not support a pod subnet
+(Azure/karpenter-provider-azure issue 1351). The cluster identity gets Network Contributor on the
+virtual network.
+
+### Blue/green node pool upgrades
+
+A zone's pools can be replaced by a new generation instead of being upgraded in place (design section
+3.6): nothing selects a pool by name - the applications' pods select `platform/zone`, which every generation
+carries - so two generations of a zone run side by side. A generation is keyed by one letter or digit and
+states only what differs from `zone_node_pools`: its `zones` (null: every zone), its `kubernetes_version`
+(null: the cluster's), `retiring_zones`, and the settings a running pool cannot change (`amd64_vm_size`,
+`arm64_vm_size`, `max_pods`, `os_disk_type`, `os_disk_size_gb`). Moving int-fi from generation 1 to 2,
+on a new Kubernetes minor:
+
+```hcl
+# 1. Pin the old generation, then move the cluster: the control plane is upgraded, generation 1 is not.
+kubernetes_version = "1.37"
+zone_node_pools = {
+  generations = {
+    "1" = { kubernetes_version = "1.36" }
+    # 2. The new generation, in int-fi only: AKS creates its four pools empty, at the cluster's version and
+    #    the newest node image.
+    "2" = { zones = ["int-fi"] }
+  }
+}
+
+# 3. Retire generation 1 in int-fi: its pools are tainted platform/retiring=true:NoSchedule. Running
+#    pods stay; every new pod - a rollout, a restart, a scale-out - lands on generation 2, whose nodes the
+#    autoscaler adds, and the autoscaler removes generation 1's nodes as they empty.
+#    "1" = { kubernetes_version = "1.36", retiring_zones = ["int-fi"] }
+
+# 4. Take int-fi out of generation 1: AKS deletes its pools and drains what is left on them,
+#    PodDisruptionBudgets respected.
+#    "1" = { kubernetes_version = "1.36", zones = ["int-se"] }
+```
+
+Each step is one pull request and one apply; step 3 can wait as long as the application teams need, and
+the way back until step 4 is to remove the taint (`retiring_zones`) from generation 1 and retire
+generation 2. A check warns when a zone is left with no generation that takes pods. The quota must hold
+both generations' nodes while they overlap. Without a second generation, a version change on
+`kubernetes_version` upgrades the pools in place with surge, as before.
 
 ## Cells of the OneK8s design
 

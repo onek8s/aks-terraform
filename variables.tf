@@ -1139,15 +1139,33 @@ variable "zone_node_pools" {
     max_pods        = optional(number, 250)
     os_disk_type    = optional(string, "Ephemeral")
     os_disk_size_gb = optional(number, 64)
+    generations = optional(map(object({
+      zones              = optional(list(string))
+      kubernetes_version = optional(string)
+      retiring_zones     = optional(list(string), [])
+      amd64_vm_size      = optional(string)
+      arm64_vm_size      = optional(string)
+      max_pods           = optional(number)
+      os_disk_type       = optional(string)
+      os_disk_size_gb    = optional(number)
+    })), { "1" = {} })
   })
   default     = null
   description = <<DESCRIPTION
 Classic node pools for the isolation zones, scaled by the cluster autoscaler (node auto provisioning does
-not support a pod subnet): per zone `<zone>`, `<zone>spot`, `<zone>arm`
-and `<zone>armspot` (the zone without its hyphen), each from 0 to `max_count` (`spot_max_count` for spot)
-nodes in the system pool's availability zone, labelled `platform/zone` (and `platform/capacity=spot`) and
-tainted alike. The priority expander (the Flux repository's ConfigMap) takes the spot pools first. Null for
-a cluster without zones. See the README, "Zone node pools".
+not support a pod subnet): per zone and generation `<country><generation>`, `...spot`, `...arm` and
+`...armspot` (`se1`, `se1spot`, `se1arm`, `se1armspot` for int-se's generation 1), each from 0 to
+`max_count` (`spot_max_count` for spot) nodes in the system pool's availability zone, labelled
+`platform/zone` (and `platform/capacity=spot`) and tainted alike, and labelled `platform/node-generation`.
+The priority expander (the Flux repository's ConfigMap) takes the spot pools first. Null for a cluster
+without zones.
+
+`generations` are the pools' generations, keyed by one lowercase letter or digit (default: one, `1`), for
+blue/green node pool upgrades (design section 3.6): each states the `zones` it is in (null: every zone),
+its `kubernetes_version` (null: the cluster's - pin it on the old generation before the cluster's moves),
+the zones where it is retiring (`retiring_zones`: tainted `platform/retiring=true:NoSchedule`, no new pods,
+the autoscaler empties and removes its nodes) and what differs from the settings above (VM sizes, max pods,
+OS disk) - what a running pool cannot change. See the README, "Zone node pools".
 DESCRIPTION
 
   validation {
@@ -1155,8 +1173,43 @@ DESCRIPTION
     error_message = "zone_node_pools.max_count and spot_max_count must be at least 1: a pool scales from 0 to them."
   }
   validation {
-    condition     = var.zone_node_pools == null || contains(["Ephemeral", "Managed"], try(var.zone_node_pools.os_disk_type, "-"))
-    error_message = "zone_node_pools.os_disk_type must be Ephemeral or Managed."
+    condition = var.zone_node_pools == null || alltrue([
+      for type in concat([try(var.zone_node_pools.os_disk_type, "-")], [for g in values(try(var.zone_node_pools.generations, {})) : coalesce(g.os_disk_type, "Ephemeral")]) : contains(["Ephemeral", "Managed"], type)
+    ])
+    error_message = "zone_node_pools.os_disk_type (and every generation's) must be Ephemeral or Managed."
+  }
+  validation {
+    condition = var.zone_node_pools == null || (
+      length(try(var.zone_node_pools.generations, {})) >= 1 &&
+      alltrue([for key in keys(try(var.zone_node_pools.generations, {})) : can(regex("^[a-z0-9]$", key))])
+    )
+    error_message = "zone_node_pools.generations needs at least one generation, each keyed by one lowercase letter or digit (it is part of the pool names, which AKS limits to 12 characters)."
+  }
+  validation {
+    condition = var.zone_node_pools == null || alltrue(flatten([
+      for g in values(try(var.zone_node_pools.generations, {})) : [
+        for zone in concat(coalesce(g.zones, []), g.retiring_zones) : contains(keys(var.isolation_zones), zone)
+      ]
+    ]))
+    error_message = "Every zone a generation of zone_node_pools names (zones, retiring_zones) must be one of isolation_zones."
+  }
+  validation {
+    condition = var.zone_node_pools == null || alltrue([
+      for g in values(try(var.zone_node_pools.generations, {})) : g.kubernetes_version == null || can(regex("^[0-9]+\\.[0-9]+(\\.[0-9]+)?$", coalesce(g.kubernetes_version, "-")))
+    ])
+    error_message = "A generation's kubernetes_version must be of the form 1.36 or 1.36.2, without a leading \"v\"."
+  }
+  validation {
+    condition = var.zone_node_pools == null || alltrue([
+      for zone in keys(var.isolation_zones) : can(regex("^[a-z][a-z0-9]{0,3}$", element(split("-", zone), length(split("-", zone)) - 1)))
+    ])
+    error_message = "With zone_node_pools, every zone must end in a country of 1 to 4 lowercase letters or digits (`int-se`), the start of its pools' names: AKS allows 12 characters, `<country><generation>armspot`."
+  }
+  validation {
+    condition = var.zone_node_pools == null || length(distinct([
+      for zone in keys(var.isolation_zones) : element(split("-", zone), length(split("-", zone)) - 1)
+    ])) == length(var.isolation_zones)
+    error_message = "With zone_node_pools, no two zones of a cluster may end in the same country: it names their pools."
   }
 }
 

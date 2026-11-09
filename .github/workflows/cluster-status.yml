@@ -170,7 +170,9 @@ jobs:
           # Report everything, whatever one command says.
           set +e -x
           kubectl version
-          kubectl get nodes -o wide -L kubernetes.azure.com/agentpool,platform/zone,platform/capacity,kubernetes.azure.com/ebpf-host-routing,node.kubernetes.io/instance-type
+          kubectl get nodes -o wide -L kubernetes.azure.com/agentpool,platform/zone,platform/node-generation,platform/capacity,kubernetes.azure.com/ebpf-host-routing,node.kubernetes.io/instance-type,kubernetes.azure.com/node-image-version
+          # Each node's taints: a retiring pool generation (blue/green upgrade) carries platform/retiring.
+          kubectl get nodes -o custom-columns='NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,TAINTS:.spec.taints[*].key'
           # Who owns each namespace and pays for it (Azure Policy namespace-ownership).
           kubectl get namespaces -o custom-columns='NAME:.metadata.name,TEAM:.metadata.labels.platform/team,COST_CENTER:.metadata.labels.platform/cost-center,ZONE:.metadata.labels.platform/zone,CONTACT:.metadata.annotations.platform/contact'
           kubectl describe nodes | sed -n "/Allocatable:/,/Events:/p"
