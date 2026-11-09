@@ -52,7 +52,7 @@ create-for-rbac` JSON of an SPN that is Owner on the lab subscriptions and **Glo
 tenant (Graph works: groups, apps, role assignments); `GH_OWNER` - org secret, a GitHub admin token of the onek8s
 organization. Use them through `lab-admin.yml`, `entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
-Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (144 runs) and in
+Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (145 runs) and in
 `shared/` (67), `kustomize build` for changed fleet directories; for a policy change in azure-landing-zone,
 `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and `terraform test` there. The fleet and
 example repos' CI does not run on GitHub, so validate them locally.

@@ -6,19 +6,30 @@ locals {
   # The cluster's Gateways, as the Flux repository runs them: one per isolation zone, `<zone>` in
   # `<zone>-gateway`, behind an internal load balancer for an internal zone, and with the Flux webhook
   # the platform's, `platform` in `platform-gateway`, always public (Flux's webhook receivers).
+  #
+  # `watch_namespaces` are the only namespaces a Gateway's Traefik reads (design section 2.4): its
+  # own, where the Gateway and its certificate are, and those its routes come from - a zone's
+  # application namespaces (managed_namespaces labelled `platform/zone: <zone>`, the label the
+  # Gateway's allowedRoutes selects), or flux-system for the platform's webhook route. Traefik reads
+  # the Services, EndpointSlices, ConfigMaps and Secrets of these alone, so no zone's gateway can read
+  # another zone's Secrets.
   gateways = var.gateway_implementation == null ? {} : merge(
     {
       for zone in keys(var.isolation_zones) : zone => {
         namespace = "${zone}-gateway"
         exposure  = startswith(zone, "int-") ? "int" : "ext"
         internal  = startswith(zone, "int-")
+        watch_namespaces = concat(["${zone}-gateway"], sort([
+          for name, namespace in var.managed_namespaces : name if lookup(namespace.labels, "platform/zone", null) == zone
+        ]))
       }
     },
     local.flux_github_webhook_enabled ? {
       platform = {
-        namespace = "platform-gateway"
-        exposure  = "ext"
-        internal  = false
+        namespace        = "platform-gateway"
+        exposure         = "ext"
+        internal         = false
+        watch_namespaces = ["platform-gateway", "flux-system"]
       }
     } : {},
   )
@@ -62,7 +73,9 @@ locals {
                 gateway_namespace = gateway.namespace
                 gateway_exposure  = gateway.exposure
                 gateway_internal  = tostring(gateway.internal)
-                quote             = "\""
+                # A YAML flow sequence's items: namespace names need no quotes.
+                gateway_watch_namespaces = join(",", gateway.watch_namespaces)
+                quote                    = "\""
               }
             }
           }

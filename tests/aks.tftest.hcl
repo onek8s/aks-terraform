@@ -2819,6 +2819,40 @@ run "an_internal_zone_gets_an_internal_traefik_load_balancer" {
   }
 }
 
+run "a_zones_traefik_watches_only_the_zones_namespaces" {
+  command = plan
+
+  variables {
+    exposure        = "int"
+    zone_node_pools = {}
+    default_node_pool = {
+      availability_zones = ["1"]
+    }
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    managed_namespaces = {
+      int-se-payments = { labels = { "platform/zone" = "int-se" } }
+      int-fi-payments = { labels = { "platform/zone" = "int-fi" } }
+      int-fi-example  = { labels = { "platform/zone" = "int-fi" } }
+      no-zone         = {}
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+    gateway_implementation = "traefik"
+  }
+
+  assert {
+    condition = (
+      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "int-fi-gateway,int-fi-example,int-fi-payments" &&
+      azapi_resource.traefik_flux_configuration["int-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "int-se-gateway,int-se-payments"
+    )
+    error_message = "A zone's Traefik should watch its gateway namespace and the zone's application namespaces, nothing of another zone's."
+  }
+}
+
 run "app_routing_serves_every_gateway_without_traefik" {
   command = plan
 
@@ -3005,6 +3039,10 @@ run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_platform == "traefik-platform"
     )
     error_message = "The platform gateway should be public, in platform-gateway, and its class told to the Flux repository."
+  }
+  assert {
+    condition     = azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "platform-gateway,flux-system"
+    error_message = "The platform gateway's Traefik should watch platform-gateway and flux-system, where the webhook route is."
   }
   assert {
     condition = alltrue([
