@@ -94,7 +94,9 @@ spec:
       kubernetesGateway:
         enabled: true
         labelSelector: platform/gateway-class=traefik-${gateway_name}
-        namespaces: [${gateway_watch_namespaces}]
+        # Empty until aks-terraform has told this Flux configuration the namespaces: then Traefik watches
+        # every namespace and its namespace role is bound cluster-wide, as the chart's was (below).
+        namespaces: [${gateway_watch_namespaces:=}]
     rbac:
       enabled: false
     api:
@@ -163,8 +165,23 @@ spec:
           - apiGroups: [discovery.k8s.io]
             resources: [endpointslices]
             verbs: [list, watch]
-      # One RoleBinding per watched namespace, rendered by the chart (a string is a Helm template).
+      # One RoleBinding per watched namespace, rendered by the chart (a string is a Helm template) - or,
+      # with no namespaces yet, one ClusterRoleBinding, so that Traefik keeps serving until the next apply.
       - |
+        {{- if not .Values.providers.kubernetesGateway.namespaces }}
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: traefik-${gateway_name}-namespace
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: traefik-${gateway_name}-namespace
+        subjects:
+          - kind: ServiceAccount
+            name: traefik
+            namespace: ${gateway_namespace}
+        {{- end }}
         {{- range .Values.providers.kubernetesGateway.namespaces }}
         ---
         apiVersion: rbac.authorization.k8s.io/v1
