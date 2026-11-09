@@ -159,6 +159,15 @@ module "aks" {
     read   = "10m"
     update = "90m"
   }
+  # AKS runs one node pool operation of a cluster at a time, and deleting a pool drains it: a change of
+  # pool generations (blue/green node pool upgrade, zones.tf) queues many of them, which outlast the
+  # AzAPI provider's 30 minutes (2026-11-09: 16 pool operations, the apply timed out while Azure carried on).
+  agentpool_timeouts = {
+    create = "90m"
+    delete = "90m"
+    read   = "10m"
+    update = "90m"
+  }
   default_agent_pool = local.default_agent_pool
   # The zones' classic node pools and their cluster autoscaler - a pod-subnet cell's (zones.tf)
   agent_pools         = local.zone_agent_pools
