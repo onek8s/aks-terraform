@@ -95,8 +95,10 @@ spec:
         enabled: true
         labelSelector: platform/gateway-class=traefik-${gateway_name}
         # Empty until aks-terraform has told this Flux configuration the namespaces: then Traefik watches
-        # every namespace and its namespace role is bound cluster-wide, as the chart's was (below).
-        namespaces: [${gateway_watch_namespaces:=}]
+        # every namespace and its namespace role is bound cluster-wide, as the chart's was (below). The
+        # whole flow sequence is the substitution: `[${...}]` is no YAML before Flux substitutes it (its
+        # `{` ends the plain scalar), and kustomize parses the file first.
+        namespaces: ${gateway_watch_namespaces:=[]}
     rbac:
       enabled: false
     api:

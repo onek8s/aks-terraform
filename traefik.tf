@@ -73,8 +73,8 @@ locals {
                 gateway_namespace = gateway.namespace
                 gateway_exposure  = gateway.exposure
                 gateway_internal  = tostring(gateway.internal)
-                # A YAML flow sequence's items: namespace names need no quotes.
-                gateway_watch_namespaces = join(",", gateway.watch_namespaces)
+                # A YAML flow sequence, brackets included: namespace names need no quotes.
+                gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]"
                 quote                    = "\""
               }
             }

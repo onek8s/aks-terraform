@@ -2921,8 +2921,8 @@ run "a_zones_traefik_watches_only_the_zones_namespaces" {
 
   assert {
     condition = (
-      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "int-fi-gateway,int-fi-example,int-fi-payments" &&
-      azapi_resource.traefik_flux_configuration["int-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "int-se-gateway,int-se-payments"
+      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[int-fi-gateway,int-fi-example,int-fi-payments]" &&
+      azapi_resource.traefik_flux_configuration["int-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[int-se-gateway,int-se-payments]"
     )
     error_message = "A zone's Traefik should watch its gateway namespace and the zone's application namespaces, nothing of another zone's."
   }
@@ -3116,7 +3116,7 @@ run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
     error_message = "The platform gateway should be public, in platform-gateway, and its class told to the Flux repository."
   }
   assert {
-    condition     = azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "platform-gateway,flux-system"
+    condition     = azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[platform-gateway,flux-system]"
     error_message = "The platform gateway's Traefik should watch platform-gateway and flux-system, where the webhook route is."
   }
   assert {
