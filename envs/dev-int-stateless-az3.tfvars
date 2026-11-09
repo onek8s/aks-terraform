@@ -40,7 +40,7 @@ network_profile = {
 
 # The zones - Sweden's int-se and, since 2026-10-20, Finland's int-fi, so that the lab has two zones in one
 # cell to test the isolation between them (design D73, V31): each zone's nodes in snet-<zone>-nodes with
-# their pods in snet-<zone>-pods, from classic node pools - se1, se1spot, se1arm, se1armspot per generation,
+# their pods in snet-<zone>-pods, from classic node pools - se2, se2spot, se2arm, se2armspot per generation,
 # from zero nodes in availability zone 3 - scaled by the cluster autoscaler, whose priority expander takes
 # the spot pools first (aks-fluxcd-platform, clusters/dev-int-stateless-az3). Sized for the lab's quotas in
 # germanywestcentral: Daldv6 12 vCPUs (the system node takes 4, so four 2-vCPU amd64 nodes in all - one per
@@ -52,10 +52,9 @@ network_profile = {
 zone_node_pools = {
   max_count      = 1
   spot_max_count = 1
-  # Blue/green node pool upgrade (design section 3.6, README "Blue/green node pool upgrades"), tried in the
-  # lab 2026-11-09: generation 2 beside generation 1, which is retiring in both zones (no new pods).
+  # Generation 2 since the lab's blue/green node pool upgrade of 2026-11-09 (design section 3.6, README
+  # "Blue/green node pool upgrades"): generation 1 retired, then removed.
   generations = {
-    "1" = { retiring_zones = ["int-fi", "int-se"] }
     "2" = {}
   }
 }
