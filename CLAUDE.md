@@ -83,7 +83,10 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `se1`, `se1spot`, `se1arm`, `se1armspot`, `fi1`, ... (since 2026-11-09, before `intse`, `intsespot`, ...; label
   `platform/node-generation`). **Blue/green pool upgrades** (design 3.6): `zone_node_pools.generations` - a new generation
   beside the old (its own `kubernetes_version`, VM sizes, max pods), the old one `retiring_zones` (taint
-  `platform/retiring=true:NoSchedule`), then removed (README "Blue/green node pool upgrades")
+  `platform/retiring=true:NoSchedule`), then removed (README "Blue/green node pool upgrades"). Tested in the lab on
+  2026-11-09 (generation 1 retired: no reimage, pods stayed; removed: AKS drained it, pods moved to generation 2), so
+  the lab runs **generation 2** (`se2*`, `fi2*`). Adding or removing 8 pools takes AKS over 30 min (one pool operation
+  at a time): the pools' azapi timeouts are 90 min; pools a timed-out apply created need an `import` (#237).
   (Standard_D2alds_v6 / D2pds_v6, ephemeral OS disk, 250 pods), min 0, labels/taints `platform/zone` and
   `platform/capacity=spot`; the cluster autoscaler's `priority` expander takes spot first (fleet
   `infrastructure/autoscaler-priority`). No node auto provisioning: it does not support a pod subnet
@@ -209,7 +212,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `platform/team`, `platform/cost-center`, annotation `platform/contact` (R14). shared/ `monthly_budget` 600/month.
 - **Identity**: Deploy runs as `id-aks-dev-apply-germanywestcentral` (client ID b975d49a-...), the `dev` environment's
   AZURE_CLIENT_ID; set it again with Lab admin (gh) after any rebuild of sub-mgmt.
-- **Quotas** (germanywestcentral, sub-aks-dev): regional 38, Dpsv6 16, Daldv6 8 (system node 4 + two D2alds_v6),
+- **Quotas** (germanywestcentral, sub-aks-dev): regional 38, Dpsv6 16, Daldv6 12 (system node 4 + D2alds_v6 of two generations side by side),
   low-priority 3 (one spot D2alds_v6; raises get throttled - retry at most hourly). sub-hub: Basv2 4 (labfw).
 - **Backlog**: tracked with the implementation, not in the design (removed from 7.1 in v2.1; 7.1 is in the design's
   unpublished `archive/` since v4.0). V32 (spot fallback, labfw's log naming the pod) and V31 are open -
