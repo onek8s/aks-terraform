@@ -2151,24 +2151,25 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
   }
 
   assert {
-    condition     = sort(keys(local.zone_agent_pools)) == tolist(["intse", "intsearm", "intsearmspot", "intsespot"])
-    error_message = "A zone gets four pools: on-demand and spot, amd64 and arm64."
+    condition     = sort(keys(local.zone_agent_pools)) == tolist(["se1", "se1arm", "se1armspot", "se1spot"])
+    error_message = "A zone gets four pools of generation 1, named by its country: on-demand and spot, amd64 and arm64."
   }
   assert {
     condition = (
-      local.zone_agent_pools["intsespot"].scale_set_priority == "Spot" &&
-      local.zone_agent_pools["intsespot"].min_count == 0 &&
-      local.zone_agent_pools["intsespot"].max_count == 1 &&
-      local.zone_agent_pools["intse"].max_count == 2 &&
-      local.zone_agent_pools["intse"].max_pods == 250 &&
-      local.zone_agent_pools["intse"].scale_set_priority == null &&
-      local.zone_agent_pools["intsearm"].vm_size == "Standard_D2pds_v6" &&
-      local.zone_agent_pools["intse"].availability_zones == tolist(["3"]) &&
-      local.zone_agent_pools["intse"].pod_subnet_id != null &&
-      local.zone_agent_pools["intsespot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/capacity" = "spot" }) &&
-      local.zone_agent_pools["intsespot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
-      local.zone_agent_pools["intse"].node_taints == tolist(["platform/zone=int-se:NoSchedule"]) &&
-      local.zone_agent_pools["intse"].local_dns_profile.mode == "Disabled"
+      local.zone_agent_pools["se1spot"].scale_set_priority == "Spot" &&
+      local.zone_agent_pools["se1spot"].min_count == 0 &&
+      local.zone_agent_pools["se1spot"].max_count == 1 &&
+      local.zone_agent_pools["se1"].max_count == 2 &&
+      local.zone_agent_pools["se1"].max_pods == 250 &&
+      local.zone_agent_pools["se1"].scale_set_priority == null &&
+      local.zone_agent_pools["se1arm"].vm_size == "Standard_D2pds_v6" &&
+      local.zone_agent_pools["se1"].availability_zones == tolist(["3"]) &&
+      local.zone_agent_pools["se1"].pod_subnet_id != null &&
+      local.zone_agent_pools["se1spot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/node-generation" = "1", "platform/capacity" = "spot" }) &&
+      local.zone_agent_pools["se1spot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
+      local.zone_agent_pools["se1"].node_taints == tolist(["platform/zone=int-se:NoSchedule"]) &&
+      local.zone_agent_pools["se1"].local_dns_profile.mode == "Disabled" &&
+      local.zone_agent_pools["se1"].orchestrator_version == null
     )
     error_message = "The zone pools scale from zero in the cell's availability zone, labelled and tainted for the placement mutations, their pods in the zone's pod subnet."
   }
@@ -2183,6 +2184,79 @@ run "a_pod_subnet_cell_runs_classic_zone_pools_with_the_autoscaler" {
     )
     error_message = "The zone pools' cluster gets the virtual network, and the cluster is sent no plugin mode and no pod range."
   }
+}
+
+run "a_zone_moves_to_a_new_node_pool_generation_blue_green" {
+  command = plan
+
+  variables {
+    network_profile = {
+      outbound_type = "userDefinedRouting"
+    }
+    default_node_pool = {
+      availability_zones = ["3"]
+    }
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    zone_node_pools = {
+      generations = {
+        "1" = { kubernetes_version = "1.36", retiring_zones = ["int-fi"] }
+        "2" = { zones = ["int-fi"], amd64_vm_size = "Standard_D4alds_v6" }
+      }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = sort(keys(local.zone_agent_pools)) == tolist([
+      "fi1", "fi1arm", "fi1armspot", "fi1spot", "fi2", "fi2arm", "fi2armspot", "fi2spot",
+      "se1", "se1arm", "se1armspot", "se1spot",
+    ])
+    error_message = "The zone moving to generation 2 has both generations' pools side by side, the other zone only generation 1's."
+  }
+  assert {
+    condition = (
+      local.zone_agent_pools["fi1"].orchestrator_version == "1.36" &&
+      local.zone_agent_pools["fi2"].orchestrator_version == null &&
+      local.zone_agent_pools["fi2"].vm_size == "Standard_D4alds_v6" &&
+      local.zone_agent_pools["fi2arm"].vm_size == "Standard_D2pds_v6" &&
+      local.zone_agent_pools["fi2"].node_labels == tomap({ "platform/zone" = "int-fi", "platform/node-generation" = "2" })
+    )
+    error_message = "The old generation stays on its pinned version, the new one takes the cluster's and its own VM size, and both carry the zone label placement selects."
+  }
+  assert {
+    condition = (
+      contains(local.zone_agent_pools["fi1"].node_taints, "platform/retiring=true:NoSchedule") &&
+      contains(local.zone_agent_pools["fi1spot"].node_taints, "platform/retiring=true:NoSchedule") &&
+      !contains(local.zone_agent_pools["fi2"].node_taints, "platform/retiring=true:NoSchedule") &&
+      !contains(local.zone_agent_pools["se1"].node_taints, "platform/retiring=true:NoSchedule")
+    )
+    error_message = "Only the retiring generation's pools in the zone that moves are tainted retiring."
+  }
+}
+
+run "a_generation_key_is_one_character" {
+  command = plan
+
+  variables {
+    isolation_zones = {
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    zone_node_pools = {
+      generations = {
+        "blue" = {}
+      }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  expect_failures = [var.zone_node_pools]
 }
 
 run "an_external_cluster_holds_external_zones_and_tells_flux_its_exposure" {
@@ -2230,7 +2304,8 @@ run "an_external_cluster_refuses_an_internal_zone" {
     }
   }
 
-  expect_failures = [var.exposure]
+  # Two zones of one country are refused by zone_node_pools too: they would name the same pools.
+  expect_failures = [var.exposure, var.zone_node_pools]
 }
 
 run "an_internal_cluster_refuses_an_external_namespace" {

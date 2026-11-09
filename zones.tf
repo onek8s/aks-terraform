@@ -60,11 +60,22 @@ data "azurerm_subnet" "zone_pods" {
   virtual_network_name = var.virtual_network_name
 }
 
-# The zones' classic node pools (zone_node_pools): per zone one per capacity type and architecture, from
-# zero nodes, in the zone's node subnet with the pods in its pod subnet - labelled and tainted
-# `platform/zone` and `platform/capacity=spot`, which the platform's placement mutations target. AKS adds its own spot taint and label to a spot pool - the taint is stated here too, or
-# every plan would try to take it off again; the spot toleration mutation tolerates both. The cluster
-# autoscaler's priority expander (the Flux repository's ConfigMap) tries the spot pools first.
+# The zones' classic node pools (zone_node_pools): per zone and generation one per capacity type and
+# architecture, from zero nodes, in the zone's node subnet with the pods in its pod subnet - labelled and
+# tainted `platform/zone` and `platform/capacity=spot`, which the platform's placement mutations target, and
+# labelled `platform/node-generation`. AKS adds its own spot taint and label to a spot pool - the taint is
+# stated here too, or every plan would try to take it off again; the spot toleration mutation tolerates
+# both. The cluster autoscaler's priority expander (the Flux repository's ConfigMap) tries the spot pools
+# first.
+#
+# A pool is named `<country><generation><kind>` - `se1`, `se1spot`, `se1arm`, `se1armspot` for the zone
+# int-se in generation 1: AKS allows 12 characters, and the exposure is the cluster's own (D52). Two
+# generations side by side are the blue/green upgrade of a zone's nodes (design section 3.6): the new one
+# is added at its own Kubernetes version and settings, the old one is marked retiring - tainted
+# `platform/retiring=true:NoSchedule`, so no new pod lands on it, the pods it runs stay, and the
+# autoscaler removes its nodes as they empty - and is taken out of Git once it is empty, which deletes
+# its pools (AKS drains what is left, PodDisruptionBudgets respected). Placement never names a pool: the
+# applications' pods select `platform/zone`, which every generation carries.
 locals {
   zone_node_pool_kinds = {
     ""        = { arch = "amd64", spot = false }
@@ -73,45 +84,60 @@ locals {
     "armspot" = { arch = "arm64", spot = true }
   }
 
-  zone_agent_pools = var.zone_node_pools == null ? {} : merge([
-    for zone, settings in var.isolation_zones : {
-      for suffix, kind in local.zone_node_pool_kinds : "${replace(zone, "-", "")}${suffix}" => {
-        name                      = "${replace(zone, "-", "")}${suffix}"
-        mode                      = "User"
-        availability_zones        = var.default_node_pool.availability_zones
-        count_of                  = 0
-        enable_auto_scaling       = true
-        min_count                 = 0
-        max_count                 = kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
-        max_pods                  = var.zone_node_pools.max_pods
-        vm_size                   = kind.arch == "arm64" ? var.zone_node_pools.arm64_vm_size : var.zone_node_pools.amd64_vm_size
-        os_sku                    = var.default_node_pool.os_sku
-        os_disk_type              = var.zone_node_pools.os_disk_type
-        os_disk_size_gb           = var.zone_node_pools.os_disk_size_gb
-        enable_encryption_at_host = var.default_node_pool.encryption_at_host
-        security_profile = var.default_node_pool.ssh_access == null ? null : {
-          ssh_access = var.default_node_pool.ssh_access
-        }
-        local_dns_profile = local.local_dns_profile
-        vnet_subnet_id    = data.azurerm_subnet.zone[zone].id
-        pod_subnet_id     = data.azurerm_subnet.zone_pods[zone].id
-        node_labels = merge(
-          { "platform/zone" = zone },
-          kind.spot ? { "platform/capacity" = "spot" } : {},
-        )
-        node_taints = concat(
-          ["platform/zone=${zone}:NoSchedule"],
-          kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
-        )
-        scale_set_priority        = kind.spot ? "Spot" : null
-        scale_set_eviction_policy = kind.spot ? "Delete" : null
-        spot_max_price            = kind.spot ? -1 : null
-        upgrade_settings = kind.spot ? null : {
-          max_surge = var.default_node_pool.max_surge
+  # The zone's part of a pool name: its country, the last segment of `<exposure>-<country>`.
+  zone_node_pool_prefixes = { for zone in keys(var.isolation_zones) : zone => element(split("-", zone), length(split("-", zone)) - 1) }
+
+  # Every zone's generations: those that name it, or name no zone.
+  zone_node_pool_generations = var.zone_node_pools == null ? {} : {
+    for zone in keys(var.isolation_zones) : zone => {
+      for generation, settings in var.zone_node_pools.generations : generation => settings
+      if settings.zones == null || contains(coalesce(settings.zones, []), zone)
+    }
+  }
+
+  zone_agent_pools = var.zone_node_pools == null ? {} : merge(flatten([
+    for zone, generations in local.zone_node_pool_generations : [
+      for generation, settings in generations : {
+        for suffix, kind in local.zone_node_pool_kinds : "${local.zone_node_pool_prefixes[zone]}${generation}${suffix}" => {
+          name                      = "${local.zone_node_pool_prefixes[zone]}${generation}${suffix}"
+          mode                      = "User"
+          availability_zones        = var.default_node_pool.availability_zones
+          count_of                  = 0
+          enable_auto_scaling       = true
+          min_count                 = 0
+          max_count                 = kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
+          max_pods                  = coalesce(settings.max_pods, var.zone_node_pools.max_pods)
+          vm_size                   = kind.arch == "arm64" ? coalesce(settings.arm64_vm_size, var.zone_node_pools.arm64_vm_size) : coalesce(settings.amd64_vm_size, var.zone_node_pools.amd64_vm_size)
+          orchestrator_version      = settings.kubernetes_version
+          os_sku                    = var.default_node_pool.os_sku
+          os_disk_type              = coalesce(settings.os_disk_type, var.zone_node_pools.os_disk_type)
+          os_disk_size_gb           = coalesce(settings.os_disk_size_gb, var.zone_node_pools.os_disk_size_gb)
+          enable_encryption_at_host = var.default_node_pool.encryption_at_host
+          security_profile = var.default_node_pool.ssh_access == null ? null : {
+            ssh_access = var.default_node_pool.ssh_access
+          }
+          local_dns_profile = local.local_dns_profile
+          vnet_subnet_id    = data.azurerm_subnet.zone[zone].id
+          pod_subnet_id     = data.azurerm_subnet.zone_pods[zone].id
+          node_labels = merge(
+            { "platform/zone" = zone, "platform/node-generation" = generation },
+            kind.spot ? { "platform/capacity" = "spot" } : {},
+          )
+          node_taints = concat(
+            ["platform/zone=${zone}:NoSchedule"],
+            kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
+            contains(settings.retiring_zones, zone) ? ["platform/retiring=true:NoSchedule"] : [],
+          )
+          scale_set_priority        = kind.spot ? "Spot" : null
+          scale_set_eviction_policy = kind.spot ? "Delete" : null
+          spot_max_price            = kind.spot ? -1 : null
+          upgrade_settings = kind.spot ? null : {
+            max_surge = var.default_node_pool.max_surge
+          }
         }
       }
-    }
-  ]...)
+    ]
+  ])...)
 
   # The cluster autoscaler of the zones' pools: the priority expander (spot first), and a node removed
   # five minutes after it is no longer needed.
@@ -119,6 +145,15 @@ locals {
     expander                   = "priority"
     scale_down_unneeded_time   = "5m"
     scale_down_delay_after_add = "5m"
+  }
+}
+
+check "every_zone_has_a_generation_that_takes_pods" {
+  assert {
+    condition = alltrue([
+      for zone, generations in local.zone_node_pool_generations : anytrue([for settings in values(generations) : !contains(settings.retiring_zones, zone)])
+    ])
+    error_message = "${var.name}: a zone in zone_node_pools has no generation that is not retiring, so its new pods find no node. Add the next generation before the last one retires."
   }
 }
 
