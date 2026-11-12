@@ -106,7 +106,7 @@ module "aks" {
   # The Azure Verified Module. Image Integrity and KMS data encryption, which it has no inputs for, are
   # set beside it - see image_integrity.tf and kms.tf.
   source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
-  version = "0.8.5"
+  version = "0.9.0"
 
   location  = var.location
   name      = var.name
