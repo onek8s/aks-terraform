@@ -56,6 +56,31 @@ jobs:
         working-directory: shared
         run: terraform test
 
+  plan-risk:
+    name: Plan risk rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The rules Deploy runs on every plan (plan-risk/risk.rego), against their tests.
+      - name: Install conftest
+        env:
+          CONFTEST_VERSION: "0.62.0" # keep in step with deploy.yml
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" |
+            tar -xz -C "$RUNNER_TEMP" conftest
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: |
+          cp -r plan-risk "$RUNNER_TEMP/plan-risk-fmt"
+          conftest fmt "$RUNNER_TEMP/plan-risk-fmt"
+          diff -r plan-risk "$RUNNER_TEMP/plan-risk-fmt"
+
+      - name: Test
+        run: conftest verify --policy plan-risk --no-color
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

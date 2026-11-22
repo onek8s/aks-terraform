@@ -37,6 +37,7 @@ creates - its resource group, its own network, the vaults, the registry - with a
 | `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
+| `plan-risk/` | The high-risk change rules Deploy checks every plan against (Rego, [Conftest](https://www.conftest.dev/)), with their tests. See [Usage](#usage). |
 | `backend.hcl.example` | Template for the shared remote state backend. |
 | `.tflint.hcl`, `.github/` | Lint configuration, the CI workflow that runs the offline checks, the manual deploy workflow for the dev environment's stacks, and the Dependabot schedule that watches the pinned module and provider versions. |
 
@@ -121,6 +122,16 @@ storage account of the variables `TF_STATE_RESOURCE_GROUP` and `TF_STATE_STORAGE
 `sub-aks-dev` itself (created on the first run), so a lab reset takes it with the resources. It refuses to plan against an empty state unless told it is a first
 deployment.
 
+Before an apply, Deploy checks the plan against the rules in [`plan-risk/`](plan-risk/risk.rego): changes
+the plan shows as ordinary in-place updates but that AKS or the network turns into a node rollover or an
+outage - a node pool property that reimages or replaces its nodes (LocalDNS, OS SKU, kubelet and OS
+config, encryption at host, Kubernetes version, VM size), a deleted node pool or cluster, a cluster's
+network or API server access, a route table's routes, a subnet's private endpoint policy, a deleted
+network or Key Vault key. Each finding is a warning in the run and its summary, with the resource and
+property only (the plan JSON stays on the runner). A `plan` only reports them; an `apply` stops on
+them unless `accept_risk` is set - take the cell out of traffic first. A new lesson of that kind is a
+new rule with its test in `plan-risk/risk_test.rego` (`conftest verify --policy plan-risk`, run by CI).
+
 The configuration can be checked without an Azure subscription at all, which is exactly what CI
 runs on every pull request:
 
@@ -129,6 +140,7 @@ terraform fmt -check -recursive
 terraform validate
 terraform test
 tflint --init && tflint
+conftest verify --policy plan-risk
 ```
 
 ## Cluster access

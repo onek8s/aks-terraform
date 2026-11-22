@@ -63,6 +63,11 @@ on:
         required: false
         default: false
         type: boolean
+      accept_risk:
+        description: "Apply even when the plan has high-risk changes (plan-risk/): the cell is out of traffic"
+        required: false
+        default: false
+        type: boolean
   # The same, from another workflow - one that applies dev-shared and then the clusters.
   workflow_call:
     inputs:
@@ -73,6 +78,10 @@ on:
         required: true
         type: string
       allow_empty_state:
+        required: false
+        default: false
+        type: boolean
+      accept_risk:
         required: false
         default: false
         type: boolean
@@ -290,6 +299,39 @@ jobs:
             *) exit "$code" ;;
           esac
 
+      # High-risk changes (plan-risk/risk.rego, the guardrail of design section 6.1): changes the plan
+      # shows as harmless in-place updates that AKS or the network turns into a node rollover or an
+      # outage - LocalDNS on a pool reimaged every node (#229), a subnet's private endpoint policy took
+      # the system node down (#216). Each is a warning in the run and its summary; an apply stops on them
+      # unless accept_risk is set. The plan JSON holds secrets in clear: it never leaves the runner, and
+      # only the rules' messages (addresses and property names) are printed. Not for destroy, which is
+      # all deletes by intent.
+      - name: Check the plan for high-risk changes
+        id: risk
+        if: steps.plan.outputs.changes == 'true' && inputs.action != 'destroy'
+        env:
+          CONFTEST_VERSION: "0.62.0"
+          ACTION: ${{ inputs.action }}
+          ACCEPT_RISK: ${{ inputs.accept_risk }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" |
+            tar -xz -C "$RUNNER_TEMP" conftest
+          terraform show -json tfplan > "$RUNNER_TEMP/plan.json"
+          trap 'rm -f "$RUNNER_TEMP/plan.json"' EXIT
+          "$RUNNER_TEMP/conftest" test "$RUNNER_TEMP/plan.json" --policy "$GITHUB_WORKSPACE/plan-risk" \
+            --output json --no-color > "$RUNNER_TEMP/risk.json"
+          jq -r '.[].warnings[]?.msg' "$RUNNER_TEMP/risk.json" > risk.txt
+          count=$(wc -l < risk.txt)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          while read -r msg; do echo "::warning title=High-risk change::$msg"; done < risk.txt
+          if [ "$count" -eq 0 ]; then echo "No high-risk changes."; exit 0; fi
+          if [ "$ACTION" = apply ] && [ "$ACCEPT_RISK" != true ]; then
+            echo "::error::The plan has $count high-risk change(s), listed above. Take the cell out of traffic, then run the apply again with accept_risk." >&2
+            exit 1
+          fi
+
       - name: Apply
         if: (inputs.action == 'apply' || inputs.action == 'destroy') && steps.plan.outputs.changes == 'true'
         run: terraform apply -no-color tfplan
@@ -357,6 +399,12 @@ jobs:
             echo
             if [ -f plan.txt ]; then
               grep -E '^(Plan:|No changes\.|Changes to Outputs:)' plan.txt || true
+            fi
+            if [ -s risk.txt ]; then
+              echo
+              echo "High-risk changes (plan-risk/):"
+              echo
+              sed 's/^/- /' risk.txt
             fi
             if [ "$ACTION" = "apply" ] && [ "$CHANGES" = "true" ]; then
               echo
