@@ -1346,7 +1346,7 @@ run "a_tenant_goes_to_every_cell_of_its_zone" {
     error_message = "Each tenant should be in every cell of its zone, or in the cells it names."
   }
   assert {
-    condition     = output.tenants["team-payments"].cells == ["aks-test", "aks-test-2"]
+    condition     = output.tenants["team-payments"].cells == tolist(["aks-test", "aks-test-2"])
     error_message = "The output should say which cells each tenant is in."
   }
 }
