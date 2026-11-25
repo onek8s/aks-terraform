@@ -2239,6 +2239,90 @@ run "a_zone_moves_to_a_new_node_pool_generation_blue_green" {
   }
 }
 
+run "a_namespace_moves_to_node_pools_of_its_own" {
+  command = plan
+
+  variables {
+    default_node_pool = {
+      availability_zones = ["3"]
+    }
+    isolation_zones = {
+      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    zone_node_pools = {
+      generations = {
+        "2" = {}
+      }
+    }
+    managed_namespaces = {
+      int-se-example = {
+        node_pool = { name = "ex", kinds = ["", "spot"] }
+      }
+      int-fi-example = {}
+      team-search    = {}
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  assert {
+    condition = sort(keys(local.zone_agent_pools)) == tolist([
+      "fi2", "fi2arm", "fi2armspot", "fi2spot",
+      "se2", "se2arm", "se2armspot", "se2ex", "se2exspot", "se2spot",
+    ])
+    error_message = "The namespace gets pools of its own beside its zone's shared ones, of the kinds it names."
+  }
+  assert {
+    condition = (
+      local.zone_agent_pools["se2exspot"].node_labels == tomap({ "platform/zone" = "int-se", "platform/node-generation" = "2", "platform/capacity" = "spot", "platform/pool" = "int-se-example" }) &&
+      local.zone_agent_pools["se2exspot"].node_taints == tolist(["platform/zone=int-se:NoSchedule", "platform/pool=int-se-example:NoSchedule", "platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"]) &&
+      local.zone_agent_pools["se2ex"].pod_subnet_id == local.zone_agent_pools["se2"].pod_subnet_id &&
+      local.zone_agent_pools["se2"].node_taints == tolist(["platform/zone=int-se:NoSchedule"])
+    )
+    error_message = "The namespace's pools carry the zone's labels and taints and platform/pool, in the zone's subnets; the shared pools do not."
+  }
+  assert {
+    condition = (
+      azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/node-selector"] == "platform/pool=int-se-example" &&
+      jsondecode(azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/defaultTolerations"]) == [{ key = "platform/pool", operator = "Equal", value = "int-se-example", effect = "NoSchedule" }] &&
+      contains(jsondecode(azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]), { key = "platform/pool", operator = "Equal", value = "int-se-example", effect = "NoSchedule" })
+    )
+    error_message = "The moved namespace selects and tolerates its pool through its annotations, and its whitelist allows that toleration."
+  }
+  assert {
+    condition = (
+      !contains(keys(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations), "scheduler.alpha.kubernetes.io/node-selector") &&
+      contains(jsondecode(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]), { key = "platform/zone", operator = "Equal", value = "int-fi", effect = "NoSchedule" }) &&
+      !anytrue([for t in jsondecode(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]) : t.key == "platform/pool"]) &&
+      !can(azapi_resource.managed_namespace["team-search"].body.properties.annotations)
+    )
+    error_message = "Another zone namespace stays on the shared pools and may tolerate its zone but no namespace's pool; a namespace outside the zones gets no placement annotations."
+  }
+}
+
+run "a_namespace_pool_needs_a_zone_namespace" {
+  command = plan
+
+  variables {
+    isolation_zones = {
+      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
+    }
+    zone_node_pools = {}
+    managed_namespaces = {
+      team-search = {
+        node_pool = { name = "ts" }
+      }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
+  }
+
+  expect_failures = [var.managed_namespaces]
+}
+
 run "a_generation_key_is_one_character" {
   command = plan
 

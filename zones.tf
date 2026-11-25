@@ -76,6 +76,10 @@ data "azurerm_subnet" "zone_pods" {
 # autoscaler removes its nodes as they empty - and is taken out of Git once it is empty, which deletes
 # its pools (AKS drains what is left, PodDisruptionBudgets respected). Placement never names a pool: the
 # applications' pods select `platform/zone`, which every generation carries.
+#
+# An application namespace can be moved to pools of its own (managed_namespaces[*].node_pool): the same
+# per generation, `<country><generation><name><kind>`, labelled and tainted `platform/pool=<namespace>`
+# as well; the namespace's annotations, not the application, select and tolerate them.
 locals {
   zone_node_pool_kinds = {
     ""        = { arch = "amd64", spot = false }
@@ -95,49 +99,118 @@ locals {
     }
   }
 
-  zone_agent_pools = var.zone_node_pools == null ? {} : merge(flatten([
-    for zone, generations in local.zone_node_pool_generations : [
-      for generation, settings in generations : {
-        for suffix, kind in local.zone_node_pool_kinds : "${local.zone_node_pool_prefixes[zone]}${generation}${suffix}" => {
-          name                      = "${local.zone_node_pool_prefixes[zone]}${generation}${suffix}"
-          mode                      = "User"
-          availability_zones        = var.default_node_pool.availability_zones
-          count_of                  = 0
-          enable_auto_scaling       = true
-          min_count                 = 0
-          max_count                 = kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
-          max_pods                  = coalesce(settings.max_pods, var.zone_node_pools.max_pods)
-          vm_size                   = kind.arch == "arm64" ? coalesce(settings.arm64_vm_size, var.zone_node_pools.arm64_vm_size) : coalesce(settings.amd64_vm_size, var.zone_node_pools.amd64_vm_size)
-          orchestrator_version      = settings.kubernetes_version
-          os_sku                    = var.default_node_pool.os_sku
-          os_disk_type              = coalesce(settings.os_disk_type, var.zone_node_pools.os_disk_type)
-          os_disk_size_gb           = coalesce(settings.os_disk_size_gb, var.zone_node_pools.os_disk_size_gb)
-          enable_encryption_at_host = var.default_node_pool.encryption_at_host
-          security_profile = var.default_node_pool.ssh_access == null ? null : {
-            ssh_access = var.default_node_pool.ssh_access
-          }
-          local_dns_profile = local.local_dns_profile
-          vnet_subnet_id    = data.azurerm_subnet.zone[zone].id
-          pod_subnet_id     = data.azurerm_subnet.zone_pods[zone].id
-          node_labels = merge(
-            { "platform/zone" = zone, "platform/node-generation" = generation },
-            kind.spot ? { "platform/capacity" = "spot" } : {},
-          )
-          node_taints = concat(
-            ["platform/zone=${zone}:NoSchedule"],
-            kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
-            contains(settings.retiring_zones, zone) ? ["platform/retiring=true:NoSchedule"] : [],
-          )
-          scale_set_priority        = kind.spot ? "Spot" : null
-          scale_set_eviction_policy = kind.spot ? "Delete" : null
-          spot_max_price            = kind.spot ? -1 : null
-          upgrade_settings = kind.spot ? null : {
-            max_surge = var.default_node_pool.max_surge
-          }
+  # An application namespace moved to pools of its own (managed_namespaces[*].node_pool, design
+  # section 2.3): its zone, the infix of its pools' names and their kinds.
+  namespace_node_pools = {
+    for name, namespace in var.managed_namespaces : name => {
+      zone  = one([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")])
+      infix = namespace.node_pool.name
+      kinds = namespace.node_pool.kinds
+    } if namespace.node_pool != null
+  }
+
+  # The sets of pools of each generation: every zone's shared ones (all four kinds, no namespace), then
+  # those of each namespace with a pool of its own, which carry `platform/pool=<namespace>` too.
+  zone_node_pool_sets = concat(
+    [for zone in keys(var.isolation_zones) : { zone = zone, infix = "", namespace = null, kinds = keys(local.zone_node_pool_kinds) }],
+    [for namespace, pool in local.namespace_node_pools : { zone = pool.zone, infix = pool.infix, namespace = namespace, kinds = pool.kinds }],
+  )
+
+  zone_agent_pool_list = var.zone_node_pools == null ? [] : flatten([
+    for set in local.zone_node_pool_sets : [
+      for generation, settings in local.zone_node_pool_generations[set.zone] : [
+        for suffix in set.kinds : {
+          zone       = set.zone
+          namespace  = set.namespace
+          generation = generation
+          settings   = settings
+          kind       = local.zone_node_pool_kinds[suffix]
+          name       = "${local.zone_node_pool_prefixes[set.zone]}${generation}${set.infix}${suffix}"
         }
-      }
+      ]
     ]
-  ])...)
+  ])
+
+  zone_agent_pools = {
+    for pool in local.zone_agent_pool_list : pool.name => {
+      name                      = pool.name
+      mode                      = "User"
+      availability_zones        = var.default_node_pool.availability_zones
+      count_of                  = 0
+      enable_auto_scaling       = true
+      min_count                 = 0
+      max_count                 = pool.kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
+      max_pods                  = coalesce(pool.settings.max_pods, var.zone_node_pools.max_pods)
+      vm_size                   = pool.kind.arch == "arm64" ? coalesce(pool.settings.arm64_vm_size, var.zone_node_pools.arm64_vm_size) : coalesce(pool.settings.amd64_vm_size, var.zone_node_pools.amd64_vm_size)
+      orchestrator_version      = pool.settings.kubernetes_version
+      os_sku                    = var.default_node_pool.os_sku
+      os_disk_type              = coalesce(pool.settings.os_disk_type, var.zone_node_pools.os_disk_type)
+      os_disk_size_gb           = coalesce(pool.settings.os_disk_size_gb, var.zone_node_pools.os_disk_size_gb)
+      enable_encryption_at_host = var.default_node_pool.encryption_at_host
+      security_profile = var.default_node_pool.ssh_access == null ? null : {
+        ssh_access = var.default_node_pool.ssh_access
+      }
+      local_dns_profile = local.local_dns_profile
+      vnet_subnet_id    = data.azurerm_subnet.zone[pool.zone].id
+      pod_subnet_id     = data.azurerm_subnet.zone_pods[pool.zone].id
+      node_labels = merge(
+        { "platform/zone" = pool.zone, "platform/node-generation" = pool.generation },
+        pool.kind.spot ? { "platform/capacity" = "spot" } : {},
+        pool.namespace == null ? {} : { "platform/pool" = pool.namespace },
+      )
+      node_taints = concat(
+        ["platform/zone=${pool.zone}:NoSchedule"],
+        pool.namespace == null ? [] : ["platform/pool=${pool.namespace}:NoSchedule"],
+        pool.kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
+        contains(pool.settings.retiring_zones, pool.zone) ? ["platform/retiring=true:NoSchedule"] : [],
+      )
+      scale_set_priority        = pool.kind.spot ? "Spot" : null
+      scale_set_eviction_policy = pool.kind.spot ? "Delete" : null
+      spot_max_price            = pool.kind.spot ? -1 : null
+      upgrade_settings = pool.kind.spot ? null : {
+        max_surge = var.default_node_pool.max_surge
+      }
+    }
+  }
+
+  # A namespace with pools of its own: Kubernetes' PodNodeSelector and PodTolerationRestriction
+  # admission plugins (on in AKS) give every pod created in it `platform/pool=<namespace>` - its node
+  # selector and toleration - so the application states nothing. Every application namespace of a zone
+  # gets a tolerations whitelist: its zone's taint, spot (platform/capacity and AKS's own), GPU, the node
+  # conditions Kubernetes tolerates by default and its own pool, if any. A pod tolerating another
+  # namespace's pool is refused, so a dedicated pool runs that namespace's pods only.
+  namespace_pool_tolerations = {
+    for name in keys(var.managed_namespaces) : name => [
+      { key = "platform/pool", operator = "Equal", value = name, effect = "NoSchedule" }
+    ]
+  }
+  namespace_zone = {
+    for name in keys(var.managed_namespaces) : name => one(concat([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")], [null]))
+    if length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) <= 1
+  }
+  managed_namespace_placement_annotations = {
+    for name in keys(var.managed_namespaces) : name => (
+      var.zone_node_pools == null || try(local.namespace_zone[name], null) == null ? tomap({}) : tomap(merge(
+        {
+          "scheduler.alpha.kubernetes.io/tolerationsWhitelist" = jsonencode(concat(
+            [
+              { key = "platform/zone", operator = "Equal", value = local.namespace_zone[name], effect = "NoSchedule" },
+              { key = "platform/capacity", operator = "Equal", value = "spot", effect = "NoSchedule" },
+              { key = "kubernetes.azure.com/scalesetpriority", operator = "Equal", value = "spot", effect = "NoSchedule" },
+              { key = "platform/accelerator", operator = "Equal", value = "nvidia-gpu", effect = "NoSchedule" },
+              { key = "nvidia.com/gpu", operator = "Exists" },
+            ],
+            [for key in ["not-ready", "unreachable", "memory-pressure", "disk-pressure", "pid-pressure", "network-unavailable", "unschedulable"] : { key = "node.kubernetes.io/${key}", operator = "Exists" }],
+            contains(keys(local.namespace_node_pools), name) ? local.namespace_pool_tolerations[name] : [],
+          ))
+        },
+        contains(keys(local.namespace_node_pools), name) ? {
+          "scheduler.alpha.kubernetes.io/node-selector"      = "platform/pool=${name}"
+          "scheduler.alpha.kubernetes.io/defaultTolerations" = jsonencode(local.namespace_pool_tolerations[name])
+        } : {},
+      ))
+    )
+  }
 
   # The cluster autoscaler of the zones' pools: the priority expander (spot first), and a node removed
   # five minutes after it is no longer needed.
@@ -154,6 +227,13 @@ check "every_zone_has_a_generation_that_takes_pods" {
       for zone, generations in local.zone_node_pool_generations : anytrue([for settings in values(generations) : !contains(settings.retiring_zones, zone)])
     ])
     error_message = "${var.name}: a zone in zone_node_pools has no generation that is not retiring, so its new pods find no node. Add the next generation before the last one retires."
+  }
+}
+
+check "zone_node_pool_names_fit" {
+  assert {
+    condition     = alltrue([for pool in local.zone_agent_pool_list : length(pool.name) <= 12])
+    error_message = "${var.name}: a zone node pool name is longer than the 12 characters AKS allows: ${join(", ", [for pool in local.zone_agent_pool_list : pool.name if length(pool.name) > 12])}. Shorten managed_namespaces[*].node_pool.name or leave out the longer kinds."
   }
 }
 
