@@ -153,17 +153,17 @@ locals {
       local_dns_profile = local.local_dns_profile
       vnet_subnet_id    = data.azurerm_subnet.zone[pool.zone].id
       pod_subnet_id     = data.azurerm_subnet.zone_pods[pool.zone].id
-      node_labels = merge(
+      node_labels = tomap(merge(
         { "platform/zone" = pool.zone, "platform/node-generation" = pool.generation },
         pool.kind.spot ? { "platform/capacity" = "spot" } : {},
         pool.namespace == null ? {} : { "platform/pool" = pool.namespace },
-      )
-      node_taints = concat(
+      ))
+      node_taints = tolist(concat(
         ["platform/zone=${pool.zone}:NoSchedule"],
         pool.namespace == null ? [] : ["platform/pool=${pool.namespace}:NoSchedule"],
         pool.kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
         contains(pool.settings.retiring_zones, pool.zone) ? ["platform/retiring=true:NoSchedule"] : [],
-      )
+      ))
       scale_set_priority        = pool.kind.spot ? "Spot" : null
       scale_set_eviction_policy = pool.kind.spot ? "Delete" : null
       spot_max_price            = pool.kind.spot ? -1 : null
@@ -185,8 +185,8 @@ locals {
     ]
   }
   namespace_zone = {
-    for name in keys(var.managed_namespaces) : name => one(concat([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")], [null]))
-    if length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) <= 1
+    for name in keys(var.managed_namespaces) : name => [for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")][0]
+    if length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
   }
   managed_namespace_placement_annotations = {
     for name in keys(var.managed_namespaces) : name => (
