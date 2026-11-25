@@ -106,7 +106,7 @@ locals {
       zone  = one([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")])
       infix = namespace.node_pool.name
       kinds = namespace.node_pool.kinds
-    } if namespace.node_pool != null
+    } if namespace.node_pool != null && var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
   }
 
   # The sets of pools of each generation: every zone's shared ones (all four kinds, no namespace), then
@@ -231,6 +231,17 @@ check "every_zone_has_a_generation_that_takes_pods" {
       for zone, generations in local.zone_node_pool_generations : anytrue([for settings in values(generations) : !contains(settings.retiring_zones, zone)])
     ])
     error_message = "${var.name}: a zone in zone_node_pools has no generation that is not retiring, so its new pods find no node. Add the next generation before the last one retires."
+  }
+}
+
+check "namespace_node_pools_are_in_a_zone" {
+  assert {
+    condition = alltrue([
+      for name, namespace in var.managed_namespaces : namespace.node_pool == null || (
+        var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
+      )
+    ])
+    error_message = "${var.name}: managed_namespaces[*].node_pool is for an application namespace of one isolation zone (`<zone>-<app>`) in a cluster with zone_node_pools."
   }
 }
 

@@ -2320,7 +2320,7 @@ run "a_namespace_pool_needs_a_zone_namespace" {
     }
   }
 
-  expect_failures = [var.managed_namespaces]
+  expect_failures = [check.namespace_node_pools_are_in_a_zone]
 }
 
 run "a_generation_key_is_one_character" {

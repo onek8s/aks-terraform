@@ -764,16 +764,14 @@ DESCRIPTION
   }
   validation {
     condition = alltrue([
-      for name, namespace in var.managed_namespaces : namespace.node_pool == null || (
+      for namespace in values(var.managed_namespaces) : namespace.node_pool == null || (
         can(regex("^[a-z][a-z0-9]{0,4}$", namespace.node_pool.name))
         && !contains(["arm", "armspot", "spot"], namespace.node_pool.name)
         && length(namespace.node_pool.kinds) >= 1
         && alltrue([for kind in namespace.node_pool.kinds : contains(["", "spot", "arm", "armspot"], kind)])
-        && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
-        && var.zone_node_pools != null
       )
     ])
-    error_message = "managed_namespaces[*].node_pool is for an application namespace of one isolation zone (`<zone>-<app>`) in a cluster with zone_node_pools; its name is 1 to 5 lowercase letters or digits starting with a letter, not arm, spot or armspot (part of the pool names), and its kinds are some of \"\", \"spot\", \"arm\", \"armspot\"."
+    error_message = "managed_namespaces[*].node_pool.name is 1 to 5 lowercase letters or digits starting with a letter, not arm, spot or armspot (part of the pool names), and its kinds are some of \"\", \"spot\", \"arm\", \"armspot\"."
   }
   # The group's object ID is the Kubernetes group name AKS gives its members - not its display name.
   validation {
