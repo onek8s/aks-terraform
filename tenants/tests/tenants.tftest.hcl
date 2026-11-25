@@ -141,8 +141,9 @@ run "a_namespace_nobody_gave_labels_to_is_sent_none" {
     error_message = "No labels were asked for, so only the zone's and the pod security ones should be sent."
   }
   assert {
-    condition     = !can(azapi_resource.namespace["aks-test/team-payments"].body.properties.annotations)
-    error_message = "No annotations were asked for, so none should be sent."
+    # The zone's tolerations whitelist (placement) is the platform's, always there with zone pools.
+    condition     = length([for key in keys(try(azapi_resource.namespace["aks-test/team-payments"].body.properties.annotations, {})) : key if !startswith(key, "scheduler.alpha.kubernetes.io/")]) == 0
+    error_message = "No annotations were asked for, so none but the placement ones should be sent."
   }
 }
 
@@ -381,7 +382,7 @@ run "namespace_labels_and_annotations_merge_with_the_defaults" {
     error_message = "A namespace should add to the default labels and win on the keys it repeats."
   }
   assert {
-    condition = { for key, value in azapi_resource.namespace["aks-test/team-search"].body.properties.annotations : key => value if !startswith(key, "scheduler.alpha.kubernetes.io/") } == tomap({
+    condition = tomap({ for key, value in azapi_resource.namespace["aks-test/team-search"].body.properties.annotations : key => value if !startswith(key, "scheduler.alpha.kubernetes.io/") }) == tomap({
       "estate" = "prototype"
       "owner"  = "search"
     })
@@ -441,6 +442,8 @@ run "rejects_a_namespace_name_kubernetes_reserves" {
   command = plan
 
   variables {
+    # A cell holds the zone, so only the name is wrong.
+    cells = { aks-test = { zones = ["kube"] } }
     tenants = {
       kube-payments = { zone = "kube" }
     }
@@ -453,6 +456,8 @@ run "rejects_a_system_namespace_aks_will_not_hand_over" {
   command = plan
 
   variables {
+    # A cell holds the zone, so only the name is wrong.
+    cells = { aks-test = { zones = ["gatekeeper"] } }
     tenants = {
       gatekeeper-system = { zone = "gatekeeper" }
     }
@@ -465,6 +470,8 @@ run "rejects_a_namespace_name_kubernetes_would_refuse" {
   command = plan
 
   variables {
+    # A cell holds the zone, so only the name is wrong.
+    cells = { aks-test = { zones = ["Team"] } }
     tenants = {
       Team_Payments = { zone = "Team" }
     }
@@ -639,7 +646,7 @@ run "a_tenant_syncs_its_own_repository_into_its_own_namespace" {
     error_message = "The Kustomization should apply the configured path."
   }
   assert {
-    condition     = azapi_resource.team_flux_configuration["aks-test/team-payments"].body.properties.kustomizations.apps.postBuild.substitute == { zone = "team", cluster_name = "aks-test" }
+    condition     = jsonencode(azapi_resource.team_flux_configuration["aks-test/team-payments"].body.properties.kustomizations.apps.postBuild.substitute) == jsonencode({ zone = "team", cluster_name = "aks-test" })
     error_message = "The team's manifests should get its zone and the cell's name, and nothing else, as post-build variables."
   }
   assert {
@@ -744,6 +751,8 @@ run "rejects_a_tenant_named_after_the_platform_configuration" {
   command = plan
 
   variables {
+    # A cell holds the zone, so only the name is wrong.
+    cells = { aks-test = { zones = ["platform"] } }
     tenants = {
       platform = {
         zone = "platform"
@@ -1115,7 +1124,7 @@ run "a_namespace_names_its_owner_in_labels_and_annotations" {
     error_message = "The owner's team and cost centre should be the namespace's platform/team and platform/cost-center labels."
   }
   assert {
-    condition = { for key, value in azapi_resource.namespace["aks-test/ext-fi-payments"].body.properties.annotations : key => value if !startswith(key, "scheduler.alpha.kubernetes.io/") } == tomap({
+    condition = tomap({ for key, value in azapi_resource.namespace["aks-test/ext-fi-payments"].body.properties.annotations : key => value if !startswith(key, "scheduler.alpha.kubernetes.io/") }) == tomap({
       "platform/contact"    = "payments-team@example.com"
       "platform/repository" = "https://github.com/contoso/payments"
     })
