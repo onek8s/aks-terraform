@@ -160,11 +160,11 @@ locals {
       node_labels = tomap(merge(
         { "platform/zone" = pools[0].zone, "platform/node-generation" = pools[0].generation },
         pools[0].kind.spot ? { "platform/capacity" = "spot" } : {},
-        namespace == null ? {} : { "platform/pool" = namespace },
+        pools[0].namespace == null ? {} : { "platform/pool" = pools[0].namespace },
       ))
       node_taints = tolist(concat(
         ["platform/zone=${pools[0].zone}:NoSchedule"],
-        namespace == null ? [] : ["platform/pool=${namespace}:NoSchedule"],
+        pools[0].namespace == null ? [] : ["platform/pool=${pools[0].namespace}:NoSchedule"],
         pools[0].kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
         contains(pools[0].settings.retiring_zones, pools[0].zone) ? ["platform/retiring=true:NoSchedule"] : [],
       ))
