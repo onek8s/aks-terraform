@@ -52,7 +52,9 @@ locals {
   # Traefik for each Gateway, as sent to Azure: cluster scope in flux-system, like the platform's
   # configuration, with the Gateway's values filled into gateways/traefik. One configuration per
   # Gateway, because Azure refuses two Kustomizations of one configuration on the same path.
-  traefik_flux_configurations = var.gateway_implementation == "traefik" ? {
+  # A filter rather than a conditional: a zone's gateway reads its list from the tenants' ConfigMap,
+  # the platform's has it inline, so the values differ in shape (an object, not a map).
+  traefik_flux_configurations = {
     for name, gateway in local.gateways : name => {
       properties = {
         gitRepository = {
@@ -93,8 +95,8 @@ locals {
         scope      = "cluster"
         sourceKind = "GitRepository"
       }
-    }
-  } : {}
+    } if var.gateway_implementation == "traefik"
+  }
 }
 
 check "traefik_needs_flux" {
@@ -107,7 +109,7 @@ check "traefik_needs_flux" {
 # Named `traefik-<gateway>`; its Kustomization is `traefik-<gateway>-gateway` in flux-system. The
 # Gateway's namespace is the Flux repository's: until it exists, the Kustomization retries.
 resource "azapi_resource" "traefik_flux_configuration" {
-  for_each = local.flux_extension_enabled ? local.traefik_flux_configurations : {}
+  for_each = { for name, configuration in local.traefik_flux_configurations : name => configuration if local.flux_extension_enabled }
 
   name      = "traefik-${each.key}"
   parent_id = module.aks.resource_id
