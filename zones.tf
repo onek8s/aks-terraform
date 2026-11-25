@@ -131,43 +131,47 @@ locals {
     ]
   ])
 
+  # Keyed by pool name; two zones of one country would name the same pools, which zone_node_pools'
+  # validation refuses - the first is kept here so that the validation is what reports it.
+  zone_agent_pools_by_name = { for pool in local.zone_agent_pool_list : pool.name => pool... }
+
   zone_agent_pools = {
-    for pool in local.zone_agent_pool_list : pool.name => {
-      name                      = pool.name
+    for name, pools in local.zone_agent_pools_by_name : name => {
+      name                      = name
       mode                      = "User"
       availability_zones        = var.default_node_pool.availability_zones
       count_of                  = 0
       enable_auto_scaling       = true
       min_count                 = 0
-      max_count                 = pool.kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
-      max_pods                  = coalesce(pool.settings.max_pods, var.zone_node_pools.max_pods)
-      vm_size                   = pool.kind.arch == "arm64" ? coalesce(pool.settings.arm64_vm_size, var.zone_node_pools.arm64_vm_size) : coalesce(pool.settings.amd64_vm_size, var.zone_node_pools.amd64_vm_size)
-      orchestrator_version      = pool.settings.kubernetes_version
+      max_count                 = pools[0].kind.spot ? var.zone_node_pools.spot_max_count : var.zone_node_pools.max_count
+      max_pods                  = coalesce(pools[0].settings.max_pods, var.zone_node_pools.max_pods)
+      vm_size                   = pools[0].kind.arch == "arm64" ? coalesce(pools[0].settings.arm64_vm_size, var.zone_node_pools.arm64_vm_size) : coalesce(pools[0].settings.amd64_vm_size, var.zone_node_pools.amd64_vm_size)
+      orchestrator_version      = pools[0].settings.kubernetes_version
       os_sku                    = var.default_node_pool.os_sku
-      os_disk_type              = coalesce(pool.settings.os_disk_type, var.zone_node_pools.os_disk_type)
-      os_disk_size_gb           = coalesce(pool.settings.os_disk_size_gb, var.zone_node_pools.os_disk_size_gb)
+      os_disk_type              = coalesce(pools[0].settings.os_disk_type, var.zone_node_pools.os_disk_type)
+      os_disk_size_gb           = coalesce(pools[0].settings.os_disk_size_gb, var.zone_node_pools.os_disk_size_gb)
       enable_encryption_at_host = var.default_node_pool.encryption_at_host
       security_profile = var.default_node_pool.ssh_access == null ? null : {
         ssh_access = var.default_node_pool.ssh_access
       }
       local_dns_profile = local.local_dns_profile
-      vnet_subnet_id    = data.azurerm_subnet.zone[pool.zone].id
-      pod_subnet_id     = data.azurerm_subnet.zone_pods[pool.zone].id
+      vnet_subnet_id    = data.azurerm_subnet.zone[pools[0].zone].id
+      pod_subnet_id     = data.azurerm_subnet.zone_pods[pools[0].zone].id
       node_labels = tomap(merge(
-        { "platform/zone" = pool.zone, "platform/node-generation" = pool.generation },
-        pool.kind.spot ? { "platform/capacity" = "spot" } : {},
-        pool.namespace == null ? {} : { "platform/pool" = pool.namespace },
+        { "platform/zone" = pools[0].zone, "platform/node-generation" = pools[0].generation },
+        pools[0].kind.spot ? { "platform/capacity" = "spot" } : {},
+        namespace == null ? {} : { "platform/pool" = namespace },
       ))
       node_taints = tolist(concat(
-        ["platform/zone=${pool.zone}:NoSchedule"],
-        pool.namespace == null ? [] : ["platform/pool=${pool.namespace}:NoSchedule"],
-        pool.kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
-        contains(pool.settings.retiring_zones, pool.zone) ? ["platform/retiring=true:NoSchedule"] : [],
+        ["platform/zone=${pools[0].zone}:NoSchedule"],
+        namespace == null ? [] : ["platform/pool=${namespace}:NoSchedule"],
+        pools[0].kind.spot ? ["platform/capacity=spot:NoSchedule", "kubernetes.azure.com/scalesetpriority=spot:NoSchedule"] : [],
+        contains(pools[0].settings.retiring_zones, pools[0].zone) ? ["platform/retiring=true:NoSchedule"] : [],
       ))
-      scale_set_priority        = pool.kind.spot ? "Spot" : null
-      scale_set_eviction_policy = pool.kind.spot ? "Delete" : null
-      spot_max_price            = pool.kind.spot ? -1 : null
-      upgrade_settings = pool.kind.spot ? null : {
+      scale_set_priority        = pools[0].kind.spot ? "Spot" : null
+      scale_set_eviction_policy = pools[0].kind.spot ? "Delete" : null
+      spot_max_price            = pools[0].kind.spot ? -1 : null
+      upgrade_settings = pools[0].kind.spot ? null : {
         max_surge = var.default_node_pool.max_surge
       }
     }
