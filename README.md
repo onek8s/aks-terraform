@@ -739,6 +739,32 @@ the spot pools (`.*spot.*`) first. Node auto provisioning is not used: it does n
 (Azure/karpenter-provider-azure issue 1351). The cluster identity gets Network Contributor on the
 virtual network.
 
+### Namespace node pools
+
+Every application of a zone shares the zone's pools until an operator moves one to pools of its own -
+for its size, its noise or its licence - without a change to the application (design section 2.3).
+`managed_namespaces.<namespace>.node_pool` names the pools' infix (1 to 5 characters) and their kinds:
+
+```hcl
+managed_namespaces = {
+  int-se-example = {
+    node_pool = { name = "ex", kinds = ["", "spot"] } # se2ex, se2exspot
+  }
+}
+```
+
+Each generation of the namespace's zone gets `<country><generation><name><kind>` beside the shared pools,
+labelled and tainted `platform/pool=<namespace>` on top of the zone's labels and taints, in the zone's
+subnets. The namespace's annotations do the rest through two admission plugins Kubernetes builds in and
+AKS runs: `scheduler.alpha.kubernetes.io/node-selector: platform/pool=<namespace>` (PodNodeSelector)
+merges the node selector into every pod created in it, `scheduler.alpha.kubernetes.io/defaultTolerations`
+(PodTolerationRestriction) adds the toleration. Every application namespace of a zone also carries
+`scheduler.alpha.kubernetes.io/tolerationsWhitelist` - its zone, spot, GPU, the node conditions, and its own
+pool if it has one - so a pod of another namespace that tolerates the pool is refused, and a dedicated
+pool runs its namespace's pods only. The running pods move when they are next created (a rollout
+restart); the shared pools' node is removed by the autoscaler once it is empty. Moving back is removing
+`node_pool`: AKS drains and deletes the namespace's pools, and its pods land on the shared ones again.
+
 ### Blue/green node pool upgrades
 
 A zone's pools can be replaced by a new generation instead of being upgraded in place (design section

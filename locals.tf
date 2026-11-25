@@ -289,6 +289,7 @@ locals {
       namespace.annotations,
       namespace.owner == null ? tomap({}) : tomap({ "platform/contact" = namespace.owner.contact }),
       namespace.flux == null ? tomap({}) : tomap({ "platform/repository" = namespace.flux.url }),
+      local.managed_namespace_placement_annotations[name],
     ))
   }
 

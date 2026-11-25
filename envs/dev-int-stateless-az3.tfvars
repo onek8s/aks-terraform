@@ -90,6 +90,12 @@ managed_namespaces = {
     labels = {
       "platform/zone" = "int-se"
     }
+    # On node pools of its own (README "Namespace node pools", design section 2.3): se2ex and se2exspot,
+    # tainted and labelled platform/pool=int-se-example; the namespace's annotations place its pods.
+    node_pool = {
+      name  = "ex"
+      kinds = ["", "spot"]
+    }
     # Inside the cluster, its own namespace only; outside it, the zone's platform policy lets everything
     # through to labfw (aks-fluxcd-platform, infrastructure/zones/firewall-egress).
     network_policy = {

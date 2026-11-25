@@ -647,6 +647,10 @@ variable "managed_namespaces" {
       egress  = optional(string)
       ingress = optional(string)
     }), {})
+    node_pool = optional(object({
+      name  = string
+      kinds = optional(list(string), ["", "spot", "arm", "armspot"])
+    }))
     owner = optional(object({
       team        = string
       cost_center = string
@@ -685,6 +689,15 @@ what it names of `managed_namespace_defaults`; `labels` and `annotations` merge 
 - `pod_security` - the Pod Security Standard the namespace is held to where it departs from the defaults;
   `labels` must not set `pod-security.kubernetes.io/*` keys itself.
 - `network_policy`, `resource_quota`, `adoption_policy`, `delete_policy` - as in `managed_namespace_defaults`.
+- `node_pool` - an application namespace of an isolation zone (`<zone>-<app>`) moved to node pools of its
+  own (design section 2.3): per generation of `zone_node_pools`, `<country><generation><name><kind>` for
+  each of `kinds` (`""` amd64, `spot`, `arm`, `armspot`; default all four) - `se2exspot` for `name = "ex"`
+  in int-se - labelled and tainted `platform/pool=<namespace>` beside the zone's labels and taints. The
+  namespace's annotations then give each of its pods that node selector and toleration (Kubernetes'
+  PodNodeSelector and PodTolerationRestriction admission plugins), so the application changes nothing.
+  Every application namespace of a zone also carries a tolerations whitelist (its zone, spot, GPU, the
+  node conditions and its own pool), so no other namespace's pods tolerate the pool. Null: the zone's
+  shared pools. See the README, "Namespace node pools".
 
 See the README, "Managed namespaces".
 DESCRIPTION
@@ -748,6 +761,17 @@ DESCRIPTION
       ]
     ]))
     error_message = "managed_namespaces[*].labels must not set a pod-security.kubernetes.io/* label. Use pod_security, which is where the Pod Security Standard of a namespace is decided."
+  }
+  validation {
+    condition = alltrue([
+      for namespace in values(var.managed_namespaces) : namespace.node_pool == null || (
+        can(regex("^[a-z][a-z0-9]{0,4}$", namespace.node_pool.name))
+        && !contains(["arm", "armspot", "spot"], namespace.node_pool.name)
+        && length(namespace.node_pool.kinds) >= 1
+        && alltrue([for kind in namespace.node_pool.kinds : contains(["", "spot", "arm", "armspot"], kind)])
+      )
+    ])
+    error_message = "managed_namespaces[*].node_pool.name is 1 to 5 lowercase letters or digits starting with a letter, not arm, spot or armspot (part of the pool names), and its kinds are some of \"\", \"spot\", \"arm\", \"armspot\"."
   }
   # The group's object ID is the Kubernetes group name AKS gives its members - not its display name.
   validation {
