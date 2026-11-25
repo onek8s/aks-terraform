@@ -96,7 +96,7 @@ vault - `flux-system`, say.
 `writers` manage the namespace's secrets and no others: `Key Vault Secrets Officer` under the same
 condition. Object IDs, not names.
 
-`groups` are the namespace's Entra ID groups of the clusters' `managed_namespaces.<ns>.groups` - the
+`groups` are the namespace's Entra ID groups, as the tenants stack binds them in the clusters - the
 same object IDs - granted on the share what their Kubernetes role grants on Secrets (OneK8s design
 section 2.6): `admin` manages the namespace's secrets like `writers` (`Key Vault Secrets Officer`
 under the namespace's condition: its own secrets, by name); `edit` writes and updates them and reads
@@ -131,6 +131,16 @@ DESCRIPTION
     ]))
     error_message = "A writer's principal_type must be Group, ServicePrincipal or User."
   }
+}
+
+variable "tenant_catalogue_dir" {
+  type        = string
+  default     = null
+  description = <<DESCRIPTION
+The environment's tenant catalogue (tenants/' catalogue_dir), relative to this directory: each
+`<namespace>.yaml` is a namespace with a share of its zone's vault, as in key_vault_namespaces - its
+`zone`, its `groups` and its `key_vault.writers`. A namespace must not be in both. Null: none.
+DESCRIPTION
 }
 
 variable "key_vault_admin_group_object_ids" {

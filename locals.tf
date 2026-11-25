@@ -11,53 +11,10 @@ locals {
   # the subnet it is supposed to join.
   role_assignment_propagation_delay = "60s"
 
-  # Flux is installed only for a cluster that names a repository for it to sync: its own, or a
-  # tenant namespace's.
+  # Flux is installed only for a cluster that names a repository for it to sync. The tenants'
+  # configurations (tenants/) run on the same extension.
   flux_enabled           = var.flux_git_repository != null
-  flux_extension_enabled = local.flux_enabled || length(local.managed_namespace_flux_configurations) > 0
-
-  # The Flux configuration of each managed namespace that deploys itself from a repository of its
-  # own, as sent to Azure. Namespace scope, in the namespace itself: the extension applies it as
-  # that namespace's `flux-applier` and refuses references across namespaces, so the repository
-  # reaches nothing outside it. Its credential is a Secret already in the namespace, synced from the
-  # namespace's share of the Key Vault, so nothing secret passes through here.
-  #
-  # A failed apply is retried as often as the repository is read, as on the platform's, and the
-  # Kustomization waits for what it applied to become ready, so a rollout that never does shows up
-  # on it - and in the portal.
-  managed_namespace_flux_configurations = {
-    for name, namespace in var.managed_namespaces : name => {
-      properties = {
-        gitRepository = merge({
-          repositoryRef = {
-            branch = namespace.flux.branch
-          }
-          syncIntervalInSeconds = namespace.flux.sync_interval_seconds
-          url                   = namespace.flux.url
-        }, namespace.flux.secret_name == null ? {} : { localAuthRef = namespace.flux.secret_name })
-        kustomizations = {
-          apps = {
-            path                   = namespace.flux.path
-            prune                  = true
-            syncIntervalInSeconds  = namespace.flux.sync_interval_seconds
-            retryIntervalInSeconds = namespace.flux.sync_interval_seconds
-            wait                   = true
-            # The few facts of the cluster a team's manifests may use, as `${...}` post-build
-            # variables: which cluster it is, so an app can say where it runs. Nothing secret, and
-            # nothing a team could use to reach beyond its namespace.
-            postBuild = {
-              substitute = merge(namespace.flux.substitute, {
-                cluster_name = var.name
-              })
-            }
-          }
-        }
-        namespace  = name
-        scope      = "namespace"
-        sourceKind = "GitRepository"
-      }
-    } if namespace.flux != null
-  }
+  flux_extension_enabled = local.flux_enabled
 
   # What the cluster's Flux repository is told about the Azure side of the cluster, as post-build
   # variables of the `platform` Kustomization: the facts it cannot know on its own and should not
@@ -145,35 +102,6 @@ locals {
     }
   }
 
-  # The role bindings of managed_namespaces[*].groups, as one Flux configuration per namespace that
-  # names a group: cluster scope in flux-system, reading the cluster's own repository, with one
-  # Kustomization per role that applies `<namespace_access_path>/<role>` with the namespace and the
-  # group filled in. One configuration per namespace because Azure refuses two Kustomizations of one
-  # configuration on the same path - and every namespace's view binding is made from the same one.
-  # Removing a group removes its Kustomization, and Flux deletes the binding with it.
-  managed_namespace_access_flux_configurations = local.flux_enabled ? {
-    for name, namespace in var.managed_namespaces : name => {
-      properties = merge(local.flux_configuration_body.properties, {
-        kustomizations = {
-          for binding in values(local.managed_namespace_role_bindings) : binding.role => {
-            path                   = "${trimsuffix(var.namespace_access_path, "/")}/${binding.role}"
-            prune                  = true
-            syncIntervalInSeconds  = var.flux_git_repository.sync_interval_seconds
-            retryIntervalInSeconds = var.flux_git_repository.sync_interval_seconds
-            wait                   = true
-            postBuild = {
-              substitute = {
-                namespace       = binding.namespace
-                role            = binding.role
-                group_object_id = binding.group_object_id
-              }
-            }
-          } if binding.namespace == name
-        }
-      })
-    } if length([for role in ["view", "edit", "admin"] : role if namespace.groups[role] != null]) > 0
-  } : {}
-
   # The Kubernetes service accounts the workload identities are federated with. They are created by
   # the Flux repository, which has to use exactly these names and namespaces: a federated credential
   # trusts one subject and nothing else. Every namespace with a share of the Key Vault reads it as a
@@ -194,9 +122,9 @@ locals {
   key_vault_id      = one(data.azurerm_key_vault.this[*].id)
   key_vault_uri     = one(data.azurerm_key_vault.this[*].vault_uri)
 
-  # The namespaces with a share of a vault: every managed namespace, and the ones the platform
-  # creates itself that key_vault_namespaces names. None without a vault.
-  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), keys(var.managed_namespaces), local.flux_github_webhook_enabled ? ["flux-system"] : [])) : toset([])
+  # The platform's namespaces with a share of the vault: those key_vault_namespaces names, and
+  # flux-system for the webhook's token. None without a vault. The tenants' are tenants/'.
+  key_vault_namespaces = local.key_vault_enabled ? toset(concat(tolist(var.key_vault_namespaces), local.flux_github_webhook_enabled ? ["flux-system"] : [])) : toset([])
 
   # The Flux GitHub webhook's token is in the vault, for the Receiver in flux-system to read.
   flux_github_webhook_enabled = var.flux_github_webhook && local.flux_enabled && local.key_vault_enabled
@@ -258,198 +186,6 @@ locals {
   identity_name_part = join("-", [
     for i, segment in local.name_segments : segment if i != try(index(local.name_segments, local.environment), -1)
   ])
-
-  # Every managed namespace as the request body AKS takes, with the estate-wide defaults filled in
-  # wherever the namespace itself says nothing. Labels and annotations merge key by key, so a
-  # namespace adds to the default set instead of replacing it; everything else is a plain override.
-  #
-  # The optional parts - the labels and annotations - are merged in rather than sent as null, because
-  # AzAPI only tracks what the body declares: a key written out as null is sent as null and then
-  # differs from what Azure answers with, which turns up as an update in every later plan. The quota
-  # is not among them: Azure requires one on every managed namespace, so every namespace sends one.
-  managed_namespace_properties = {
-    for name, namespace in var.managed_namespaces : name => merge(
-      {
-        adoptionPolicy = coalesce(namespace.adoption_policy, var.managed_namespace_defaults.adoption_policy)
-        defaultNetworkPolicy = {
-          egress  = coalesce(namespace.network_policy.egress, var.managed_namespace_defaults.network_policy.egress)
-          ingress = coalesce(namespace.network_policy.ingress, var.managed_namespace_defaults.network_policy.ingress)
-        }
-        defaultResourceQuota = local.managed_namespace_resource_quotas[name]
-        deletePolicy         = coalesce(namespace.delete_policy, var.managed_namespace_defaults.delete_policy)
-      },
-      length(local.managed_namespace_annotations[name]) == 0 ? {} : { annotations = local.managed_namespace_annotations[name] },
-      length(local.managed_namespace_labels[name]) == 0 ? {} : { labels = local.managed_namespace_labels[name] },
-    )
-  }
-
-  managed_namespace_annotations = {
-    for name, namespace in var.managed_namespaces : name => tomap(merge(
-      var.managed_namespace_defaults.annotations,
-      namespace.annotations,
-      namespace.owner == null ? tomap({}) : tomap({ "platform/contact" = namespace.owner.contact }),
-      namespace.flux == null ? tomap({}) : tomap({ "platform/repository" = namespace.flux.url }),
-      local.managed_namespace_placement_annotations[name],
-    ))
-  }
-
-  # The pod security labels come last, because they are decided by `pod_security` alone - `labels`
-  # is refused a `pod-security.kubernetes.io/*` key of its own, so nothing here is being overridden.
-  managed_namespace_labels = {
-    for name, namespace in var.managed_namespaces : name => tomap(merge(
-      var.managed_namespace_defaults.labels,
-      namespace.labels,
-      local.managed_namespace_owner_labels[name],
-      local.managed_namespace_pod_security_labels[name],
-    ))
-  }
-
-  # Who owns the namespace and pays for it, as the labels OpenCost and the telemetry group by - see
-  # managed_namespaces' `owner`.
-  managed_namespace_owner_labels = {
-    for name, namespace in var.managed_namespaces : name => namespace.owner == null ? tomap({}) : tomap({
-      "platform/team"        = namespace.owner.team
-      "platform/cost-center" = namespace.owner.cost_center
-    })
-  }
-
-  # The Pod Security Standard each namespace is held to, with the estate-wide default filled in
-  # wherever the namespace says nothing. Relaxing `enforce` for a workload that cannot meet the
-  # standard leaves `audit` and `warn` where they were, so the exception stays on the record.
-  managed_namespace_pod_security = {
-    for name, namespace in var.managed_namespaces : name => {
-      audit   = coalesce(namespace.pod_security.audit, var.managed_namespace_defaults.pod_security.audit)
-      enforce = coalesce(namespace.pod_security.enforce, var.managed_namespace_defaults.pod_security.enforce)
-      version = coalesce(namespace.pod_security.version, var.managed_namespace_defaults.pod_security.version)
-      warn    = coalesce(namespace.pod_security.warn, var.managed_namespace_defaults.pod_security.warn)
-    }
-  }
-
-  # ... as the labels the API server's Pod Security Admission controller reads. This is the whole of
-  # the mechanism: admission is built into the API server, there is nothing to install, and a mode
-  # set to `none` leaves its label off rather than being sent an empty one.
-  #
-  # The version label pins the standard to a Kubernetes release. `latest` follows the cluster, so an
-  # upgrade can tighten what a namespace enforces under a workload that was passing the day before.
-  managed_namespace_pod_security_labels = {
-    for name, pod_security in local.managed_namespace_pod_security : name => merge(
-      pod_security.audit == "none" ? {} : {
-        "pod-security.kubernetes.io/audit"         = pod_security.audit
-        "pod-security.kubernetes.io/audit-version" = pod_security.version
-      },
-      pod_security.enforce == "none" ? {} : {
-        "pod-security.kubernetes.io/enforce"         = pod_security.enforce
-        "pod-security.kubernetes.io/enforce-version" = pod_security.version
-      },
-      pod_security.warn == "none" ? {} : {
-        "pod-security.kubernetes.io/warn"         = pod_security.warn
-        "pod-security.kubernetes.io/warn-version" = pod_security.version
-      },
-    )
-  }
-
-  # How much each Pod Security Standard permits, so that "weaker than the estate default" is
-  # something that can be compared rather than guessed at. `none` sits below `privileged`: both
-  # permit everything, and `none` additionally leaves no label saying so.
-  pod_security_strictness = {
-    none       = -1
-    privileged = 0
-    baseline   = 1
-    restricted = 2
-  }
-
-  # Namespaces that relax what they enforce below the estate default and record nothing in its
-  # place - neither audit nor warn is left at the standard the estate expects, so the pods that
-  # break it are neither refused nor written down anywhere.
-  managed_namespaces_with_silent_pod_security_exceptions = [
-    for name, pod_security in local.managed_namespace_pod_security : name
-    if local.pod_security_strictness[pod_security.enforce] < local.pod_security_strictness[var.managed_namespace_defaults.pod_security.enforce]
-    && max(
-      local.pod_security_strictness[pod_security.audit],
-      local.pod_security_strictness[pod_security.warn],
-    ) < local.pod_security_strictness[var.managed_namespace_defaults.pod_security.enforce]
-  ]
-
-  # Every CPU figure the quotas name, in the milliCPU form Azure takes. AKS refuses a managed
-  # namespace that states CPU any other way - "The managed namespace CPU request number is not
-  # valid. CPU request of the managed namespace must be in milliCPU form" - where Kubernetes reads
-  # "2" and "2000m" as the same two cores. The variables keep both forms, so that a quota reads the
-  # way it would in a manifest, and the cores are turned into milliCPU here rather than by hand in
-  # every variables file.
-  #
-  # Worked out on the digits rather than by multiplying by a thousand: these are decimal fractions
-  # of a core, binary floating point holds none of them exactly, and 0.1 cores would come out either
-  # side of 100m. The fraction is padded out to the three digits a milliCPU figure has - "0.5" is
-  # 500m, not 5m - and reading the two halves back as one number drops the leading zeros with them.
-  managed_namespace_cpu_millicores = {
-    for quantity in local.managed_namespace_cpu_quantities : quantity => format("%dm", tonumber(
-      endswith(quantity, "m")
-      ? trimsuffix(quantity, "m")
-      : "${split(".", quantity)[0]}${substr("${try(split(".", quantity)[1], "")}000", 0, 3)}"
-    ))
-  }
-
-  # The distinct CPU figures there are to convert, whichever namespace or default they came from.
-  managed_namespace_cpu_quantities = toset(flatten([
-    for quota in local.managed_namespace_resource_quota_inputs : [
-      for field, quantity in quota : quantity if startswith(field, "cpu")
-    ]
-  ]))
-
-  # The quota figures a namespace ends up with, in the shape the API takes: the CPU ones as
-  # milliCPU, the memory ones as they were written, since Azure takes those in the Kubernetes forms.
-  managed_namespace_resource_quotas = {
-    for name, quota in local.managed_namespace_resource_quota_inputs : name => {
-      for field, quantity in quota :
-      field => startswith(field, "cpu") ? local.managed_namespace_cpu_millicores[quantity] : quantity
-    }
-  }
-
-  # ... and the same figures as they were named, before the CPU ones become milliCPU. Every
-  # namespace carries all four: Azure requires the quota on a managed namespace even though the API
-  # spec has it optional - a namespace sent without one is refused with "The managed namespace CPU
-  # request number is not valid" - and `az aks namespace add` asks for all four figures for the same
-  # reason. There is therefore no such thing here as a namespace without a quota; what a namespace
-  # does not name it takes from managed_namespace_defaults, which names all four.
-  managed_namespace_resource_quota_inputs = {
-    for name, namespace in var.managed_namespaces : name => {
-      cpuLimit      = coalesce(namespace.resource_quota.cpu_limit, var.managed_namespace_defaults.resource_quota.cpu_limit)
-      cpuRequest    = coalesce(namespace.resource_quota.cpu_request, var.managed_namespace_defaults.resource_quota.cpu_request)
-      memoryLimit   = coalesce(namespace.resource_quota.memory_limit, var.managed_namespace_defaults.resource_quota.memory_limit)
-      memoryRequest = coalesce(namespace.resource_quota.memory_request, var.managed_namespace_defaults.resource_quota.memory_request)
-    }
-  }
-
-  # The Kubernetes RoleBindings of `managed_namespaces[*].groups`: one per namespace and role that
-  # names a group, keyed `<namespace>-<role>`. Which ones there are follows from the inputs alone.
-  managed_namespace_role_bindings = {
-    for binding in flatten([
-      for name, namespace in var.managed_namespaces : [
-        for role in ["view", "edit", "admin"] : {
-          namespace       = name
-          role            = role
-          group_object_id = lower(namespace.groups[role])
-        } if namespace.groups[role] != null
-      ]
-    ]) : "${binding.namespace}-${binding.role}" => binding
-  }
-
-  # Every group of `groups` gets `Azure Kubernetes Service Namespace User` on its namespace, so that
-  # its members can fetch a kubeconfig for the namespace. Keyed by what it grants rather than by
-  # position, so that a group removed from one role does not renumber the rest.
-  managed_namespace_user_grants = {
-    for grant in distinct([
-      for binding in values(local.managed_namespace_role_bindings) : { namespace = binding.namespace, group_object_id = binding.group_object_id }
-    ]) : "${grant.namespace}/namespace_user/${grant.group_object_id}" => grant
-  }
-
-  # Namespaces whose default policies actually restrict something, which is what needs a network
-  # policy engine in the cluster to be worth anything. A namespace left wide open in both
-  # directions is unaffected by whether one is running.
-  managed_namespaces_relying_on_network_policy = [
-    for name, properties in local.managed_namespace_properties : name
-    if properties.defaultNetworkPolicy.egress != "AllowAll" || properties.defaultNetworkPolicy.ingress != "AllowAll"
-  ]
 
   # The zones' node pools create nodes outside the system pool's subnet, so Microsoft documents the
   # whole virtual network as the scope they need. A cluster without

@@ -1,0 +1,27 @@
+# The `example` team's application in Finland's zone: aks-fluxcd-example's firewall-egress-int-fi/ (the
+# same with Helsinki's forecast), on the zone's shared pools.
+zone: int-fi
+owner:
+  team: example
+  cost_center: example
+  contact: https://github.com/onek8s/aks-fluxcd-example/issues
+# The lab groups (grp-onek8s-dev-ext-fi-example-<role>, reused; design section 2.6): view, edit and admin
+# in the namespace, and the same roles on the namespace's share of the zone's vault (shared/).
+groups:
+  view: 6d9ae939-5e03-4ddb-b378-baa7fa5b5180
+  edit: 88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc
+  admin: 71438fbc-0666-4d82-be17-54b61236d657
+network_policy:
+  ingress: AllowSameNamespace
+  egress: AllowSameNamespace
+flux:
+  url: https://github.com/onek8s/aks-fluxcd-example
+  path: ./firewall-egress-int-fi
+  # The whole namespace, aks-hello and boot-log on a portable disk, in the stateful cluster (defined,
+  # never deployed: it joins envs/dev.tfvars' cells when it is built).
+  cell_paths:
+    aks-dev-int-stateful: ./apps
+  sync_interval_seconds: 60
+  substitute:
+    zone_domain: int-fi.dev.onek8s.lol
+    home_cell: aks-dev-int-stateless-az3

@@ -1,0 +1,9 @@
+# A tenant of the test catalogue: it says what it needs, the schema fills in the rest.
+zone: team
+owner:
+  team: catalogue
+  cost_center: catalogue
+  contact: https://example.com/issues
+flux:
+  url: https://github.com/contoso/catalogued
+  sync_interval_seconds: 60

@@ -9,19 +9,21 @@ locals {
   #
   # `watch_namespaces` are the only namespaces a Gateway's Traefik reads (design section 2.4): its
   # own, where the Gateway and its certificate are, and those its routes come from - a zone's
-  # application namespaces (managed_namespaces labelled `platform/zone: <zone>`, the label the
-  # Gateway's allowedRoutes selects), or flux-system for the platform's webhook route. Traefik reads
-  # the Services, EndpointSlices, ConfigMaps and Secrets of these alone, so no zone's gateway can read
-  # another zone's Secrets.
+  # application namespaces (the tenants labelled `platform/zone: <zone>`, the label the Gateway's
+  # allowedRoutes selects), or flux-system for the platform's webhook route. Traefik reads the
+  # Services, EndpointSlices, ConfigMaps and Secrets of these alone, so no zone's gateway can read
+  # another zone's Secrets. A zone's list is the tenants' (tenants/): the ConfigMap `tenants-<zone>`
+  # in flux-system, which its Flux configuration `tenants-<zone>` keeps and the Kustomization reads
+  # (`substituteFrom`), so a new tenant changes nothing here. Until the ConfigMap is there the
+  # Kustomization fails and Traefik keeps what it was last given - never every namespace.
   gateways = var.gateway_implementation == null ? {} : merge(
     {
       for zone in keys(var.isolation_zones) : zone => {
         namespace = "${zone}-gateway"
         exposure  = startswith(zone, "int-") ? "int" : "ext"
         internal  = startswith(zone, "int-")
-        watch_namespaces = concat(["${zone}-gateway"], sort([
-          for name, namespace in var.managed_namespaces : name if lookup(namespace.labels, "platform/zone", null) == zone
-        ]))
+        # From the tenants' ConfigMap.
+        watch_namespaces = null
       }
     },
     local.flux_github_webhook_enabled ? {
@@ -67,17 +69,24 @@ locals {
             syncIntervalInSeconds  = var.traefik_flux_repository.sync_interval_seconds
             retryIntervalInSeconds = 60
             wait                   = true
-            postBuild = {
-              substitute = {
-                gateway_name      = name
-                gateway_namespace = gateway.namespace
-                gateway_exposure  = gateway.exposure
-                gateway_internal  = tostring(gateway.internal)
-                # A YAML flow sequence, brackets included: namespace names need no quotes.
-                gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]"
-                quote                    = "\""
-              }
-            }
+            postBuild = merge(
+              {
+                substitute = merge(
+                  {
+                    gateway_name      = name
+                    gateway_namespace = gateway.namespace
+                    gateway_exposure  = gateway.exposure
+                    gateway_internal  = tostring(gateway.internal)
+                    quote             = "\""
+                  },
+                  # A YAML flow sequence, brackets included: namespace names need no quotes.
+                  gateway.watch_namespaces == null ? {} : { gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]" },
+                )
+              },
+              gateway.watch_namespaces != null ? {} : {
+                substituteFrom = [{ kind = "ConfigMap", name = "tenants-${name}", optional = false }]
+              },
+            )
           }
         }
         namespace  = "flux-system"

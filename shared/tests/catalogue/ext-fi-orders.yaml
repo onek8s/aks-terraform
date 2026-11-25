@@ -1,0 +1,9 @@
+# A tenant of the catalogue, for shared.tftest.hcl: its share is in its zone's vault, its groups and
+# writers granted on it.
+zone: ext-fi
+groups:
+  admin: 44444444-4444-4444-4444-444444444444
+key_vault:
+  writers:
+    - principal_id: 33333333-3333-3333-3333-333333333333
+      principal_type: User

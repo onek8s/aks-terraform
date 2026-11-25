@@ -412,24 +412,6 @@ DESCRIPTION
   }
 }
 
-variable "namespace_access_path" {
-  type        = string
-  default     = "./infrastructure/namespace-access"
-  description = <<DESCRIPTION
-The directory of `flux_git_repository` with one subdirectory per role - `view`, `edit`, `admin` -
-that holds the `RoleBinding` a `managed_namespaces[*].groups` entry of that role is made from:
-`$${namespace}`, `$${role}` (also the ClusterRole bound) and `$${group_object_id}` are filled in per
-binding. Azure refuses two Kustomizations of one Flux configuration on the same path, hence a
-directory per role.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = startswith(var.namespace_access_path, "./")
-    error_message = "namespace_access_path must be a path in the repository starting with ./, for example \"./infrastructure/namespace-access\"."
-  }
-}
-
 variable "flux_github_webhook" {
   type        = bool
   default     = false
@@ -453,10 +435,10 @@ Name of the environment's platform Key Vault in `resource_group_name`, created b
 namespaces' identities and every grant on it, and looked up here. Leave it unset and nothing is synced
 from a vault.
 
-A namespace owns the secrets named `<namespace>--<name>`. Each namespace in `key_vault_namespaces` and
-`managed_namespaces` reads its share as the environment's shared identity for it, which the cluster
-federates with the namespace's `key-vault` service account - an application namespace's share is in its
-zone's vault (`key_vault_namespace_vaults`). Every namespace with a share here needs one in shared/ too.
+A namespace owns the secrets named `<namespace>--<name>`. Each namespace in `key_vault_namespaces`
+reads its share as the environment's shared identity for it, which the cluster federates with the
+namespace's `key-vault` service account. Every namespace with a share here needs one in shared/ too. The
+tenants' shares are in their zones' vaults and federated by tenants/.
 DESCRIPTION
 
   validation {
@@ -465,14 +447,41 @@ DESCRIPTION
   }
 }
 
+variable "namespace_node_pools" {
+  type = map(object({
+    name  = string
+    kinds = optional(list(string), ["", "spot", "arm", "armspot"])
+  }))
+  default     = {}
+  description = <<DESCRIPTION
+Application namespaces of an isolation zone (`<zone>-<app>`) on node pools of their own (design section
+2.3), keyed by namespace: per generation of `zone_node_pools`, `<country><generation><name><kind>` for each
+of `kinds` (`""` amd64, `spot`, `arm`, `armspot`; default all four) - `se2exspot` for `name = "ex"` in
+int-se - labelled and tainted `platform/pool=<namespace>` beside the zone's labels and taints. The pools
+are the cell's capacity; the namespace itself is a tenant (tenants/, `dedicated_node_pool: true` in its
+catalogue file), whose annotations then give each of its pods the pool's node selector and toleration. See
+the README, "Namespace node pools".
+DESCRIPTION
+  nullable    = false
+
+  validation {
+    condition = alltrue([
+      for pool in values(var.namespace_node_pools) :
+      can(regex("^[a-z][a-z0-9]{0,4}$", pool.name)) && !contains(["arm", "armspot", "spot"], pool.name)
+      && length(pool.kinds) >= 1 && alltrue([for kind in pool.kinds : contains(["", "spot", "arm", "armspot"], kind)])
+    ])
+    error_message = "namespace_node_pools[*].name is 1 to 5 lowercase letters or digits starting with a letter, not arm, spot or armspot (part of the pool names), and its kinds are some of \"\", \"spot\", \"arm\", \"armspot\"."
+  }
+}
+
 variable "key_vault_namespaces" {
   type        = set(string)
   default     = []
   description = <<DESCRIPTION
-Namespaces that are not in `managed_namespaces` and still get a share of the platform vault: the ones
-the Flux repository creates for the platform itself - each zone's `<zone>-gateway`, whose listener
-certificate is `<zone>-gateway--wildcard`, and `flux-system`. Every managed namespace gets one anyway.
-Nothing is created for them without a `key_vault_name`.
+The platform's namespaces with a share of the platform vault, which the Flux repository creates for
+the platform itself - each zone's `<zone>-gateway`, whose listener certificate is
+`<zone>-gateway--wildcard`, and `flux-system`. The tenants' shares, in their zones' vaults, are federated
+by tenants/. Nothing is created for them without a `key_vault_name`.
 DESCRIPTION
   nullable    = false
 
@@ -536,339 +545,6 @@ DESCRIPTION
   validation {
     condition     = can(regex("^[-+][0-9]{2}:[0-9]{2}$", var.maintenance_window.utc_offset))
     error_message = "maintenance_window.utc_offset must be of the form +HH:MM or -HH:MM."
-  }
-}
-
-variable "managed_namespace_defaults" {
-  type = object({
-    adoption_policy = optional(string, "Never")
-    annotations     = optional(map(string), {})
-    delete_policy   = optional(string, "Keep")
-    labels          = optional(map(string), {})
-    network_policy = optional(object({
-      egress  = optional(string, "AllowSameNamespace")
-      ingress = optional(string, "AllowSameNamespace")
-    }), {})
-    pod_security = optional(object({
-      audit   = optional(string, "restricted")
-      enforce = optional(string, "restricted")
-      version = optional(string, "latest")
-      warn    = optional(string, "restricted")
-    }), {})
-    resource_quota = optional(object({
-      cpu_limit      = optional(string, "2000m")
-      cpu_request    = optional(string, "500m")
-      memory_limit   = optional(string, "4Gi")
-      memory_request = optional(string, "1Gi")
-    }), {})
-  })
-  default     = {}
-  description = <<DESCRIPTION
-What every entry in `managed_namespaces` gets unless it says otherwise: the default `NetworkPolicy`
-(`ingress` and `egress` `AllowSameNamespace`: no traffic between namespaces; each `AllowAll`, `AllowSameNamespace` or `DenyAll` -
-Kubernetes network policies are additive, so a policy in the namespace can only widen these), the Pod
-Security Standard (`enforce`, `audit` and `warn`: `restricted`, `baseline`, `privileged` or `none`; `version`
-`latest` or `v1.NN`), the `ResourceQuota` Azure requires on every managed namespace (CPU in Kubernetes
-units, sent as milliCPU; memory as `Mi`/`Gi`), `adoption_policy` (`Never`, `IfIdentical`, `Always`),
-`delete_policy` (`Keep`, `Delete`), and `labels` and `annotations` for all. See the README, "Managed
-namespaces".
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = contains(["Always", "IfIdentical", "Never"], var.managed_namespace_defaults.adoption_policy)
-    error_message = "managed_namespace_defaults.adoption_policy must be one of \"Always\", \"IfIdentical\" or \"Never\"."
-  }
-  validation {
-    condition     = contains(["Delete", "Keep"], var.managed_namespace_defaults.delete_policy)
-    error_message = "managed_namespace_defaults.delete_policy must be either \"Delete\" or \"Keep\"."
-  }
-  validation {
-    condition = alltrue([
-      for rule in [var.managed_namespace_defaults.network_policy.egress, var.managed_namespace_defaults.network_policy.ingress] :
-      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], rule)
-    ])
-    error_message = "managed_namespace_defaults.network_policy.egress and .ingress must each be one of \"AllowAll\", \"AllowSameNamespace\" or \"DenyAll\"."
-  }
-  validation {
-    condition = alltrue([
-      for level in [var.managed_namespace_defaults.pod_security.audit, var.managed_namespace_defaults.pod_security.enforce, var.managed_namespace_defaults.pod_security.warn] :
-      contains(["baseline", "none", "privileged", "restricted"], level)
-    ])
-    error_message = "managed_namespace_defaults.pod_security.audit, .enforce and .warn must each be one of \"restricted\", \"baseline\", \"privileged\" or \"none\"."
-  }
-  validation {
-    condition     = can(regex("^(latest|v[0-9]+\\.[0-9]+)$", var.managed_namespace_defaults.pod_security.version))
-    error_message = "managed_namespace_defaults.pod_security.version must be \"latest\" or a pinned Kubernetes minor version such as \"v1.31\"."
-  }
-  validation {
-    condition     = alltrue([for key in keys(var.managed_namespace_defaults.labels) : !startswith(key, "pod-security.kubernetes.io/")])
-    error_message = "managed_namespace_defaults.labels must not set a pod-security.kubernetes.io/* label. Use managed_namespace_defaults.pod_security, which is where the Pod Security Standard is decided."
-  }
-  validation {
-    condition = alltrue([
-      for quantity in [var.managed_namespace_defaults.resource_quota.cpu_limit, var.managed_namespace_defaults.resource_quota.cpu_request] :
-      quantity == null || (
-        can(regex("^([0-9]+(\\.[0-9]{1,3})?|[0-9]+m)$", quantity))
-        && try(tonumber(trimsuffix(quantity, "m")) > 0, false)
-      )
-    ])
-    error_message = "managed_namespace_defaults.resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities of at least 1 milliCPU, for example \"500m\", \"0.5\" or \"2\". Azure takes the figures in milliCPU, so nothing finer than a milliCPU can be asked for."
-  }
-  validation {
-    condition = alltrue([
-      for quantity in [var.managed_namespace_defaults.resource_quota.memory_limit, var.managed_namespace_defaults.resource_quota.memory_request] :
-      quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$", quantity))
-    ])
-    error_message = "managed_namespace_defaults.resource_quota.memory_limit and .memory_request must be Kubernetes memory quantities, for example \"512Mi\" or \"4Gi\"."
-  }
-}
-
-variable "managed_namespaces" {
-  type = map(object({
-    adoption_policy = optional(string)
-    annotations     = optional(map(string), {})
-    delete_policy   = optional(string)
-    flux = optional(object({
-      url                   = string
-      branch                = optional(string, "main")
-      path                  = optional(string, "./")
-      secret_name           = optional(string)
-      sync_interval_seconds = optional(number, 300)
-      substitute            = optional(map(string), {})
-    }))
-    groups = optional(object({
-      view  = optional(string)
-      edit  = optional(string)
-      admin = optional(string)
-    }), {})
-    labels = optional(map(string), {})
-    network_policy = optional(object({
-      egress  = optional(string)
-      ingress = optional(string)
-    }), {})
-    node_pool = optional(object({
-      name  = string
-      kinds = optional(list(string), ["", "spot", "arm", "armspot"])
-    }))
-    owner = optional(object({
-      team        = string
-      cost_center = string
-      contact     = string
-    }))
-    pod_security = optional(object({
-      audit   = optional(string)
-      enforce = optional(string)
-      version = optional(string)
-      warn    = optional(string)
-    }), {})
-    resource_quota = optional(object({
-      cpu_limit      = optional(string)
-      cpu_request    = optional(string)
-      memory_limit   = optional(string)
-      memory_request = optional(string)
-    }), {})
-  }))
-  default     = {}
-  description = <<DESCRIPTION
-Namespaces AKS creates and keeps inside the cluster, keyed by namespace name - Azure resources, so a
-namespace survives being deleted by hand and `groups` can be granted on it. Each entry overrides only
-what it names of `managed_namespace_defaults`; `labels` and `annotations` merge with the defaults.
-
-- `owner` - who runs the application and pays for it: labels `platform/team` and `platform/cost-center`,
-  annotation `platform/contact` (design section 2.6; Azure Policy `namespace-ownership` requires them).
-- `groups` - an Entra ID group (object ID) per Kubernetes role, `view`, `edit` and `admin`: a RoleBinding
-  `platform-<role>` applied by the cluster's Flux configuration (`<namespace>-access`, one Kustomization
-  per role from `namespace_access_path`), and `Azure Kubernetes Service Namespace User` on the namespace
-  for a kubeconfig of its own. The same groups get the matching rights on the namespace's secrets in
-  shared/.
-- `flux` - a tenant: a namespace-scoped Flux configuration named after the namespace syncs `path` on
-  `branch` of the public `url` every `sync_interval_seconds` (at least 60) with `substitute` as post-build
-  variables (`cluster_name` is always there); `secret_name` names a Secret in the namespace for a
-  private repository, synced from the namespace's share of the vault.
-- `pod_security` - the Pod Security Standard the namespace is held to where it departs from the defaults;
-  `labels` must not set `pod-security.kubernetes.io/*` keys itself.
-- `network_policy`, `resource_quota`, `adoption_policy`, `delete_policy` - as in `managed_namespace_defaults`.
-- `node_pool` - an application namespace of an isolation zone (`<zone>-<app>`) moved to node pools of its
-  own (design section 2.3): per generation of `zone_node_pools`, `<country><generation><name><kind>` for
-  each of `kinds` (`""` amd64, `spot`, `arm`, `armspot`; default all four) - `se2exspot` for `name = "ex"`
-  in int-se - labelled and tainted `platform/pool=<namespace>` beside the zone's labels and taints. The
-  namespace's annotations then give each of its pods that node selector and toleration (Kubernetes'
-  PodNodeSelector and PodTolerationRestriction admission plugins), so the application changes nothing.
-  Every application namespace of a zone also carries a tolerations whitelist (its zone, spot, GPU, the
-  node conditions and its own pool), so no other namespace's pods tolerate the pool. Null: the zone's
-  shared pools. See the README, "Namespace node pools".
-
-See the README, "Managed namespaces".
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition = alltrue([
-      for namespace in var.managed_namespaces : namespace.owner == null || (
-        can(regex("^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", namespace.owner.team))
-        && can(regex("^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", namespace.owner.cost_center))
-        && trimspace(namespace.owner.contact) != ""
-      )
-    ])
-    error_message = "managed_namespaces[*].owner.team and .cost_center must be Kubernetes label values (1 to 63 letters, digits, '-', '_' or '.', starting and ending with a letter or digit), and .contact must not be empty."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in var.managed_namespaces : namespace.owner == null || length(setintersection(keys(namespace.labels), ["platform/team", "platform/cost-center"])) == 0
-    ])
-    error_message = "managed_namespaces[*].labels must not set platform/team or platform/cost-center; owner is where they are set."
-  }
-  validation {
-    condition = alltrue([
-      for name in keys(var.managed_namespaces) : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", name))
-    ])
-    error_message = "Every key of managed_namespaces must be a Kubernetes namespace name: 1 to 63 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit."
-  }
-  # Microsoft documents system namespaces as not on-boardable at all - `kube-system`,
-  # `gatekeeper-system`, `istio-system`, `app-routing-system` and the rest. The list is open-ended,
-  # so this catches the named ones and the `kube-` prefix Kubernetes reserves; anything else
-  # Microsoft adds to it is refused by Azure rather than here.
-  validation {
-    condition = alltrue([
-      for name in keys(var.managed_namespaces) :
-      !startswith(name, "kube-") && !contains(["app-routing-system", "gatekeeper-system", "istio-system"], name)
-    ])
-    error_message = "managed_namespaces names a system namespace. AKS does not allow one to be on-boarded as a managed namespace: not kube-system or anything else starting with \"kube-\", and not app-routing-system, gatekeeper-system or istio-system."
-  }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for level in [namespace.pod_security.audit, namespace.pod_security.enforce, namespace.pod_security.warn] :
-        level == null || contains(["baseline", "none", "privileged", "restricted"], coalesce(level, ""))
-      ]
-    ]))
-    error_message = "managed_namespaces[*].pod_security.audit, .enforce and .warn must each be one of \"restricted\", \"baseline\", \"privileged\" or \"none\", or left unset to follow managed_namespace_defaults."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.pod_security.version == null || can(regex("^(latest|v[0-9]+\\.[0-9]+)$", namespace.pod_security.version))
-    ])
-    error_message = "managed_namespaces[*].pod_security.version must be \"latest\" or a pinned Kubernetes minor version such as \"v1.31\"."
-  }
-  # The pod security labels come from pod_security, so that there is one place they are decided and
-  # a namespace cannot end up with an enforce label that contradicts what it asked for.
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for key in keys(namespace.labels) : !startswith(key, "pod-security.kubernetes.io/")
-      ]
-    ]))
-    error_message = "managed_namespaces[*].labels must not set a pod-security.kubernetes.io/* label. Use pod_security, which is where the Pod Security Standard of a namespace is decided."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) : namespace.node_pool == null || (
-        can(regex("^[a-z][a-z0-9]{0,4}$", namespace.node_pool.name))
-        && !contains(["arm", "armspot", "spot"], namespace.node_pool.name)
-        && length(namespace.node_pool.kinds) >= 1
-        && alltrue([for kind in namespace.node_pool.kinds : contains(["", "spot", "arm", "armspot"], kind)])
-      )
-    ])
-    error_message = "managed_namespaces[*].node_pool.name is 1 to 5 lowercase letters or digits starting with a letter, not arm, spot or armspot (part of the pool names), and its kinds are some of \"\", \"spot\", \"arm\", \"armspot\"."
-  }
-  # The group's object ID is the Kubernetes group name AKS gives its members - not its display name.
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for group in [namespace.groups.view, namespace.groups.edit, namespace.groups.admin] :
-        group == null || can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", coalesce(group, "-")))
-      ]
-    ]))
-    error_message = "managed_namespaces[*].groups.view, .edit and .admin must each be the object ID of an Entra ID group, for example \"00000000-0000-0000-0000-000000000000\", or left unset."
-  }
-  # Each binding is a Flux Kustomization `<namespace>-access-<role>`, and Flux labels what it applies
-  # with that name: a label value, 63 characters at most.
-  validation {
-    condition = alltrue([
-      for name, namespace in var.managed_namespaces :
-      length(name) <= 48 || alltrue([for group in [namespace.groups.view, namespace.groups.edit, namespace.groups.admin] : group == null])
-    ])
-    error_message = "A managed namespace with groups must have a name of at most 48 characters: its role bindings are applied by Flux Kustomizations named <namespace>-access-<role>, which Flux uses as a label value."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.adoption_policy == null || contains(["Always", "IfIdentical", "Never"], coalesce(namespace.adoption_policy, ""))
-    ])
-    error_message = "managed_namespaces[*].adoption_policy must be one of \"Always\", \"IfIdentical\" or \"Never\", or left unset to follow managed_namespace_defaults."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.delete_policy == null || contains(["Delete", "Keep"], coalesce(namespace.delete_policy, ""))
-    ])
-    error_message = "managed_namespaces[*].delete_policy must be either \"Delete\" or \"Keep\", or left unset to follow managed_namespace_defaults."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || can(regex("^https://", namespace.flux.url))
-    ])
-    error_message = "managed_namespaces[*].flux.url must start with https://."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || try(trimspace(namespace.flux.branch) != "", false)
-    ])
-    error_message = "managed_namespaces[*].flux.branch must not be empty."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || try(namespace.flux.sync_interval_seconds >= 60, false)
-    ])
-    error_message = "managed_namespaces[*].flux.sync_interval_seconds must be at least 60."
-  }
-  validation {
-    condition = alltrue([
-      for namespace in values(var.managed_namespaces) :
-      namespace.flux == null || try(namespace.flux.secret_name == null || can(regex("^[a-z0-9]([-.a-z0-9]{0,251}[a-z0-9])?$", namespace.flux.secret_name)), false)
-    ])
-    error_message = "managed_namespaces[*].flux.secret_name must be the name of a Kubernetes Secret: lowercase letters, digits, hyphens and dots, starting and ending with a letter or digit."
-  }
-  # The tenant's Flux configuration is named after the namespace, next to the cluster's own
-  # `platform` - and Azure has one name space for both.
-  validation {
-    condition     = !contains([for name, namespace in var.managed_namespaces : name if namespace.flux != null], "platform")
-    error_message = "managed_namespaces.platform cannot set flux: its Flux configuration would be named `platform`, which is the cluster's own. Name the namespace something else."
-  }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for rule in [namespace.network_policy.egress, namespace.network_policy.ingress] :
-        rule == null || contains(["AllowAll", "AllowSameNamespace", "DenyAll"], coalesce(rule, ""))
-      ]
-    ]))
-    error_message = "managed_namespaces[*].network_policy.egress and .ingress must each be one of \"AllowAll\", \"AllowSameNamespace\" or \"DenyAll\", or left unset to follow managed_namespace_defaults."
-  }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for quantity in [namespace.resource_quota.cpu_limit, namespace.resource_quota.cpu_request] :
-        quantity == null || (
-          can(regex("^([0-9]+(\\.[0-9]{1,3})?|[0-9]+m)$", quantity))
-          && try(tonumber(trimsuffix(quantity, "m")) > 0, false)
-        )
-      ]
-    ]))
-    error_message = "managed_namespaces[*].resource_quota.cpu_limit and .cpu_request must be Kubernetes CPU quantities of at least 1 milliCPU, for example \"500m\", \"0.5\" or \"2\". Azure takes the figures in milliCPU, so nothing finer than a milliCPU can be asked for."
-  }
-  validation {
-    condition = alltrue(flatten([
-      for namespace in values(var.managed_namespaces) : [
-        for quantity in [namespace.resource_quota.memory_limit, namespace.resource_quota.memory_request] :
-        quantity == null || can(regex("^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$", quantity))
-      ]
-    ]))
-    error_message = "managed_namespaces[*].resource_quota.memory_limit and .memory_request must be Kubernetes memory quantities, for example \"512Mi\" or \"4Gi\"."
   }
 }
 
@@ -1128,12 +804,6 @@ DESCRIPTION
     error_message = "Every isolation zone of the cluster must be of its exposure (`<exposure>-<country>`): internal and external zones never share a cluster (design decision D52)."
   }
   validation {
-    condition = var.exposure == null || alltrue([
-      for namespace in values(var.managed_namespaces) : startswith(lookup(namespace.labels, "platform/zone", "${coalesce(var.exposure, "-")}-"), "${coalesce(var.exposure, "-")}-")
-    ])
-    error_message = "A managed namespace's platform/zone must be a zone of the cluster's exposure (design decision D52)."
-  }
-  validation {
     condition     = var.exposure != "ext" || length(var.internal_dns_zone_names) == 0
     error_message = "An external cluster keeps no records in the internal zones' private DNS (design decision D52)."
   }
@@ -1235,19 +905,6 @@ DESCRIPTION
     ])) == length(var.isolation_zones)
     error_message = "With zone_node_pools, no two zones of a cluster may end in the same country: it names their pools."
   }
-}
-
-variable "key_vault_namespace_vaults" {
-  type        = map(string)
-  default     = {}
-  description = <<DESCRIPTION
-The namespaces whose share is in another of the environment's vaults than key_vault_name - an application namespace's in its isolation zone's vault -
-keyed by namespace, the vault's name as the value. shared/ makes the grants; the cluster looks the
-vault up, federates the namespace's identity, and tells the Flux repository the vault's URL as
-`key_vault_url_<namespace>` (hyphens as underscores) - every namespace gets that variable, the ones
-in key_vault_name too.
-DESCRIPTION
-  nullable    = false
 }
 
 variable "internal_dns_zone_names" {

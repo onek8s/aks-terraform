@@ -339,6 +339,39 @@ run "a_namespace_with_a_zone_reads_the_zone_vault" {
   }
 }
 
+# A tenant of the catalogue (tenants/catalogue/<env>/, the files tenants/ deploys) gets its share as if
+# key_vault_namespaces named it: its identity, its reader role in its zone's vault, its groups and writers.
+run "a_tenant_of_the_catalogue_gets_its_share" {
+  command = plan
+
+  variables {
+    isolation_zones      = { ext-fi = { exposure = "ext", index = 3 } }
+    zone_key_vault_names = { ext-fi = "kv-sec-test-ext-fi" }
+    key_vault_namespaces = { ext-fi-gateway = {} }
+    tenant_catalogue_dir = "tests/catalogue"
+  }
+
+  assert {
+    condition     = toset(keys(azurerm_user_assigned_identity.key_vault)) == toset(["ext-fi-gateway", "ext-fi-orders"])
+    error_message = "The catalogue's tenant should get an identity beside the platform's namespaces."
+  }
+  assert {
+    condition     = azurerm_role_assignment.key_vault_namespace_reader["ext-fi-orders"].condition == module.conventions.key_vault_read_conditions["ext-fi-orders"]
+    error_message = "The tenant reads its own secrets only, under its prefix."
+  }
+  assert {
+    condition = toset(keys(azurerm_role_assignment.key_vault_namespace_writer)) == toset([
+      "ext-fi-orders/writer/44444444-4444-4444-4444-444444444444",
+      "ext-fi-orders/writer/33333333-3333-3333-3333-333333333333",
+    ])
+    error_message = "The tenant's admin group and its writers should manage its secrets."
+  }
+  assert {
+    condition     = azurerm_role_assignment.key_vault_namespace_writer["ext-fi-orders/writer/33333333-3333-3333-3333-333333333333"].principal_type == "User"
+    error_message = "A writer's principal_type should come from the catalogue."
+  }
+}
+
 run "rejects_a_namespace_in_a_zone_with_no_vault" {
   command = plan
 
@@ -905,7 +938,7 @@ run "rejects_a_budget_start_that_is_not_the_first_of_a_month" {
   expect_failures = [var.monthly_budget]
 }
 
-# A namespace's groups (the clusters' managed_namespaces.<ns>.groups) get on its share what their
+# A namespace's groups (what the tenants stack binds in the clusters) get on its share what their
 # Kubernetes role gets on Secrets: edit and admin manage its secrets, view gets nothing.
 run "a_namespaces_groups_get_their_kubernetes_role_on_its_share" {
   command = plan

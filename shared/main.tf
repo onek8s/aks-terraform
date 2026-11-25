@@ -23,6 +23,32 @@ resource "azurerm_resource_group" "this" {
 
 # The resource group, whichever way it came to be: the resources below wait for it this way.
 locals {
+  # Every namespace with a share of a vault: key_vault_namespaces (the platform's) and each tenant of
+  # the catalogue (tenant_catalogue_dir, the files tenants/ deploys): its zone, its groups and its
+  # writers (`key_vault.writers`). One file names a tenant for both stacks.
+  tenant_catalogue_files = var.tenant_catalogue_dir == null ? toset([]) : fileset("${path.root}/${var.tenant_catalogue_dir}", "*.yaml")
+  tenant_catalogue = {
+    for file in local.tenant_catalogue_files : trimsuffix(file, ".yaml") => yamldecode(file("${path.root}/${var.tenant_catalogue_dir}/${file}"))
+  }
+  tenants_in_key_vault_namespaces = setintersection(keys(var.key_vault_namespaces), keys(local.tenant_catalogue))
+  namespace_shares = tomap(merge(
+    { for namespace, share in var.key_vault_namespaces : namespace => share },
+    {
+      for namespace, tenant in local.tenant_catalogue : namespace => {
+        zone = tenant.zone
+        writers = [for writer in try(tenant.key_vault.writers, []) : {
+          principal_id   = writer.principal_id
+          principal_type = try(writer.principal_type, "Group")
+        }]
+        groups = {
+          view  = try(tenant.groups.view, null)
+          edit  = try(tenant.groups.edit, null)
+          admin = try(tenant.groups.admin, null)
+        }
+      }
+    },
+  ))
+
   resource_group_name = var.resource_group_create ? azurerm_resource_group.this[0].name : local.names.resource_group
 }
 
@@ -74,7 +100,7 @@ module "conventions" {
   environment          = var.environment
   exposure             = var.exposure
   naming               = var.naming
-  key_vault_namespaces = toset(keys(var.key_vault_namespaces))
+  key_vault_namespaces = toset(keys(local.namespace_shares))
   names                = local.name_requests
 }
 
@@ -117,7 +143,7 @@ locals {
   # Each writer of each namespace, keyed like the cluster configuration's namespace grants.
   key_vault_writers = {
     for writer in flatten([
-      for namespace, share in var.key_vault_namespaces : [
+      for namespace, share in local.namespace_shares : [
         for writer in share.writers : merge(writer, { namespace = namespace })
       ]
     ]) : "${writer.namespace}/writer/${writer.principal_id}" => writer
@@ -129,7 +155,7 @@ locals {
   # a writer, which grants more; `view` gets nothing, as Kubernetes' `view` sees no Secret.
   key_vault_group_writers = merge({
     for grant in flatten([
-      for namespace, share in var.key_vault_namespaces : [
+      for namespace, share in local.namespace_shares : [
         for group in compact([share.groups.admin]) : {
           namespace      = namespace
           principal_id   = lower(group)
@@ -141,7 +167,7 @@ locals {
 
   key_vault_group_editors = {
     for grant in flatten([
-      for namespace, share in var.key_vault_namespaces : [
+      for namespace, share in local.namespace_shares : [
         for group in compact([share.groups.edit]) : {
           namespace    = namespace
           principal_id = lower(group)
@@ -203,10 +229,10 @@ locals {
   # zone.
   key_vault_ids = merge({ for zone, vault in azurerm_key_vault.zone : zone => vault.id }, { "" = azurerm_key_vault.this.id })
   namespace_key_vault_ids = {
-    for namespace, share in var.key_vault_namespaces : namespace => local.key_vault_ids[share.zone == null ? "" : share.zone]
+    for namespace, share in local.namespace_shares : namespace => local.key_vault_ids[share.zone == null ? "" : share.zone]
   }
   namespace_key_vault_uris = {
-    for namespace, share in var.key_vault_namespaces : namespace => share.zone == null ? azurerm_key_vault.this.vault_uri : azurerm_key_vault.zone[share.zone].vault_uri
+    for namespace, share in local.namespace_shares : namespace => share.zone == null ? azurerm_key_vault.this.vault_uri : azurerm_key_vault.zone[share.zone].vault_uri
   }
 }
 
@@ -214,7 +240,7 @@ locals {
 # adds a federated credential of its own for its namespace's `key-vault` service account; Azure
 # allows 20 on an identity.
 resource "azurerm_user_assigned_identity" "key_vault" {
-  for_each = var.key_vault_namespaces
+  for_each = local.namespace_shares
 
   location            = var.location
   name                = module.conventions.shared_key_vault_identity_names[each.key]
@@ -224,7 +250,7 @@ resource "azurerm_user_assigned_identity" "key_vault" {
 # Reading the namespace's own secrets, by name. Listing the vault is refused - see the README, "Key
 # Vault" - and left to the platform viewers.
 resource "azurerm_role_assignment" "key_vault_namespace_reader" {
-  for_each = var.key_vault_namespaces
+  for_each = local.namespace_shares
 
   principal_id         = azurerm_user_assigned_identity.key_vault[each.key].principal_id
   scope                = local.namespace_key_vault_ids[each.key]
@@ -311,7 +337,7 @@ resource "azurerm_key_vault_secret" "flux_github_webhook" {
 
   lifecycle {
     precondition {
-      condition     = contains(keys(var.key_vault_namespaces), "flux-system")
+      condition     = contains(keys(local.namespace_shares), "flux-system")
       error_message = "The Flux webhook's token is flux-system's secret, and flux-system has no share in key_vault_namespaces to read it with."
     }
   }
@@ -327,7 +353,7 @@ resource "azurerm_key_vault_secret" "flux_github_webhook_namespace" {
 
   lifecycle {
     precondition {
-      condition     = contains(keys(var.key_vault_namespaces), each.key)
+      condition     = contains(keys(local.namespace_shares), each.key)
       error_message = "${each.key} has no share in key_vault_namespaces to read its webhook token with."
     }
   }
@@ -353,7 +379,7 @@ resource "azurerm_key_vault_secret" "isolation_test" {
 
   lifecycle {
     precondition {
-      condition     = contains(keys(var.key_vault_namespaces), each.key)
+      condition     = contains(keys(local.namespace_shares), each.key)
       error_message = "${each.key} has no share in key_vault_namespaces to read its isolation test secret with."
     }
   }
@@ -500,4 +526,11 @@ resource "azurerm_dns_cname_record" "global" {
   resource_group_name = local.dns_zone.resource_group_name
   ttl                 = each.value.ttl
   target_resource_id  = azurerm_traffic_manager_profile.global[each.key].id
+}
+
+check "a_namespace_is_a_tenant_or_the_platforms" {
+  assert {
+    condition     = length(local.tenants_in_key_vault_namespaces) == 0
+    error_message = "${join(", ", local.tenants_in_key_vault_namespaces)}: in key_vault_namespaces and in the tenant catalogue; the catalogue's file wins. Leave it out of key_vault_namespaces."
+  }
 }

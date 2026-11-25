@@ -34,19 +34,14 @@ virtual_network_name = "vnet-aks-dev"
 node_subnet_name     = "snet-aks-nodes"
 pod_subnet_name      = "snet-aks-pods"
 
-# SHARED. The environment's platform Key Vault, created by shared/ and looked up here, and the
-# int-fi zone's vault for the example team's secrets - each namespace reading only the ones named
-# `<namespace>--<name>`, as the environment's shared identity `id-sec-dev-shared-kv-<namespace>`.
-# This cluster adds a federated credential of its own to each; every grant on the vaults is shared/'s.
+# SHARED. The environment's platform Key Vault, created by shared/ and looked up here (the tenants'
+# shares in their zones' vaults are federated by tenants/); every grant on the vaults is shared/'s.
 #
 # Defined, not deployed: the stateful cluster of the design lives in the backend network with no
 # gateway of its own (sections 3.1 and 4.1), which clusters/dev-int-stateful of the platform repository does
 # not follow yet.
 key_vault_name       = "kv-onek8s-gwc-platform"
 key_vault_namespaces = []
-key_vault_namespace_vaults = {
-  int-fi-example = "kv-onek8s-gwc-int-fi"
-}
 
 # SHARED. The one zone the Gateway's hostnames are published in, onek8s.lol - public, provisioned
 # outside Terraform in rg-onek8s-dns. This cluster's external-dns gets an identity of its own,
@@ -113,33 +108,8 @@ default_node_pool = {
   node_count          = 1
 }
 
-# The `example` team. Its own Flux configuration deploys apps/ of onek8s/aks-fluxcd-example into it -
-# a public repository, read without a credential - and its apps publish themselves through the shared
-# Gateway. It keeps the default closed ingress: a Cilium policy from aks-fluxcd-platform lets the
-# zone gateway's pods in, and nothing else.
-managed_namespaces = {
-  int-fi-example = {
-    # Who owns the application and pays for it: labels platform/team and platform/cost-center, the
-    # annotation platform/contact (design section 2.6; Azure Policy namespace-ownership).
-    owner = {
-      team        = "example"
-      cost_center = "example"
-      contact     = "https://github.com/onek8s/aks-fluxcd-example/issues"
-    }
-    labels = {
-      "platform/zone" = "int-fi"
-    }
-    flux = {
-      url  = "https://github.com/onek8s/aks-fluxcd-example"
-      path = "./apps"
-      # Read every minute, like the platform's repository.
-      sync_interval_seconds = 60
-      substitute = {
-        zone_domain = "int-fi.dev.onek8s.lol"
-      }
-    }
-  }
-}
+# The `example` team's int-fi-example is a tenant (tenants/catalogue/dev/int-fi-example.yaml, apps/ of
+# onek8s/aks-fluxcd-example here): it comes with this cluster once tenants/envs/dev.tfvars lists it.
 
 flux_git_repository = {
   url    = "https://github.com/onek8s/aks-fluxcd-platform"

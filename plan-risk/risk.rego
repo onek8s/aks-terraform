@@ -132,3 +132,15 @@ warn contains msg if {
 	deleted(change)
 	msg := sprintf("%s: the key is deleted or replaced - what it encrypts (KMS data, node disks) cannot be read with the new one", [change.address])
 }
+
+is_namespace(change) if arm_type(change, "Microsoft.ContainerService/managedClusters/managedNamespaces@")
+
+# A tenant's managed namespace deleted (tenants/): with deletePolicy Delete, AKS deletes the Kubernetes
+# namespace and everything the team runs in it. A tenant leaving the state on purpose is forgotten
+# (`removed`), which is no delete.
+warn contains msg if {
+	some change in input.resource_changes
+	is_namespace(change)
+	deleted(change)
+	msg := sprintf("%s: the managed namespace is deleted or replaced - with deletePolicy Delete, AKS deletes the team's namespace and what runs in it", [change.address])
+}

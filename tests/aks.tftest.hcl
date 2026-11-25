@@ -650,992 +650,6 @@ run "no_private_dns_zone_needs_the_public_fqdn" {
   expect_failures = [var.private_dns_zone_mode]
 }
 
-run "a_cluster_with_no_managed_namespaces_creates_none" {
-  command = plan
-
-  assert {
-    condition     = length(azapi_resource.managed_namespace) == 0
-    error_message = "Namespaces are opt-in; an environment that lists none should get none."
-  }
-}
-
-# Listing the names is the whole of it: everything else comes from managed_namespace_defaults.
-run "a_namespace_closes_ingress_to_itself_and_leaves_egress_open" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-      team-search   = {}
-    }
-  }
-
-  assert {
-    condition     = toset(keys(azapi_resource.managed_namespace)) == toset(["team-payments", "team-search"])
-    error_message = "Every name listed in managed_namespaces should get a namespace of its own."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].name == "team-payments"
-    error_message = "The namespace is named by the key, not by anything derived from it."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].parent_id == module.aks.resource_id
-    error_message = "A managed namespace belongs to the cluster."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].type == "Microsoft.ContainerService/managedClusters/managedNamespaces@2026-05-02-preview"
-    error_message = "The namespace should use the same AKS API version as everything else written directly."
-  }
-  assert {
-    condition = alltrue([
-      for namespace in azapi_resource.managed_namespace :
-      namespace.body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
-    ])
-    error_message = "By default only pods of the same namespace should be able to reach into it."
-  }
-  assert {
-    condition = alltrue([
-      for namespace in azapi_resource.managed_namespace :
-      namespace.body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
-    ])
-    error_message = "By default a workload should reach nothing in another namespace."
-  }
-}
-
-# What a namespace says nothing about is left out of the body rather than sent as null: AzAPI tracks
-# only the keys the body declares, and a key sent as null differs from whatever Azure answers with.
-# The quota is the exception - Azure requires one - and has a run of its own further down.
-run "a_namespace_nobody_gave_labels_to_is_sent_none" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  # The pod security labels are always there - a namespace is held to the estate standard whether or
-  # not it says anything - so what is checked here is that nothing else came along with them.
-  assert {
-    condition = toset(keys(azapi_resource.managed_namespace["team-payments"].body.properties.labels)) == toset([
-      "pod-security.kubernetes.io/audit",
-      "pod-security.kubernetes.io/audit-version",
-      "pod-security.kubernetes.io/enforce",
-      "pod-security.kubernetes.io/enforce-version",
-      "pod-security.kubernetes.io/warn",
-      "pod-security.kubernetes.io/warn-version",
-    ])
-    error_message = "No labels were asked for, so only the pod security ones should be sent."
-  }
-  assert {
-    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.annotations)
-    error_message = "No annotations were asked for, so none should be sent."
-  }
-}
-
-# Nothing is deleted or taken over behind anyone's back: an existing namespace of the same name
-# fails the apply, and dropping the entry again leaves the Kubernetes namespace standing.
-run "a_namespace_neither_adopts_nor_deletes_by_default" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.adoptionPolicy == "Never"
-    error_message = "A namespace that already exists should stop the apply rather than be taken over."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.deletePolicy == "Keep"
-    error_message = "Dropping a line from a variables file should not delete a running workload."
-  }
-}
-
-run "a_namespace_overrides_only_the_defaults_it_names" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        network_policy = { ingress = "AllowAll" }
-      }
-      team-search = {
-        network_policy = { egress = "AllowAll" }
-      }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.ingress == "AllowAll"
-    error_message = "A namespace that opens ingress should get what it asked for."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "AllowSameNamespace"
-    error_message = "Overriding ingress should leave egress on the default."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
-    error_message = "A namespace that opens egress should get what it asked for."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
-    error_message = "Overriding egress should leave ingress on the default."
-  }
-}
-
-# One place to move a whole cluster at once, rather than repeating the same override per namespace.
-run "the_estate_wide_defaults_move_every_namespace_that_says_nothing" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      adoption_policy = "IfIdentical"
-      delete_policy   = "Delete"
-      network_policy  = { egress = "DenyAll" }
-      resource_quota  = { cpu_limit = "2", memory_limit = "4Gi" }
-    }
-    managed_namespaces = {
-      team-payments = {}
-      team-search = {
-        network_policy = { egress = "AllowAll" }
-      }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.egress == "DenyAll"
-    error_message = "A namespace that says nothing should follow the estate-wide default."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultNetworkPolicy.egress == "AllowAll"
-    error_message = "A namespace that says otherwise should still win over the default."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.defaultNetworkPolicy.ingress == "AllowSameNamespace"
-    error_message = "Changing the default egress should leave the default ingress alone."
-  }
-  assert {
-    condition = alltrue([
-      for namespace in azapi_resource.managed_namespace :
-      namespace.body.properties.adoptionPolicy == "IfIdentical" && namespace.body.properties.deletePolicy == "Delete"
-    ])
-    error_message = "The adoption and delete policies should follow the defaults as well."
-  }
-  assert {
-    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "cpuRequest", "memoryLimit", "memoryRequest"]
-    error_message = "The default quota should reach every namespace, all four figures of it."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
-    ])
-    error_message = "The figures the defaults do name should reach the namespace, the CPU one as milliCPU."
-  }
-}
-
-run "a_namespace_takes_the_quota_figures_it_names_and_the_defaults_for_the_rest" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      resource_quota = { cpu_limit = "2", memory_limit = "4Gi" }
-    }
-    managed_namespaces = {
-      team-search = {
-        resource_quota = { cpu_limit = "8", memory_request = "1Gi" }
-      }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuRequest == "500m"
-    error_message = "Neither side named a CPU request, so the built-in default should fill it in - Azure takes no namespace without one."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "8000m",
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
-    ])
-    error_message = "A namespace should override the figures it names and inherit the ones it does not."
-  }
-}
-
-# Azure requires the quota on a managed namespace even though the API spec marks it optional: a
-# namespace that arrives without one is refused with "The managed namespace CPU request number is
-# not valid". A namespace that names nothing at all still has to carry all four figures.
-run "a_namespace_that_names_no_quota_still_gets_a_whole_one" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition     = keys(azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota) == ["cpuLimit", "cpuRequest", "memoryLimit", "memoryRequest"]
-    error_message = "A namespace with no quota of its own should still be sent all four figures."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuRequest == "500m",
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryLimit == "4Gi",
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.memoryRequest == "1Gi",
-    ])
-    error_message = "The built-in quota should be the documented one, with the CPU figures in milliCPU."
-  }
-}
-
-# Azure refuses a quota that states CPU in anything but milliCPU, while a manifest writes the same
-# figure either way. Whichever form the variables name it in, what leaves here is milliCPU.
-run "cpu_quota_figures_reach_azure_as_millicpu" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      resource_quota = { cpu_request = "0.5" }
-    }
-    managed_namespaces = {
-      team-payments = {
-        resource_quota = { cpu_limit = "2" }
-      }
-      # Named in milliCPU on both sides, which is the form Azure takes.
-      team-search = {
-        resource_quota = { cpu_limit = "1500m", cpu_request = "0.125" }
-      }
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuLimit == "2000m",
-      azapi_resource.managed_namespace["team-payments"].body.properties.defaultResourceQuota.cpuRequest == "500m",
-    ])
-    error_message = "Whole and fractional cores should be sent as the milliCPU figure they mean."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuLimit == "1500m",
-      azapi_resource.managed_namespace["team-search"].body.properties.defaultResourceQuota.cpuRequest == "125m",
-    ])
-    error_message = "A figure already written in milliCPU should be sent as it stands."
-  }
-}
-
-# Labels and annotations are added to rather than replaced, so an estate-wide set survives a
-# namespace adding one of its own.
-run "namespace_labels_and_annotations_merge_with_the_defaults" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      annotations = { "estate" = "prototype" }
-      labels      = { "cost-centre" = "platform", "tier" = "shared" }
-    }
-    managed_namespaces = {
-      team-search = {
-        annotations = { "owner" = "search" }
-        labels      = { "tier" = "dedicated" }
-      }
-    }
-  }
-
-  assert {
-    condition = azapi_resource.managed_namespace["team-search"].body.properties.labels == tomap({
-      "cost-centre"                                = "platform"
-      "tier"                                       = "dedicated"
-      "pod-security.kubernetes.io/audit"           = "restricted"
-      "pod-security.kubernetes.io/audit-version"   = "latest"
-      "pod-security.kubernetes.io/enforce"         = "restricted"
-      "pod-security.kubernetes.io/enforce-version" = "latest"
-      "pod-security.kubernetes.io/warn"            = "restricted"
-      "pod-security.kubernetes.io/warn-version"    = "latest"
-    })
-    error_message = "A namespace should add to the default labels and win on the keys it repeats."
-  }
-  assert {
-    condition = azapi_resource.managed_namespace["team-search"].body.properties.annotations == tomap({
-      "estate" = "prototype"
-      "owner"  = "search"
-    })
-    error_message = "Annotations should merge the same way the labels do."
-  }
-}
-
-# A NetworkPolicy in a cluster with nothing to enforce it is an object nobody reads: the namespace
-# looks closed in Azure and every pod in the cluster can still reach into it.
-run "warns_about_restricted_namespaces_with_no_network_policy_engine" {
-  command = plan
-
-  variables {
-    advanced_networking = null
-    network_profile = {
-      network_policy    = "none"
-      network_dataplane = "azure"
-    }
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  expect_failures = [check.managed_namespaces_have_something_enforcing_their_network_policies]
-}
-
-run "a_namespace_open_in_both_directions_needs_no_engine_to_enforce_it" {
-  command = plan
-
-  variables {
-    advanced_networking = null
-    network_profile = {
-      network_policy    = "none"
-      network_dataplane = "azure"
-    }
-    managed_namespaces = {
-      team-payments = {
-        network_policy = { egress = "AllowAll", ingress = "AllowAll" }
-      }
-    }
-  }
-
-  assert {
-    condition     = length(local.managed_namespaces_relying_on_network_policy) == 0
-    error_message = "A namespace that restricts nothing has nothing for an engine to enforce."
-  }
-}
-
-run "rejects_a_namespace_name_kubernetes_reserves" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      kube-payments = {}
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_system_namespace_aks_will_not_hand_over" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      gatekeeper-system = {}
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_namespace_name_kubernetes_would_refuse" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      Team_Payments = {}
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_network_policy_rule_azure_does_not_have" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        network_policy = { ingress = "AllowSameCluster" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_delete_policy_azure_does_not_have" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        delete_policy = "Retain"
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_quota_that_is_not_a_kubernetes_quantity" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        resource_quota = { memory_limit = "4GB" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_cpu_quota_azure_cannot_hold" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      # Finer than the milliCPU Azure counts in, which would otherwise be quietly rounded away.
-      team-payments = {
-        resource_quota = { cpu_limit = "0.0005" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_cpu_quota_of_nothing_at_all" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      # Azure takes nothing below 1m, and a quota of zero CPU is not what anybody meant by it.
-      resource_quota = { cpu_request = "0" }
-    }
-  }
-
-  expect_failures = [var.managed_namespace_defaults]
-}
-
-run "rejects_estate_wide_defaults_azure_does_not_have" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      network_policy = { egress = "AllowSameCluster" }
-    }
-  }
-
-  expect_failures = [var.managed_namespace_defaults]
-}
-
-# ----------------------------------------------------------------------------------------------
-# Tenant Flux configurations
-# ----------------------------------------------------------------------------------------------
-
-run "a_namespace_deploys_nothing_unless_it_names_a_repository" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition     = length(azapi_resource.managed_namespace_flux_configuration) == 0
-    error_message = "A managed namespace without flux should get no Flux configuration."
-  }
-  assert {
-    condition     = length(azapi_resource.flux_extension) == 0
-    error_message = "Nothing asks for Flux, so the extension should not be installed."
-  }
-}
-
-run "a_tenant_syncs_its_own_repository_into_its_own_namespace" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url         = "https://github.com/contoso/team-payments-deploy"
-          path        = "./apps"
-          secret_name = "team-payments-deploy-git"
-        }
-      }
-      team-search = {}
-    }
-  }
-
-  assert {
-    condition     = keys(azapi_resource.managed_namespace_flux_configuration) == ["team-payments"]
-    error_message = "Only the namespace that names a repository should get a Flux configuration."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].name == "team-payments"
-    error_message = "The configuration should be named after its namespace."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].type == "Microsoft.KubernetesConfiguration/fluxConfigurations@2024-11-01"
-    error_message = "The configuration should be a Flux configuration of the same API version as the platform's."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].parent_id == module.aks.resource_id
-    error_message = "The configuration should belong to the cluster."
-  }
-  assert {
-    condition = (
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.scope == "namespace"
-      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.namespace == "team-payments"
-    )
-    error_message = "The configuration should be namespace-scoped, in the tenant's own namespace."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.url == "https://github.com/contoso/team-payments-deploy"
-    error_message = "The configuration should sync the tenant's repository."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.repositoryRef.branch == "main"
-    error_message = "The branch should default to main."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.localAuthRef == "team-payments-deploy-git"
-    error_message = "A private repository should be read with the Secret already in the namespace."
-  }
-  assert {
-    condition     = !contains(keys(azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties), "configurationProtectedSettings")
-    error_message = "No credential should pass through Terraform or Azure."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.path == "./apps"
-    error_message = "The Kustomization should apply the configured path."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.postBuild.substitute == { cluster_name = var.name }
-    error_message = "The team's manifests should get the cluster's name, and nothing else, as a post-build variable."
-  }
-  assert {
-    condition = (
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.prune
-      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.wait
-    )
-    error_message = "The Kustomization should prune what leaves the repository and wait for what it applied."
-  }
-  assert {
-    condition = (
-      azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.syncIntervalInSeconds == 300
-      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.syncIntervalInSeconds == 300
-      && azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.retryIntervalInSeconds == 300
-    )
-    error_message = "The repository should be read, applied and retried every five minutes by default."
-  }
-}
-
-# A tenant needs the extension, not the platform's own repository.
-run "a_tenant_alone_installs_flux" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = { url = "https://github.com/contoso/team-payments-deploy" }
-      }
-    }
-  }
-
-  assert {
-    condition     = length(azapi_resource.flux_extension) == 1
-    error_message = "A tenant's Flux configuration should install the extension it runs on."
-  }
-  assert {
-    condition     = length(azapi_resource.flux_configuration) == 0
-    error_message = "Without flux_git_repository there is no platform configuration."
-  }
-}
-
-run "a_public_tenant_repository_is_read_with_no_secret" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url                   = "https://github.com/contoso/team-payments-deploy"
-          branch                = "release"
-          sync_interval_seconds = 60
-        }
-      }
-    }
-  }
-
-  assert {
-    condition     = !contains(keys(azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository), "localAuthRef")
-    error_message = "A public repository should name no Secret."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.gitRepository.repositoryRef.branch == "release"
-    error_message = "The configured branch should be synced."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_flux_configuration["team-payments"].body.properties.kustomizations.apps.retryIntervalInSeconds == 60
-    error_message = "A failed apply should be retried as often as the repository is read."
-  }
-}
-
-run "rejects_a_tenant_repository_url_flux_cannot_read" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = { url = "github.com/contoso/team-payments-deploy" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_tenant_sync_interval_under_a_minute" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url                   = "https://github.com/contoso/team-payments-deploy"
-          sync_interval_seconds = 30
-        }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_tenant_secret_name_kubernetes_would_refuse" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        flux = {
-          url         = "https://github.com/contoso/team-payments-deploy"
-          secret_name = "Team_Payments_Git"
-        }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_tenant_named_after_the_platform_configuration" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      platform = {
-        flux = { url = "https://github.com/contoso/platform-deploy" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-# ----------------------------------------------------------------------------------------------
-# Namespace-scoped access
-# ----------------------------------------------------------------------------------------------
-
-run "a_namespace_grants_nothing_unless_it_is_asked_to" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition     = length(azurerm_role_assignment.managed_namespace) == 0
-    error_message = "A namespace with no access listed should hand nobody anything."
-  }
-}
-
-# The labels the API server's Pod Security Admission controller reads. Nothing else is involved:
-# admission is built into the API server, so a labelled namespace is an enforced one.
-run "a_namespace_is_held_to_the_restricted_standard_by_default" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition = azapi_resource.managed_namespace["team-payments"].body.properties.labels == tomap({
-      "pod-security.kubernetes.io/audit"           = "restricted"
-      "pod-security.kubernetes.io/audit-version"   = "latest"
-      "pod-security.kubernetes.io/enforce"         = "restricted"
-      "pod-security.kubernetes.io/enforce-version" = "latest"
-      "pod-security.kubernetes.io/warn"            = "restricted"
-      "pod-security.kubernetes.io/warn-version"    = "latest"
-    })
-    error_message = "A namespace that says nothing should enforce, audit and warn at restricted."
-  }
-}
-
-# Relaxing enforce is the exception; audit and warn stay put, so the pods that break the standard
-# are still recorded and still warn whoever applies them.
-run "an_exception_relaxes_only_what_it_names" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      observability = {
-        pod_security = { enforce = "privileged" }
-      }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "privileged"
-    error_message = "A namespace that cannot meet the standard should be able to say so."
-  }
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/audit"] == "restricted",
-      azapi_resource.managed_namespace["observability"].body.properties.labels["pod-security.kubernetes.io/warn"] == "restricted",
-    ])
-    error_message = "An exception should stay visible: relaxing enforce must not drag audit and warn down with it."
-  }
-  assert {
-    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
-    error_message = "An exception that is still audited is not a silent one."
-  }
-}
-
-run "a_mode_set_to_none_leaves_its_label_off_entirely" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        pod_security = { warn = "none" }
-      }
-    }
-  }
-
-  assert {
-    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn"])
-    error_message = "A mode nobody wants should leave no label rather than an empty one."
-  }
-  assert {
-    condition     = !can(azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn-version"])
-    error_message = "The version label goes with the mode it belongs to."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "restricted"
-    error_message = "Turning off the warning should leave enforcement alone."
-  }
-}
-
-# `latest` follows the cluster, so an upgrade can tighten the standard under a running workload.
-run "the_standard_can_be_pinned_to_a_kubernetes_version" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      pod_security = { version = "v1.31" }
-    }
-    managed_namespaces = {
-      team-payments = {}
-      team-search = {
-        pod_security = { version = "v1.30" }
-      }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce-version"] == "v1.31"
-    error_message = "A pinned estate-wide version should reach every namespace."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace["team-search"].body.properties.labels["pod-security.kubernetes.io/enforce-version"] == "v1.30"
-    error_message = "A namespace should be able to hold a version of its own."
-  }
-}
-
-run "the_estate_wide_standard_can_be_lowered_for_a_whole_cluster" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      pod_security = { audit = "restricted", enforce = "baseline", warn = "baseline" }
-    }
-    managed_namespaces = {
-      team-payments = {}
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/enforce"] == "baseline",
-      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/warn"] == "baseline",
-      azapi_resource.managed_namespace["team-payments"].body.properties.labels["pod-security.kubernetes.io/audit"] == "restricted",
-    ])
-    error_message = "One place should move the standard for the whole cluster."
-  }
-}
-
-# The labels sit alongside whatever else the namespace carries, rather than replacing it.
-run "pod_security_labels_join_the_labels_a_namespace_already_has" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      labels = { "cost-centre" = "platform" }
-    }
-    managed_namespaces = {
-      team-payments = {
-        labels = { "team" = "payments" }
-      }
-    }
-  }
-
-  assert {
-    condition = azapi_resource.managed_namespace["team-payments"].body.properties.labels == tomap({
-      "cost-centre"                                = "platform"
-      "team"                                       = "payments"
-      "pod-security.kubernetes.io/audit"           = "restricted"
-      "pod-security.kubernetes.io/audit-version"   = "latest"
-      "pod-security.kubernetes.io/enforce"         = "restricted"
-      "pod-security.kubernetes.io/enforce-version" = "latest"
-      "pod-security.kubernetes.io/warn"            = "restricted"
-      "pod-security.kubernetes.io/warn-version"    = "latest"
-    })
-    error_message = "The pod security labels should be added to the namespace labels, not replace them."
-  }
-}
-
-# An exception is fine. An exception nobody can see is what this warns about.
-run "warns_about_an_exception_that_is_neither_enforced_nor_recorded" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      observability = {
-        pod_security = { audit = "none", enforce = "privileged", warn = "none" }
-      }
-    }
-  }
-
-  expect_failures = [check.pod_security_exceptions_stay_on_the_record]
-}
-
-run "an_exception_recorded_by_warn_alone_is_not_warned_about" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      observability = {
-        pod_security = { audit = "none", enforce = "privileged" }
-      }
-    }
-  }
-
-  assert {
-    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
-    error_message = "Either audit or warn at the estate standard is enough to keep an exception visible."
-  }
-}
-
-# Nothing was relaxed, so there is no exception to record - even with audit and warn turned off.
-run "a_namespace_at_the_estate_standard_needs_no_record_of_an_exception" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        pod_security = { audit = "none", warn = "none" }
-      }
-    }
-  }
-
-  assert {
-    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
-    error_message = "A namespace that still enforces the estate standard has made no exception."
-  }
-}
-
-run "rejects_a_pod_security_level_kubernetes_does_not_have" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        pod_security = { enforce = "hardened" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_pod_security_version_that_is_not_one" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        pod_security = { version = "1.31" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-# One place decides the standard, so a hand-written label cannot contradict pod_security.
-run "rejects_a_pod_security_label_written_by_hand" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = {
-        labels = { "pod-security.kubernetes.io/enforce" = "privileged" }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_pod_security_label_written_by_hand_in_the_defaults" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      labels = { "pod-security.kubernetes.io/enforce" = "privileged" }
-    }
-  }
-
-  expect_failures = [var.managed_namespace_defaults]
-}
-
-run "rejects_an_estate_wide_pod_security_level_kubernetes_does_not_have" {
-  command = plan
-
-  variables {
-    managed_namespace_defaults = {
-      pod_security = { enforce = "hardened" }
-    }
-  }
-
-  expect_failures = [var.managed_namespace_defaults]
-}
-
 run "flux_is_told_nothing_it_has_no_value_for" {
   command = plan
 
@@ -1669,8 +683,8 @@ run "the_platform_namespaces_can_be_changed" {
   }
 
   assert {
-    condition     = keys(data.azurerm_user_assigned_identity.key_vault) == ["int-fi-gateway"] && keys(azurerm_federated_identity_credential.key_vault) == ["int-fi-gateway"]
-    error_message = "Only the namespaces key_vault_namespaces names should get a share, with no managed namespaces."
+    condition     = keys(data.azurerm_user_assigned_identity.key_vault) == ["int-fi-gateway"] && keys(azurerm_federated_identity_credential.platform_key_vault) == ["int-fi-gateway"]
+    error_message = "Only the namespaces key_vault_namespaces names should get a share, the tenants' are tenants/'."
   }
 }
 
@@ -1678,13 +692,11 @@ run "rejects_a_namespace_whose_share_would_overlap_another" {
   command = plan
 
   variables {
-    key_vault_name = "kv-aks-test"
-    managed_namespaces = {
-      "team--a" = {}
-    }
+    key_vault_name       = "kv-aks-test"
+    key_vault_namespaces = ["team--a"]
   }
 
-  expect_failures = [azurerm_federated_identity_credential.key_vault]
+  expect_failures = [azurerm_federated_identity_credential.platform_key_vault]
 }
 
 run "rejects_a_vault_name_azure_would_refuse" {
@@ -1723,9 +735,6 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
     key_vault_name       = "kv-sec-test-shared"
     key_vault_namespaces = ["int-fi-gateway"]
     dns_zone_name        = "contoso.com"
-    managed_namespaces = {
-      example = {}
-    }
     flux_git_repository = {
       url  = "https://github.com/example/cluster-config"
       path = "./clusters/aks-test"
@@ -1735,7 +744,7 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
   assert {
     condition = alltrue([
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-sec-test-shared.vault.azure.net/",
-      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_example"),
+      !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_example"),
       contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_int_fi_gateway"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-test",
@@ -1744,7 +753,7 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_private == "false",
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.quote == "\"",
     ])
-    error_message = "The platform Kustomization should be told the vault URL, each namespace's identity and where the zone is."
+    error_message = "The platform Kustomization should be told the vault URL, each platform namespace's identity (no tenant's: tenants/ tells them) and where the zone is."
   }
 }
 
@@ -1824,11 +833,6 @@ run "a_cluster_federates_the_shared_identities_and_grants_nothing" {
     key_vault_name               = "kv-sec-test-shared"
     key_vault_namespaces         = ["flux-system", "int-fi-gateway"]
     entra_admin_group_object_ids = ["22222222-2222-2222-2222-222222222222"]
-    managed_namespaces = {
-      example = {
-        groups = { admin = "33333333-3333-3333-3333-333333333333" }
-      }
-    }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -1843,30 +847,29 @@ run "a_cluster_federates_the_shared_identities_and_grants_nothing" {
   }
   assert {
     condition = alltrue([
-      keys(data.azurerm_user_assigned_identity.key_vault) == ["example", "flux-system", "int-fi-gateway"],
-      data.azurerm_user_assigned_identity.key_vault["example"].name == "id-sec-test-shared-kv-example",
+      keys(data.azurerm_user_assigned_identity.key_vault) == ["flux-system", "int-fi-gateway"],
       data.azurerm_user_assigned_identity.key_vault["int-fi-gateway"].name == "id-sec-test-shared-kv-int-fi-gateway",
-      data.azurerm_user_assigned_identity.key_vault["example"].resource_group_name == "rg-aks-test",
+      data.azurerm_user_assigned_identity.key_vault["int-fi-gateway"].resource_group_name == "rg-aks-test",
     ])
     error_message = "The namespaces' identities should be the environment's shared ones, looked up by their conventional names."
   }
   assert {
     condition = alltrue([
-      keys(azurerm_federated_identity_credential.key_vault) == ["example", "flux-system", "int-fi-gateway"],
-      azurerm_federated_identity_credential.key_vault["example"].name == "aks-aks-test-a",
-      azurerm_federated_identity_credential.key_vault["example"].user_assigned_identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-test-shared-kv-example",
-      azurerm_federated_identity_credential.key_vault["example"].subject == "system:serviceaccount:example:key-vault",
+      keys(azurerm_federated_identity_credential.platform_key_vault) == ["flux-system", "int-fi-gateway"],
+      azurerm_federated_identity_credential.platform_key_vault["int-fi-gateway"].name == "aks-aks-test-a",
+      azurerm_federated_identity_credential.platform_key_vault["int-fi-gateway"].user_assigned_identity_id == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sec-test-shared-kv-example",
+      azurerm_federated_identity_credential.platform_key_vault["int-fi-gateway"].subject == "system:serviceaccount:int-fi-gateway:key-vault",
     ])
     error_message = "The cluster should add a credential of its own to each shared identity."
   }
   assert {
-    condition     = sort(keys(azurerm_role_assignment.network_contributor)) == tolist(["node_subnet", "pod_subnet"]) && keys(azurerm_role_assignment.managed_namespace) == ["example/namespace_user/33333333-3333-3333-3333-333333333333"]
-    error_message = "The cluster's own grants are the network's and the namespace's kubeconfig; every grant on the vaults is shared/'s."
+    condition     = sort(keys(azurerm_role_assignment.network_contributor)) == tolist(["node_subnet", "pod_subnet"])
+    error_message = "The cluster's own grants are the network's; every grant on the vaults is shared/'s, a namespace's kubeconfig tenants/'."
   }
   assert {
     condition = alltrue([
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_url == "https://kv-sec-test-shared.vault.azure.net/",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_client_id_example == "88888888-8888-8888-8888-888888888888",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.key_vault_client_id_int_fi_gateway == "88888888-8888-8888-8888-888888888888",
     ])
     error_message = "The Flux repository should be told the shared vault and the shared identities' client IDs."
   }
@@ -2255,15 +1258,8 @@ run "a_namespace_moves_to_node_pools_of_its_own" {
         "2" = {}
       }
     }
-    managed_namespaces = {
-      int-se-example = {
-        node_pool = { name = "ex", kinds = ["", "spot"] }
-      }
-      int-fi-example = {}
-      team-search    = {}
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
+    namespace_node_pools = {
+      int-se-example = { name = "ex", kinds = ["", "spot"] }
     }
   }
 
@@ -2283,23 +1279,6 @@ run "a_namespace_moves_to_node_pools_of_its_own" {
     )
     error_message = "The namespace's pools carry the zone's labels and taints and platform/pool, in the zone's subnets; the shared pools do not."
   }
-  assert {
-    condition = (
-      azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/node-selector"] == "platform/pool=int-se-example" &&
-      jsondecode(azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/defaultTolerations"]) == [{ key = "platform/pool", operator = "Equal", value = "int-se-example", effect = "NoSchedule" }] &&
-      contains(jsondecode(azapi_resource.managed_namespace["int-se-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]), { key = "platform/pool", operator = "Equal", value = "int-se-example", effect = "NoSchedule" })
-    )
-    error_message = "The moved namespace selects and tolerates its pool through its annotations, and its whitelist allows that toleration."
-  }
-  assert {
-    condition = (
-      !contains(keys(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations), "scheduler.alpha.kubernetes.io/node-selector") &&
-      contains(jsondecode(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]), { key = "platform/zone", operator = "Equal", value = "int-fi", effect = "NoSchedule" }) &&
-      !anytrue([for t in jsondecode(azapi_resource.managed_namespace["int-fi-example"].body.properties.annotations["scheduler.alpha.kubernetes.io/tolerationsWhitelist"]) : t.key == "platform/pool"]) &&
-      !can(azapi_resource.managed_namespace["team-search"].body.properties.annotations)
-    )
-    error_message = "Another zone namespace stays on the shared pools and may tolerate its zone but no namespace's pool; a namespace outside the zones gets no placement annotations."
-  }
 }
 
 run "a_namespace_pool_needs_a_zone_namespace" {
@@ -2310,13 +1289,8 @@ run "a_namespace_pool_needs_a_zone_namespace" {
       int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
     }
     zone_node_pools = {}
-    managed_namespaces = {
-      team-search = {
-        node_pool = { name = "ts" }
-      }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
+    namespace_node_pools = {
+      team-search = { name = "ts" }
     }
   }
 
@@ -2356,9 +1330,6 @@ run "an_external_cluster_holds_external_zones_and_tells_flux_its_exposure" {
       ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
       ext-se = { node_subnet_name = "snet-ext-se-nodes", pod_subnet_name = "snet-ext-se-pods" }
     }
-    managed_namespaces = {
-      ext-fi-orders = { labels = { "platform/zone" = "ext-fi" } }
-    }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -2390,19 +1361,6 @@ run "an_external_cluster_refuses_an_internal_zone" {
 
   # Two zones of one country are refused by zone_node_pools too: they would name the same pools.
   expect_failures = [var.exposure, var.zone_node_pools]
-}
-
-run "an_internal_cluster_refuses_an_external_namespace" {
-  command = plan
-
-  variables {
-    exposure = "int"
-    managed_namespaces = {
-      ext-fi-orders = { labels = { "platform/zone" = "ext-fi" } }
-    }
-  }
-
-  expect_failures = [var.exposure]
 }
 
 run "an_external_cluster_writes_no_internal_dns" {
@@ -2442,36 +1400,6 @@ run "isolation_zones_without_zone_node_pools_are_warned_about" {
   expect_failures = [check.isolation_zones_need_nodes]
 }
 
-run "a_namespace_reads_its_zone_vault_on_a_shared_vault" {
-  command = plan
-
-  variables {
-    key_vault_name       = "kv-sec-test-platform"
-    key_vault_namespaces = ["ext-fi-gateway"]
-    key_vault_namespace_vaults = {
-      ext-fi-orders = "kv-sec-test-ext-fi"
-    }
-    managed_namespaces = {
-      ext-fi-orders = {}
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      for key in ["key_vault_url_ext_fi_gateway", "key_vault_url_ext_fi_orders", "key_vault_client_id_ext_fi_orders"] :
-      contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), key)
-    ])
-    error_message = "The Flux repository should be told each namespace's vault and identity."
-  }
-  assert {
-    condition     = keys(data.azurerm_key_vault.namespace) == ["kv-sec-test-ext-fi"]
-    error_message = "The zone vault should be looked up."
-  }
-}
-
 run "the_internal_zones_are_granted_to_external_dns" {
   command = plan
 
@@ -2493,35 +1421,6 @@ run "the_internal_zones_are_granted_to_external_dns" {
   }
 }
 
-run "a_tenant_gets_the_substitutes_it_is_given" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      ext-fi-orders = {
-        flux = {
-          url        = "https://github.com/example/orders"
-          substitute = { zone_domain = "ext-fi.test.contoso.com" }
-        }
-      }
-    }
-  }
-
-  assert {
-    condition = (
-      azapi_resource.managed_namespace_flux_configuration["ext-fi-orders"].body.properties.kustomizations.apps.postBuild.substitute.zone_domain == "ext-fi.test.contoso.com" &&
-      azapi_resource.managed_namespace_flux_configuration["ext-fi-orders"].body.properties.kustomizations.apps.postBuild.substitute.cluster_name == "aks-test"
-    )
-    error_message = "A tenant's substitutes should reach its Flux configuration next to cluster_name."
-  }
-}
-
-# ----------------------------------------------------------------------------------------------
-# Image Integrity
-# ----------------------------------------------------------------------------------------------
-
-# Ratify reads the signatures and the signing certificate as the environment's shared identity, through
-# this cluster's credential for its service account, and Flux is told what to configure it with.
 run "image_integrity_federates_ratify_with_the_shared_identity" {
   command = plan
 
@@ -2662,240 +1561,6 @@ run "rejects_an_unknown_log_category" {
 
 # Who owns a namespace and pays for it (design section 2.6): the team and cost centre as labels, the
 # contact and the repository as annotations - what Azure Policy's namespace-ownership rule expects.
-run "a_namespace_names_its_owner_in_labels_and_annotations" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      ext-fi-payments = {
-        owner = {
-          team        = "payments"
-          cost_center = "cc-4711"
-          contact     = "payments-team@example.com"
-        }
-        flux = {
-          url = "https://github.com/contoso/payments"
-        }
-      }
-    }
-  }
-
-  assert {
-    condition = (
-      azapi_resource.managed_namespace["ext-fi-payments"].body.properties.labels["platform/team"] == "payments"
-      && azapi_resource.managed_namespace["ext-fi-payments"].body.properties.labels["platform/cost-center"] == "cc-4711"
-    )
-    error_message = "The owner's team and cost centre should be the namespace's platform/team and platform/cost-center labels."
-  }
-  assert {
-    condition = azapi_resource.managed_namespace["ext-fi-payments"].body.properties.annotations == tomap({
-      "platform/contact"    = "payments-team@example.com"
-      "platform/repository" = "https://github.com/contoso/payments"
-    })
-    error_message = "The contact and the namespace's repository should be annotations."
-  }
-}
-
-run "rejects_an_owner_that_is_not_a_label_value" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      ext-fi-payments = {
-        owner = {
-          team        = "Payments Team"
-          cost_center = "cc-4711"
-          contact     = "payments-team@example.com"
-        }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_owner_labels_set_by_hand" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      ext-fi-payments = {
-        labels = { "platform/team" = "someone-else" }
-        owner = {
-          team        = "payments"
-          cost_center = "cc-4711"
-          contact     = "payments-team@example.com"
-        }
-      }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-# managed_namespaces[*].groups: an Entra ID group per built-in role, bound inside the namespace by a
-# RoleBinding that a Flux configuration of the namespace's own applies, one Kustomization per role.
-run "namespace_groups_get_a_role_binding_each_through_flux" {
-  command = plan
-
-  variables {
-    flux_git_repository = {
-      url  = "https://github.com/example/cluster-config"
-      path = "./clusters/aks-test"
-    }
-    managed_namespaces = {
-      team-payments = {
-        groups = {
-          view  = "11111111-1111-1111-1111-111111111111"
-          edit  = "22222222-2222-2222-2222-222222222222"
-          admin = "33333333-3333-3333-3333-333333333333"
-        }
-      }
-      # One role only: no binding for the other two.
-      team-search = {
-        groups = { view = "AAAAAAAA-4444-4444-4444-444444444444" }
-      }
-      team-batch = {}
-    }
-  }
-
-  assert {
-    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration)) == toset(["team-payments", "team-search"])
-    error_message = "Every namespace that names a group, and only those, should get a Flux configuration for its bindings."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].name == "team-payments-access"
-    error_message = "A namespace's binding configuration should be named <namespace>-access."
-  }
-  assert {
-    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations)) == toset(["view", "edit", "admin"])
-    error_message = "Every role that names a group should get a Kustomization."
-  }
-  assert {
-    condition     = toset(keys(azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations)) == toset(["view"])
-    error_message = "A role without a group should get no Kustomization."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.path == "./infrastructure/namespace-access/edit"
-    error_message = "A binding should be applied from its role's directory under namespace_access_path: Azure refuses two Kustomizations on one path."
-  }
-  assert {
-    condition = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.edit.postBuild.substitute == {
-      namespace       = "team-payments"
-      role            = "edit"
-      group_object_id = "22222222-2222-2222-2222-222222222222"
-    }
-    error_message = "A binding's Kustomization should be told its namespace, its role and its group."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-search"].body.properties.kustomizations.view.postBuild.substitute.group_object_id == "aaaaaaaa-4444-4444-4444-444444444444"
-    error_message = "The group's object ID should be sent in lower case, as Entra ID puts it into the token."
-  }
-  assert {
-    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.prune
-    error_message = "A binding's Kustomization should prune, so that removing the group removes the binding."
-  }
-  assert {
-    condition = (
-      azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.scope == "cluster"
-      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.namespace == "flux-system"
-      && azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.gitRepository.url == "https://github.com/example/cluster-config"
-    )
-    error_message = "The binding configuration should read the cluster's repository at cluster scope from flux-system."
-  }
-  assert {
-    condition     = toset(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations)) == toset(["platform"])
-    error_message = "The platform configuration should be unchanged by the bindings."
-  }
-}
-
-# Each group's members can fetch a kubeconfig for the namespace, and only for it.
-run "namespace_groups_get_namespace_user_on_their_namespace" {
-  command = plan
-
-  variables {
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-    managed_namespaces = {
-      team-payments = {
-        groups = {
-          view = "11111111-1111-1111-1111-111111111111"
-          edit = "22222222-2222-2222-2222-222222222222"
-        }
-      }
-    }
-  }
-
-  assert {
-    condition = toset(keys(azurerm_role_assignment.managed_namespace)) == toset([
-      "team-payments/namespace_user/11111111-1111-1111-1111-111111111111",
-      "team-payments/namespace_user/22222222-2222-2222-2222-222222222222",
-    ])
-    error_message = "Every group should get Namespace User on its namespace, once."
-  }
-  assert {
-    condition = alltrue([
-      for assignment in azurerm_role_assignment.managed_namespace :
-      assignment.role_definition_name == "Azure Kubernetes Service Namespace User" && assignment.principal_type == "Group"
-    ])
-    error_message = "The groups should get Azure Kubernetes Service Namespace User, as groups."
-  }
-}
-
-run "namespace_access_path_can_be_moved" {
-  command = plan
-
-  variables {
-    flux_git_repository   = { url = "https://github.com/example/cluster-config" }
-    namespace_access_path = "./rbac"
-    managed_namespaces = {
-      team-payments = { groups = { admin = "33333333-3333-3333-3333-333333333333" } }
-    }
-  }
-
-  assert {
-    condition     = azapi_resource.managed_namespace_access_flux_configuration["team-payments"].body.properties.kustomizations.admin.path == "./rbac/admin"
-    error_message = "The bindings should be applied from namespace_access_path."
-  }
-}
-
-run "namespace_groups_without_flux_are_warned_about" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = { groups = { view = "11111111-1111-1111-1111-111111111111" } }
-    }
-  }
-
-  expect_failures = [check.namespace_groups_need_flux]
-}
-
-run "rejects_a_namespace_group_that_is_not_an_object_id" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      team-payments = { groups = { edit = "team-payments-developers" } }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
-run "rejects_a_namespace_with_groups_and_a_name_too_long_for_its_kustomizations" {
-  command = plan
-
-  variables {
-    managed_namespaces = {
-      "team-payments-with-a-name-far-too-long-to-be-labelled" = { groups = { view = "11111111-1111-1111-1111-111111111111" } }
-    }
-  }
-
-  expect_failures = [var.managed_namespaces]
-}
-
 run "traefik_serves_every_gateway_from_a_flux_configuration_of_its_own" {
   command = plan
 
@@ -2991,12 +1656,6 @@ run "a_zones_traefik_watches_only_the_zones_namespaces" {
       int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
       int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
     }
-    managed_namespaces = {
-      int-se-payments = { labels = { "platform/zone" = "int-se" } }
-      int-fi-payments = { labels = { "platform/zone" = "int-fi" } }
-      int-fi-example  = { labels = { "platform/zone" = "int-fi" } }
-      no-zone         = {}
-    }
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
@@ -3004,11 +1663,12 @@ run "a_zones_traefik_watches_only_the_zones_namespaces" {
   }
 
   assert {
-    condition = (
-      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[int-fi-gateway,int-fi-example,int-fi-payments]" &&
-      azapi_resource.traefik_flux_configuration["int-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[int-se-gateway,int-se-payments]"
-    )
-    error_message = "A zone's Traefik should watch its gateway namespace and the zone's application namespaces, nothing of another zone's."
+    condition = alltrue([
+      for zone in ["int-fi", "int-se"] :
+      !contains(keys(azapi_resource.traefik_flux_configuration[zone].body.properties.kustomizations.gateway.postBuild.substitute), "gateway_watch_namespaces")
+      && azapi_resource.traefik_flux_configuration[zone].body.properties.kustomizations.gateway.postBuild.substituteFrom == [{ kind = "ConfigMap", name = "tenants-${zone}", optional = false }]
+    ])
+    error_message = "A zone's Traefik should read the namespaces it watches from the zone's tenants ConfigMap (tenants/), with nothing inline to fall back on."
   }
 }
 
@@ -3204,9 +1864,13 @@ run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
     error_message = "The platform gateway's Traefik should watch platform-gateway and flux-system, where the webhook route is."
   }
   assert {
+    condition     = !contains(keys(azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild), "substituteFrom")
+    error_message = "The platform gateway's list is the cell's own: it reads no tenants ConfigMap."
+  }
+  assert {
     condition = alltrue([
-      contains(keys(azurerm_federated_identity_credential.key_vault), "flux-system"),
-      azurerm_federated_identity_credential.key_vault["flux-system"].subject == "system:serviceaccount:flux-system:key-vault",
+      contains(keys(azurerm_federated_identity_credential.platform_key_vault), "flux-system"),
+      azurerm_federated_identity_credential.platform_key_vault["flux-system"].subject == "system:serviceaccount:flux-system:key-vault",
       contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_flux_system"),
     ])
     error_message = "flux-system should get a share of the vault to read the webhook's token with."

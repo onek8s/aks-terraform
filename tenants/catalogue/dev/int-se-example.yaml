@@ -1,0 +1,30 @@
+# The `example` team's application in Sweden's zone (design section 2.6: one namespace per application and
+# zone, `<zone>-<app>`): onek8s/aks-fluxcd-example's firewall-egress/ - aks-hello on the zone's nodes, with
+# its weather forecast from the internet - deployed into every cell of int-se, its routes on the zone's
+# gateway. Inside the cluster its own namespace only; outside it, the zone's platform policy lets it leave
+# and the hub firewall allows what its rule file names (azure-landing-zone firewall-applications/,
+# proposed by the egress agent).
+zone: int-se
+# Who owns the application and pays for it: labels platform/team and platform/cost-center, the annotation
+# platform/contact (design section 2.6; Azure Policy namespace-ownership).
+owner:
+  team: example
+  cost_center: example
+  contact: https://github.com/onek8s/aks-fluxcd-example/issues
+# On node pools of its own (design section 2.3): the cells' namespace_node_pools hold them (se2ex and
+# se2exspot in aks-dev-int-stateless-az3), tainted and labelled platform/pool=int-se-example; the
+# namespace's annotations place its pods.
+dedicated_node_pool: true
+network_policy:
+  ingress: AllowSameNamespace
+  egress: AllowSameNamespace
+flux:
+  url: https://github.com/onek8s/aks-fluxcd-example
+  path: ./firewall-egress
+  # Read every minute, like the platform's repository.
+  sync_interval_seconds: 60
+  # The zone's domain for the team's routes; home_cell: the cell that publishes the team's internal
+  # names (design section 3.1) - az3, the only cell of int-se.
+  substitute:
+    zone_domain: int-se.dev.onek8s.lol
+    home_cell: aks-dev-int-stateless-az3

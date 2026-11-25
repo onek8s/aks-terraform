@@ -56,6 +56,19 @@ jobs:
         working-directory: shared
         run: terraform test
 
+      # The environment's tenants, a root module of their own.
+      - name: Initialize tenants/
+        working-directory: tenants
+        run: terraform init -backend=false -input=false
+
+      - name: Validate tenants/
+        working-directory: tenants
+        run: terraform validate
+
+      - name: Test tenants/
+        working-directory: tenants
+        run: terraform test
+
   plan-risk:
     name: Plan risk rules
     runs-on: ubuntu-latest
