@@ -1261,6 +1261,9 @@ run "a_namespace_moves_to_node_pools_of_its_own" {
     namespace_node_pools = {
       int-se-example = { name = "ex", kinds = ["", "spot"] }
     }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
+    }
   }
 
   assert {
@@ -1291,6 +1294,9 @@ run "a_namespace_pool_needs_a_zone_namespace" {
     zone_node_pools = {}
     namespace_node_pools = {
       team-search = { name = "ts" }
+    }
+    flux_git_repository = {
+      url = "https://github.com/example/cluster-config"
     }
   }
 
