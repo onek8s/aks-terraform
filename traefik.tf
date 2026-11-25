@@ -22,8 +22,8 @@ locals {
         namespace = "${zone}-gateway"
         exposure  = startswith(zone, "int-") ? "int" : "ext"
         internal  = startswith(zone, "int-")
-        # From the tenants' ConfigMap.
-        watch_namespaces = null
+        # None here: from the tenants' ConfigMap.
+        watch_namespaces = tolist([])
       }
     },
     local.flux_github_webhook_enabled ? {
@@ -31,7 +31,7 @@ locals {
         namespace        = "platform-gateway"
         exposure         = "ext"
         internal         = false
-        watch_namespaces = ["platform-gateway", "flux-system"]
+        watch_namespaces = tolist(["platform-gateway", "flux-system"])
       }
     } : {},
   )
@@ -80,10 +80,10 @@ locals {
                     quote             = "\""
                   },
                   # A YAML flow sequence, brackets included: namespace names need no quotes.
-                  gateway.watch_namespaces == null ? {} : { gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]" },
+                  length(gateway.watch_namespaces) == 0 ? {} : { gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]" },
                 )
               },
-              gateway.watch_namespaces != null ? {} : {
+              length(gateway.watch_namespaces) > 0 ? {} : {
                 substituteFrom = [{ kind = "ConfigMap", name = "tenants-${name}", optional = false }]
               },
             )
