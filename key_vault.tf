@@ -27,10 +27,11 @@ data "azurerm_user_assigned_identity" "key_vault" {
   resource_group_name = var.resource_group_name
 }
 
-# The cluster's credential on each identity, named after the cluster. An identity carries one per
+# The cluster's credential on each platform namespace's identity, named after the cluster (the tenants'
+# are tenants/'). An identity carries one per
 # cluster of the environment - Azure allows 20 - and each is destroyed with its cluster, leaving the
 # identity to the rest.
-resource "azurerm_federated_identity_credential" "key_vault" {
+resource "azurerm_federated_identity_credential" "platform_key_vault" {
   for_each = local.key_vault_namespaces
 
   name                      = "aks-${var.name}"
@@ -47,5 +48,38 @@ resource "azurerm_federated_identity_credential" "key_vault" {
       condition     = !strcontains(each.key, "--")
       error_message = "${each.key} cannot be given a share of Key Vault ${coalesce(var.key_vault_name, "-")}: a namespace owns the secrets named `<namespace>--...`, and a name with `--` in it would overlap with another namespace's. Rename the namespace, or leave it out of key_vault_namespaces."
     }
+  }
+}
+
+# Until 2026-11 this resource held every namespace's credential, the tenants' too: the platform's
+# namespaces move to platform_key_vault, the tenants' are left to tenants/, which imported them.
+moved {
+  from = azurerm_federated_identity_credential.key_vault["flux-system"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["flux-system"]
+}
+moved {
+  from = azurerm_federated_identity_credential.key_vault["platform-gateway"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["platform-gateway"]
+}
+moved {
+  from = azurerm_federated_identity_credential.key_vault["int-fi-gateway"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["int-fi-gateway"]
+}
+moved {
+  from = azurerm_federated_identity_credential.key_vault["int-se-gateway"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["int-se-gateway"]
+}
+moved {
+  from = azurerm_federated_identity_credential.key_vault["ext-fi-gateway"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["ext-fi-gateway"]
+}
+moved {
+  from = azurerm_federated_identity_credential.key_vault["ext-se-gateway"]
+  to   = azurerm_federated_identity_credential.platform_key_vault["ext-se-gateway"]
+}
+removed {
+  from = azurerm_federated_identity_credential.key_vault
+  lifecycle {
+    destroy = false
   }
 }

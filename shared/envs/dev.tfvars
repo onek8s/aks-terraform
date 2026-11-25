@@ -183,32 +183,22 @@ image_signing = {
   subject = "CN=OneK8s dev image signing, O=OneK8s, ST=Uusimaa, C=FI"
 }
 
-# Every namespace with a share of a vault in any of the clusters. In the platform vault: flux-system
+# The platform's namespaces with a share of the platform vault in any of the clusters: flux-system
 # (the Grafana Cloud credentials of the observability chart) and each zone's `<zone>-gateway` (its
-# listener certificate, `<namespace>--wildcard`). In a zone's vault: every application namespace of
-# the zone - `<zone>-<app>`, a managed namespace of the clusters. A cluster's plan fails on a namespace
-# missing here, since its identity is not there to look up. An internal cell has no platform gateway:
+# listener certificate, `<namespace>--wildcard`). A cluster's plan fails on a namespace missing here,
+# since its identity is not there to look up. The application namespaces' shares, in their zones'
+# vaults, come from the tenant catalogue below. An internal cell has no platform gateway:
 # it has no public entry point (behind labfw a public load balancer cannot answer).
 key_vault_namespaces = {
   flux-system    = {}
   int-fi-gateway = {}
   int-se-gateway = {}
-  # Its groups get on its secrets what their Kubernetes role gets on Secrets (design section 2.5, D49):
-  # the same object IDs as managed_namespaces.int-fi-example.groups in the cells' tfvars - the lab
-  # groups created for ext-fi-example (grp-onek8s-dev-ext-fi-example-<role>), reused.
-  int-fi-example = {
-    zone = "int-fi"
-    groups = {
-      view  = "6d9ae939-5e03-4ddb-b378-baa7fa5b5180"
-      edit  = "88ba3f87-2d13-46ea-8cff-eeccf6cbd0bc"
-      admin = "71438fbc-0666-4d82-be17-54b61236d657"
-    }
-  }
-  # The example team in Sweden's zone, on the lab's cell az3: no groups yet.
-  int-se-example = {
-    zone = "int-se"
-  }
 }
+
+# The tenants (tenants/catalogue/dev/, one file per application namespace, deployed by tenants/): each
+# gets its identity and its zone vault's share here - its groups get on its secrets what their Kubernetes
+# role gets on Secrets (design section 2.5).
+tenant_catalogue_dir = "../tenants/catalogue/dev"
 
 # The platform viewers (design section 2.6, soft multi-tenancy): list the namespaces of the cells and the
 # secrets of the vaults - names only - through a custom role at rg-aks-dev, so the Azure portal's

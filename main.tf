@@ -400,40 +400,6 @@ check "cluster_cidrs_do_not_overlap_the_network" {
   }
 }
 
-# A managed namespace that restricts ingress or egress writes a Kubernetes `NetworkPolicy`, and a
-# `NetworkPolicy` in a cluster with nothing to enforce it is an object nobody reads: the namespace
-# looks closed in Azure and every pod in the cluster can still reach into it. Terraform warns rather
-# than refuses, because a cluster can legitimately run its own policy engine - Cilium installed by
-# hand, say - which `network_profile.network_policy` knows nothing about.
-check "managed_namespaces_have_something_enforcing_their_network_policies" {
-  assert {
-    condition     = var.network_profile.network_policy != "none" || length(local.managed_namespaces_relying_on_network_policy) == 0
-    error_message = "${var.name} has network_profile.network_policy = \"none\", so nothing in it enforces a Kubernetes NetworkPolicy - and the restricted default policies of ${join(", ", local.managed_namespaces_relying_on_network_policy)} are written but never applied. Set network_profile.network_policy to \"cilium\", \"azure\" or \"calico\", or set network_policy = { egress = \"AllowAll\", ingress = \"AllowAll\" } on those namespaces to say that the boundary is drawn somewhere else."
-  }
-}
-
-# An exception to the estate-wide Pod Security Standard is a normal thing to need - a monitoring
-# agent wants the host network, a build runner wants a privileged container - and stating it on the
-# namespace is how it is meant to be done. Turning off `audit` and `warn` along with `enforce` is
-# what this warns about: the namespace then runs whatever it likes, nothing is refused, and nothing
-# anywhere records that it happened. Leave one of the two at the estate standard and the exception
-# stays visible in the audit log without blocking the workload.
-check "pod_security_exceptions_stay_on_the_record" {
-  assert {
-    condition     = length(local.managed_namespaces_with_silent_pod_security_exceptions) == 0
-    error_message = "${join(", ", local.managed_namespaces_with_silent_pod_security_exceptions)} of ${var.name} enforce${length(local.managed_namespaces_with_silent_pod_security_exceptions) == 1 ? "s" : ""} a weaker Pod Security Standard than managed_namespace_defaults.pod_security.enforce (${var.managed_namespace_defaults.pod_security.enforce}) and audit or warn nothing at that standard either, so a pod that breaks it is neither refused nor recorded. Leave pod_security.audit or pod_security.warn at \"${var.managed_namespace_defaults.pod_security.enforce}\" on those namespaces."
-  }
-}
-
-# The role bindings of managed_namespaces[*].groups live inside the cluster and are applied by the
-# cluster's Flux configuration; a cluster without one gets the namespaces and no bindings in them.
-check "namespace_groups_need_flux" {
-  assert {
-    condition     = local.flux_enabled || length(local.managed_namespace_role_bindings) == 0
-    error_message = "${var.name} has no flux_git_repository, so the ${length(local.managed_namespace_role_bindings)} role binding(s) of managed_namespaces[*].groups are not applied: they are delivered by the cluster's Flux configuration. Set flux_git_repository, or bind those groups inside the cluster some other way."
-  }
-}
-
 # The Flux webhook's Receiver is reconciled by the cluster's Flux repository, reads its token from the
 # vault and is reached by GitHub through the platform gateway.
 check "flux_github_webhook_has_a_repository_a_vault_and_a_gateway" {
@@ -537,81 +503,30 @@ resource "azapi_resource" "flux_configuration" {
   depends_on = [azapi_resource.flux_extension]
 }
 
-# The role bindings of a managed namespace's groups - see managed_namespace_access_flux_configurations.
-# Named `<namespace>-access`; its Kustomizations are `<namespace>-access-<role>` in flux-system.
-resource "azapi_resource" "managed_namespace_access_flux_configuration" {
-  for_each = local.managed_namespace_access_flux_configurations
-
-  name      = "${each.key}-access"
-  parent_id = module.aks.resource_id
-  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
-  body      = each.value
-
-  # The namespace is there before a binding is put into it.
-  depends_on = [azapi_resource.flux_extension, azapi_resource.managed_namespace]
-}
-
-# A tenant: a managed namespace that deploys itself from a repository of its own - see
-# managed_namespace_flux_configurations. One configuration per namespace, so each team's sync status
-# is a resource of its own in the portal's GitOps view rather than buried in the platform's.
-resource "azapi_resource" "managed_namespace_flux_configuration" {
-  for_each = local.managed_namespace_flux_configurations
-
-  name      = each.key
-  parent_id = module.aks.resource_id
-  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
-  body      = each.value
-
-  # The namespace is AKS's to create, with its quota and default policies, before Flux puts anything
-  # in it.
-  depends_on = [azapi_resource.flux_extension, azapi_resource.managed_namespace]
-}
-
-# The namespaces AKS creates and keeps inside the cluster. A managed namespace is an Azure resource
-# rather than a `kubectl apply`: AKS reconciles the Kubernetes namespace, the default `NetworkPolicy`
-# and the default `ResourceQuota` from it, so a namespace survives being deleted by hand inside the
-# cluster and Azure RBAC can be scoped to it. That is why they are here rather than left to whatever
-# deploys workloads: the boundary a namespace draws is set up before anything lands in it.
-#
-# Every namespace closes ingress to its own namespace and leaves egress open unless it says
-# otherwise - see managed_namespace_defaults. These are the *default* policies of the namespace, not
-# a ceiling: Kubernetes network policies are additive, so a policy applied inside the namespace can
-# only widen what these permit.
-#
-# Written with AzAPI rather than through the module's own namespace submodule for the same reason
-# the upgrade windows are: that submodule writes every property into the body, including the ones a
-# namespace does not set, while AzAPI tracks only what the body declares - so a namespace that sets
-# no labels or annotations sends none rather than sending null and differing from whatever Azure
-# answers with. The quota is not one of those: Azure requires it on every managed namespace, which
-# is why one is always sent - see managed_namespace_resource_quota_inputs.
-resource "azapi_resource" "managed_namespace" {
-  for_each = local.managed_namespace_properties
-
-  location  = var.location
-  name      = each.key
-  parent_id = module.aks.resource_id
-  type      = "Microsoft.ContainerService/managedClusters/managedNamespaces@${local.aks_api_version}"
-  body = {
-    properties = each.value
+# The tenants left this state in 2026-11 for their own (tenants/, design section 3.3): their managed
+# namespaces, Flux configurations and namespace grants are tenants/' now, which imported them. Forgotten
+# here, never destroyed.
+removed {
+  from = azapi_resource.managed_namespace
+  lifecycle {
+    destroy = false
   }
-  # AzAPI's embedded AKS schema does not cover that API version yet. Azure still validates it.
-  schema_validation_enabled = false
-
-  # After the whole module, like the Flux extension: AKS runs one operation on a cluster at a time.
-  depends_on = [module.aks]
 }
-
-# A kubeconfig for the namespace alone, for the groups of `managed_namespaces[*].groups`: `Azure
-# Kubernetes Service Namespace User` on the namespace resource lets a member run `az aks namespace
-# get-credentials` and reach that one namespace, with the rights the group's RoleBinding gives it there
-# - no cluster-wide grant at all, which is the point of managing namespaces here.
-resource "azurerm_role_assignment" "managed_namespace" {
-  for_each = local.managed_namespace_user_grants
-
-  principal_id         = each.value.group_object_id
-  scope                = azapi_resource.managed_namespace[each.value.namespace].id
-  role_definition_name = "Azure Kubernetes Service Namespace User"
-  # Stated for the same reason it is on the cluster grants: a group created moments ago has not
-  # replicated everywhere yet, and Azure fails an assignment to a principal it cannot look up.
-  principal_type = "Group"
+removed {
+  from = azapi_resource.managed_namespace_flux_configuration
+  lifecycle {
+    destroy = false
+  }
+}
+removed {
+  from = azapi_resource.managed_namespace_access_flux_configuration
+  lifecycle {
+    destroy = false
+  }
+}
+removed {
+  from = azurerm_role_assignment.managed_namespace
+  lifecycle {
+    destroy = false
+  }
 }

@@ -10,7 +10,7 @@ something here changes; history lives in Git and in the design's tags (v1.15 is 
 | Repo | Role |
 |---|---|
 | `onek8s.github.io` | The requirements and the design. `requirements/0.x` (`0.2-requirements.md`, `0.3-acceptance-criteria.md`) are human-owned: a change needs olljanat's approval. `design/<part>.<page>-*.md` (e.g. `design/2.3-node-pools.md`, `design/7.2-decisions.md`, `design/7.3-open-questions.md`) is AI-owned, reviewed by olljanat-ai. Code follows the design; change it when a decision changes it. Sections were renumbered on 2026-10-17 (#58, #61; mappings in that repo's CLAUDE.md) - older notes and commits cite the old numbers. |
-| `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5) and what an environment's clusters share (`shared/`: cell VNets + NSGs + route tables, platform and zone Key Vaults, private DNS, Traffic Manager, ACR). All deployment and status workflows live here. |
+| `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5), what an environment's clusters share (`shared/`: cell VNets + NSGs + route tables, platform and zone Key Vaults, private DNS, Traffic Manager, ACR) and the tenants (`tenants/`, a state of its own: one catalogue file per tenant). All deployment and status workflows live here. |
 | `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Gateway, ESO, Cilium), the autoscaler's priority expander, external-dns, tenants. `clusters/<cluster>/` per cluster. |
 | `aks-fluxcd-example` | An application team's repo (namespace `<zone>-example`, app aks-hello). |
 | `azure-landing-zone` | Build tenant, ALZ, hub (labfw), AKS policy assignments, the per-application firewall rules. No AKS clusters. |
@@ -27,7 +27,7 @@ reads; job logs via `get_job_logs`).
 
 | Workflow | Use |
 |---|---|
-| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-int-stateless-az3` / `dev-int-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. A stateless cell is planned with `envs/dev-int-stateless.tfvars` (what every cell shares) then the cell's own file. Registers the providers and preview features (Gateway API CRDs, encryption at host, Image Integrity). Checks every plan against `plan-risk/` (Conftest: node-rolling pool properties such as LocalDNS, pool/cluster deletes, cluster network, routes, a subnet's private endpoint policy, Key Vault key deletes): warnings in the summary; an apply stops on them unless `accept_risk` (cell out of traffic first). Run stacks one at a time: each joins the labfw VPN as the one peer `github-deploy`. |
+| `deploy.yml` (Deploy) | `stack`: `dev-shared` (apply first) / `dev-tenants` (after dev-shared; never destroyed from here) / `dev-int-stateless-az3` / `dev-int-stateful`; `action`: plan / apply / destroy; `allow_empty_state: true` for a first build after a destroy. dev-shared is never destroyed from here. A stateless cell is planned with `envs/dev-int-stateless.tfvars` (what every cell shares) then the cell's own file. Registers the providers and preview features (Gateway API CRDs, encryption at host, Image Integrity). Checks every plan against `plan-risk/` (Conftest: node-rolling pool properties such as LocalDNS, pool/cluster deletes, cluster network, routes, a subnet's private endpoint policy, Key Vault key deletes): warnings in the summary; an apply stops on them unless `accept_risk` (cell out of traffic first). Run stacks one at a time: each joins the labfw VPN as the one peer `github-deploy`. |
 | `cluster-status.yml` (Cluster status) | Read-only status of one cluster: nodes, pods, cluster autoscaler, Flux, DNS, vCPU quota, every policy constraint's violations per object and excluded namespaces, who wrote each Secret of the zone namespaces (managed fields), every route through its gateway and as a VPN client (edge protocols: h2, ALPN http/1.1, TLS 1.2, TLS 1.3). Options `route_path` (e.g. `/weather`), `node_iptables`, `cilium_drops` (Cilium's drop monitor, for a cell without Hubble). Read it before promoting a policy to deny. |
 | `isolation-tests.yml` | The negative requirement and isolation tests of requirements 0.3 on the cell (zone int-se, other zone int-fi), each tagged with its R-number. Test pods run `isolation/curl` imported into the ACR by digest (deliberately unsigned; Sign images and the signature checks skip `isolation/`) and meet every rule in deny; R10 reads shared/'s fixture `<ns>--isolation-test` (`isolation_test_namespaces`); the internal app names are pinned through the VPN action's `extra_private_names`: cluster settings, `--admin` refused, platform policies present, probe placed by the mutations alone, cross-zone / cross-namespace / node / IMDS / vaults blocked, egress, forbidden manifests as server-side dry runs (PASS = refused, AUDIT = rule still in audit), supply chain (ACR, Ratify, signatures, Flux webhook), Resource Graph public endpoints against `tests/isolation/allowed-public-endpoints.yaml`, Key Vault ABAC and roles (`check-key-vault-roles.py`), R13 namespace access (`check-namespace-access.py`, testers in `tests/isolation/namespace-access-testers.yaml`), R23 cell settings (AZ, zone pools autoscaled from 0, VPA), R25 sync (`check-cells-in-sync.py`), R12 certificates, R5 every zone complete, R1 one exposure. **Only when the user asks for it** (runs take 10-30 min) - never dispatched on your own. |
 | `cis-benchmark.yml` (CIS benchmark) | CIS AKS Benchmark of one cluster: kube-bench (`aks-1.8`, Job per node, section 3), Kubescape `cis-aks-t1.8.0` (section 4), Azure settings (sections 2 and 5). `tests/cis/report.py` scores it; a failure not in `tests/cis/accepted.yaml` (with its reason) fails the run. **By hand only, when the user asks.** |
@@ -52,8 +52,8 @@ create-for-rbac` JSON of an SPN that is Owner on the lab subscriptions and **Glo
 tenant (Graph works: groups, apps, role assignments); `GH_OWNER` - org secret, a GitHub admin token of the onek8s
 organization. Use them through `lab-admin.yml`, `entra-test-groups.yml` or `vcpu-quota.yml`, not in routine pipelines.
 
-Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (145 runs) and in
-`shared/` (67), `conftest verify --policy plan-risk` for a plan rule, `kustomize build` for changed fleet directories; for a policy change in azure-landing-zone,
+Local checks before a push: `terraform fmt -check -recursive`, `terraform test` in the root (92 runs), in
+`shared/` (60) and in `tenants/` (67; the registry is blocked in a Claude session: CI runs them), `conftest verify --policy plan-risk` for a plan rule, `kustomize build` for changed fleet directories; for a policy change in azure-landing-zone,
 `stacks/aks-policy/kubernetes/test.sh` (gator, download the release binary) and `terraform test` there. The fleet and
 example repos' CI does not run on GitHub, so validate them locally.
 
@@ -204,7 +204,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   data-plane rules of the deleted `Deploy-MCSB2-Monitoring` on `kv-onek8s-gwc-platform`, with fresh timestamps
   although `az policy assignment list --disable-scope-strict-match` finds no such assignment - Azure's own
   clean-up; check again with Lab admin (`az policy state list --filter "complianceState eq 'NonCompliant'"`).
-- **Access**: namespace groups (D49) `managed_namespaces.<ns>.groups = { view, edit, admin }` -> a Flux configuration
+- **Access**: namespace groups (D49) `groups: { view, edit, admin }` of the tenant's catalogue file -> a Flux configuration
   `<ns>-access` with a RoleBinding per role + `Azure Kubernetes Service Namespace User`; on the vault `admin` Secrets
   Officer, `edit` custom `OneK8s Key Vault Secrets Editor (rg-aks-dev)` (D51), both under the `<ns>--` ABAC condition.
   No namespace identity or group can list a vault (D50); platform viewers (`grp-onek8s-dev-platform-viewers`
@@ -217,6 +217,16 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Backlog**: tracked with the implementation, not in the design (removed from 7.1 in v2.1; 7.1 is in the design's
   unpublished `archive/` since v4.0). V32 (spot fallback, labfw's log naming the pod) and V31 are open -
   V31 can now be tested: both zones run in az3 (Isolation tests, only when the user asks).
+- **Tenants are not in a cell** (2026-11-25, the user: "separation between clusters and tenants code"):
+  `tenants/` (Deploy stack `dev-tenants`, state `dev-tenants.tfstate`) reads `tenants/catalogue/<env>/<ns>.yaml`
+  (schema `tenants/schema`, rules as preconditions of output `tenants`) and makes, in every cell of the tenant's
+  zone (`tenants/envs/<env>.tfvars` `cells`), the managed namespace, `Namespace User` grants, the team's Flux
+  configuration `<ns>`, `<ns>-access` (role bindings + `store` = fleet `infrastructure/tenant` with substitutions)
+  and the federated credential; per zone `tenants-<zone>` (fleet `infrastructure/zone-tenants`: ConfigMap
+  `tenants-<zone>` with `gateway_watch_namespaces`, read by the cell's Traefik `substituteFrom`). shared/ reads
+  the same files for the vault shares (`tenant_catalogue_dir`). The cell keeps `namespace_node_pools` (the
+  dedicated pools); the tenant says `dedicated_node_pool: true`. A new tenant: one file, apply dev-shared then
+  dev-tenants. The isolation tests and aks-ai-agents' docs read the catalogue.
 
 ## Decisions already made (do not re-litigate)
 

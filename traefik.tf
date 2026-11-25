@@ -9,19 +9,21 @@ locals {
   #
   # `watch_namespaces` are the only namespaces a Gateway's Traefik reads (design section 2.4): its
   # own, where the Gateway and its certificate are, and those its routes come from - a zone's
-  # application namespaces (managed_namespaces labelled `platform/zone: <zone>`, the label the
-  # Gateway's allowedRoutes selects), or flux-system for the platform's webhook route. Traefik reads
-  # the Services, EndpointSlices, ConfigMaps and Secrets of these alone, so no zone's gateway can read
-  # another zone's Secrets.
+  # application namespaces (the tenants labelled `platform/zone: <zone>`, the label the Gateway's
+  # allowedRoutes selects), or flux-system for the platform's webhook route. Traefik reads the
+  # Services, EndpointSlices, ConfigMaps and Secrets of these alone, so no zone's gateway can read
+  # another zone's Secrets. A zone's list is the tenants' (tenants/): the ConfigMap `tenants-<zone>`
+  # in flux-system, which its Flux configuration `tenants-<zone>` keeps and the Kustomization reads
+  # (`substituteFrom`), so a new tenant changes nothing here. Until the ConfigMap is there the
+  # Kustomization fails and Traefik keeps what it was last given - never every namespace.
   gateways = var.gateway_implementation == null ? {} : merge(
     {
       for zone in keys(var.isolation_zones) : zone => {
         namespace = "${zone}-gateway"
         exposure  = startswith(zone, "int-") ? "int" : "ext"
         internal  = startswith(zone, "int-")
-        watch_namespaces = concat(["${zone}-gateway"], sort([
-          for name, namespace in var.managed_namespaces : name if lookup(namespace.labels, "platform/zone", null) == zone
-        ]))
+        # None here: from the tenants' ConfigMap.
+        watch_namespaces = tolist([])
       }
     },
     local.flux_github_webhook_enabled ? {
@@ -29,7 +31,7 @@ locals {
         namespace        = "platform-gateway"
         exposure         = "ext"
         internal         = false
-        watch_namespaces = ["platform-gateway", "flux-system"]
+        watch_namespaces = tolist(["platform-gateway", "flux-system"])
       }
     } : {},
   )
@@ -50,7 +52,9 @@ locals {
   # Traefik for each Gateway, as sent to Azure: cluster scope in flux-system, like the platform's
   # configuration, with the Gateway's values filled into gateways/traefik. One configuration per
   # Gateway, because Azure refuses two Kustomizations of one configuration on the same path.
-  traefik_flux_configurations = var.gateway_implementation == "traefik" ? {
+  # A filter rather than a conditional: a zone's gateway reads its list from the tenants' ConfigMap,
+  # the platform's has it inline, so the values differ in shape (an object, not a map).
+  traefik_flux_configurations = {
     for name, gateway in local.gateways : name => {
       properties = {
         gitRepository = {
@@ -67,25 +71,32 @@ locals {
             syncIntervalInSeconds  = var.traefik_flux_repository.sync_interval_seconds
             retryIntervalInSeconds = 60
             wait                   = true
-            postBuild = {
-              substitute = {
-                gateway_name      = name
-                gateway_namespace = gateway.namespace
-                gateway_exposure  = gateway.exposure
-                gateway_internal  = tostring(gateway.internal)
-                # A YAML flow sequence, brackets included: namespace names need no quotes.
-                gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]"
-                quote                    = "\""
-              }
-            }
+            postBuild = merge(
+              {
+                substitute = merge(
+                  {
+                    gateway_name      = name
+                    gateway_namespace = gateway.namespace
+                    gateway_exposure  = gateway.exposure
+                    gateway_internal  = tostring(gateway.internal)
+                    quote             = "\""
+                  },
+                  # A YAML flow sequence, brackets included: namespace names need no quotes.
+                  length(gateway.watch_namespaces) == 0 ? {} : { gateway_watch_namespaces = "[${join(",", gateway.watch_namespaces)}]" },
+                )
+              },
+              length(gateway.watch_namespaces) > 0 ? {} : {
+                substituteFrom = [{ kind = "ConfigMap", name = "tenants-${name}", optional = false }]
+              },
+            )
           }
         }
         namespace  = "flux-system"
         scope      = "cluster"
         sourceKind = "GitRepository"
       }
-    }
-  } : {}
+    } if var.gateway_implementation == "traefik"
+  }
 }
 
 check "traefik_needs_flux" {
@@ -98,7 +109,7 @@ check "traefik_needs_flux" {
 # Named `traefik-<gateway>`; its Kustomization is `traefik-<gateway>-gateway` in flux-system. The
 # Gateway's namespace is the Flux repository's: until it exists, the Kustomization retries.
 resource "azapi_resource" "traefik_flux_configuration" {
-  for_each = local.flux_extension_enabled ? local.traefik_flux_configurations : {}
+  for_each = { for name, configuration in local.traefik_flux_configurations : name => configuration if local.flux_extension_enabled }
 
   name      = "traefik-${each.key}"
   parent_id = module.aks.resource_id

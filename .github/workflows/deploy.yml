@@ -16,6 +16,11 @@ name: Deploy
 #                        availability zone 3, behind labfw; Azure CNI Pod Subnet, classic zone pools).
 #   dev-int-stateful         the repository root with envs/dev-int-stateful.tfvars: aks-dev-int-stateful (defined,
 #                        not deployed for now).
+#   dev-tenants          tenants/ with tenants/envs/dev.tfvars: the tenants of tenants/catalogue/dev/ in every
+#                        cell of their zones - managed namespaces, their Flux configurations, namespace grants,
+#                        vault federations (design section 3.3). Applied after the cells it lists; a tenant's
+#                        onboarding is a plan and apply of this stack alone. dev-shared reads the same files
+#                        for the tenants' identities, so a new tenant is dev-shared, then dev-tenants.
 #
 # After an apply of dev-shared, Sign images signs the registry's new images (job sign-images). The
 # Isolation tests and the CIS benchmark run by hand only, when the user asks for them.
@@ -47,11 +52,11 @@ on:
   workflow_dispatch:
     inputs:
       stack:
-        description: "dev-shared (apply first), or a cluster: dev-int-stateless-az3 (the lab's cell), dev-int-stateful"
+        description: "dev-shared (apply first), a cluster: dev-int-stateless-az3 (the lab's cell), dev-int-stateful, or dev-tenants (after the cells)"
         required: true
         default: "dev-shared"
         type: choice
-        options: [dev-shared, dev-int-stateless-az3, dev-int-stateful]
+        options: [dev-shared, dev-int-stateless-az3, dev-int-stateful, dev-tenants]
       action:
         description: "plan shows the changes; apply makes them; destroy deletes a cluster"
         required: true
@@ -110,12 +115,12 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: ${{ endsWith(inputs.stack, '-shared') && 'shared' || '.' }}
+        working-directory: ${{ endsWith(inputs.stack, '-shared') && 'shared' || endsWith(inputs.stack, '-tenants') && 'tenants' || '.' }}
     env:
       TF_STACK: ${{ inputs.stack }}
       # The variables file, relative to the stack's directory - and, for a stateless cell, the file every cell
       # shares before it (envs/dev-int-stateless.tfvars; a later file wins where both set a variable).
-      VAR_FILE: ${{ inputs.stack == 'dev-shared' && 'envs/dev.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
+      VAR_FILE: ${{ (inputs.stack == 'dev-shared' || inputs.stack == 'dev-tenants') && 'envs/dev.tfvars' || format('envs/{0}.tfvars', inputs.stack) }}
       VAR_FILE_COMMON: ${{ startsWith(inputs.stack, 'dev-int-stateless-') && 'envs/dev-int-stateless.tfvars' || '' }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -227,9 +232,9 @@ jobs:
           az storage container create --name tfstate --account-name "$TF_STATE_STORAGE_ACCOUNT" --auth-mode login -o none
 
       - name: Refuse to destroy the shared resources
-        if: inputs.action == 'destroy' && endsWith(inputs.stack, '-shared')
+        if: inputs.action == 'destroy' && (endsWith(inputs.stack, '-shared') || endsWith(inputs.stack, '-tenants'))
         run: |
-          echo "::error::${TF_STACK} holds what every cluster shares; it is not destroyed from this workflow." >&2
+          echo "::error::${TF_STACK} holds what every cluster shares, or every team's namespaces; it is not destroyed from this workflow." >&2
           exit 1
 
       # The estate's naming policy (README, "Naming policy"): the `dev` environment's secret NAMING_POLICY -
@@ -339,7 +344,7 @@ jobs:
       # A cluster build takes longer than the GitHub OIDC token the first sign-in used (about 5 minutes
       # valid), so the CLI signs in again before reading the cluster's credentials.
       - name: Log in to Azure again (GitHub OIDC)
-        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && env.ARM_CLIENT_SECRET == ''
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && !endsWith(inputs.stack, '-tenants') && env.ARM_CLIENT_SECRET == ''
         uses: azure/login@v3
         with:
           client-id: ${{ env.ARM_CLIENT_ID }}
@@ -354,7 +359,7 @@ jobs:
       # Traefik's pods. Deleted here by name, only for Gateways that no longer name approuting-istio -
       # never Traefik's own objects. Idempotent; runs on every apply of a cluster, changes or not.
       - name: Remove App Routing's leftovers from Gateways of another class
-        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && !endsWith(inputs.stack, '-tenants')
         run: |
           set -euo pipefail
           cluster=$(terraform output -raw name)
@@ -381,7 +386,7 @@ jobs:
       # policy reports them and refuses them back once they are gone (design section 3.1: a stateless
       # cluster has no persistent storage). Idempotent; runs on every apply of a cluster.
       - name: Remove AKS's StorageClasses from a stateless cluster
-        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared')
+        if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && !endsWith(inputs.stack, '-tenants')
         run: |
           set -euo pipefail
           [ "$(terraform output -raw persistent_storage_enabled)" = "false" ] || { echo "persistent storage: kept"; exit 0; }

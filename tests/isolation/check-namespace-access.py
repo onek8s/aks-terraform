@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Namespace access check of OneK8s requirements 0.3 ("Requirement and isolation tests"), R13:
-the Entra ID groups of `managed_namespaces[*].groups` (view, edit, admin) get exactly their
-Kubernetes role in their own namespace and nothing anywhere else.
+the Entra ID groups of each tenant's `groups` (view, edit, admin) in the tenant catalogue
+(tenants/catalogue/<env>/<namespace>.yaml) get exactly their Kubernetes role in their own namespace
+and nothing anywhere else.
 
-    check-namespace-access.py <envs/<cluster>.tfvars> <testers.yaml> [<shared/envs/<env>.tfvars>]
+    check-namespace-access.py <envs/<cluster>.tfvars> <testers.yaml> <shared/envs/<env>.tfvars> <tenants/envs/<env>.tfvars>
+
+The tenants of the cluster are those of the catalogue whose zone the cell holds (the tenants stack's
+`cells`), or that name the cell in their own `cells`.
 
 Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolation tests' own).
 
@@ -18,8 +22,8 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
    (the group is among the caller's groups), the same matrix without impersonation, and one write
    as a server-side dry run. A group without a tester is reported as AUDIT.
 
-4. Key Vault (with the shared tfvars), soft multi-tenancy: shared/ names the same groups for the
-   namespace as the cell; `admin` holds exactly Key Vault Secrets Officer and `edit` exactly the
+4. Key Vault (with the shared tfvars), soft multi-tenancy, on the zone vault of the tenant (shared/ grants
+   from the same catalogue entry): `admin` holds exactly Key Vault Secrets Officer and `edit` exactly the
    custom role `OneK8s Key Vault Secrets Editor (<resource group>)` (D51) on the namespace's vault
    under the ABAC condition on `<namespace>--` (metadata included), `view` no Key Vault role at all
    (`az role assignment list`); and each tester, signed in with a Key Vault token, lists nothing,
@@ -33,6 +37,7 @@ Needs a kubeconfig (KUBECONFIG) of an identity that may impersonate (the isolati
 
 Prints one line per check and a Markdown table to $RESULTS; exits 1 when a check failed.
 """
+import glob
 import json
 import re
 import os
@@ -140,27 +145,36 @@ def matrix(label, namespace, role, auth, kubeconfig=None):
         result("PASS", f"{label}: {role} in {namespace} and nowhere else", f"{checked} rights as expected")
 
 
-def expected_groups(tfvars):
-    with open(tfvars) as f:
-        parsed = hcl2.load(f)
-    namespaces = parsed.get("managed_namespaces", {})
-    if isinstance(namespaces, list):  # python-hcl2 wraps blocks and some maps in lists
-        namespaces = namespaces[0] if namespaces else {}
+def catalogue(tenants_tfvars, cluster):
+    """namespace -> tenant, of the tenants the cluster holds (tenants/: a tenant is in every cell of its
+    zone, or in the cells it names)."""
+    parsed = parse(tenants_tfvars)
+    directory = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(tenants_tfvars))),
+                             unquoted(parsed.get("catalogue_dir")) or "catalogue")
+    cells = {unquoted(k): [unquoted(z) for z in (v or {}).get("zones", [])] for k, v in (parsed.get("cells") or {}).items()}
+    tenants = {}
+    for path in sorted(glob.glob(os.path.join(directory, "*.yaml"))):
+        with open(path) as f:
+            tenant = yaml.safe_load(f) or {}
+        name = os.path.basename(path)[:-len(".yaml")]
+        listed = tenant.get("cells")
+        if (cluster in listed) if listed else (tenant.get("zone") in cells.get(cluster, [])):
+            tenants[name] = tenant
+    return tenants
+
+
+def expected_groups(tenants):
     groups = {}
-    for name, namespace in namespaces.items():
-        given = (namespace or {}).get("groups") or {}
-        if isinstance(given, list):
-            given = given[0] if given else {}
-        # python-hcl2 8 keeps the quotes of string values and quoted keys.
-        given = {key.strip('"'): str(value).strip('"') for key, value in given.items() if value is not None}
-        groups[name.strip('"')] = {role: given[role].lower() for role in ROLES if given.get(role)}
+    for name, tenant in tenants.items():
+        given = {key: str(value) for key, value in (tenant.get("groups") or {}).items() if value}
+        groups[name] = {role: given[role].lower() for role in ROLES if given.get(role)}
     return groups
 
 
 def check_bindings(groups):
     out = kubectl("get", "rolebindings", "-A", "-l", "platform/namespace-access", "-o", "json")
     if out.returncode != 0:
-        result("FAIL", "role bindings of managed_namespaces[*].groups", out.stderr.strip()[:200])
+        result("FAIL", "role bindings of the tenants' groups", out.stderr.strip()[:200])
         return
     found = {(b["metadata"]["namespace"], b["metadata"]["name"]): b for b in json.loads(out.stdout)["items"]}
     for namespace, roles in groups.items():
@@ -169,7 +183,7 @@ def check_bindings(groups):
             check = f"{namespace}: RoleBinding platform-{role}"
             if role not in roles:
                 if binding:
-                    result("FAIL", f"{check} only with a group", "exists, but the tfvars name no group")
+                    result("FAIL", f"{check} only with a group", "exists, but the catalogue names no group")
                 continue
             if not binding:
                 result("FAIL", f"{check} binds the {role} group", "missing")
@@ -181,7 +195,7 @@ def check_bindings(groups):
             else:
                 result("PASS", f"{check} binds the {role} group", f"ClusterRole {role} to group {roles[role]}")
     for namespace, name in found:
-        result("FAIL", "no namespace access binding the tfvars do not name", f"{namespace}/{name}")
+        result("FAIL", "no namespace access binding the catalogue does not name", f"{namespace}/{name}")
 
 
 def tester_token(client_id, tenant, scope):
@@ -272,21 +286,9 @@ def resource_group(shared_tfvars, tfvars):
     return None
 
 
-def shared_groups(shared_tfvars):
-    """managed namespace -> {role: group} as shared/ grants them on the vault."""
-    shares = parse(shared_tfvars).get("key_vault_namespaces", {})
-    groups = {}
-    for name, share in shares.items():
-        given = (share or {}).get("groups") or {}
-        given = {unquoted(k): unquoted(v).lower() for k, v in given.items() if v is not None}
-        groups[unquoted(name)] = {role: given[role] for role in ROLES if given.get(role)}
-    return groups
-
-
-def namespace_vault(tfvars, namespace):
-    parsed = parse(tfvars)
-    vaults = {unquoted(k): unquoted(v) for k, v in (parsed.get("key_vault_namespace_vaults") or {}).items()}
-    return vaults.get(namespace) or unquoted(parsed.get("key_vault_name"))
+def zone_vault(zone):
+    """The zone's Key Vault, `<VAULT_PREFIX>-<zone>` (the workflow's prefix of the naming policy)."""
+    return f"{os.environ.get('VAULT_PREFIX', 'kv-onek8s-gwc')}-{zone}"
 
 
 def az(*args):
@@ -481,30 +483,26 @@ def check_platform_viewers(shared_tfvars, tfvars, testers, tenant, workdir, vaul
 
 
 def main():
-    tfvars, testers_file = sys.argv[1:3]
-    shared_tfvars = sys.argv[3] if len(sys.argv) > 3 else None
-    groups = expected_groups(tfvars)
+    tfvars, testers_file, shared_tfvars, tenants_tfvars = sys.argv[1:5]
+    cluster = "aks-" + os.path.basename(tfvars)[:-len(".tfvars")]
+    tenants = catalogue(tenants_tfvars, cluster)
+    groups = expected_groups(tenants)
     with open(testers_file) as f:
         testers = (yaml.safe_load(f) or {}).get("testers") or {}
     tenant = os.environ.get("AZURE_TENANT_ID", "")
     if not any(groups.values()):
-        result("AUDIT", "namespace access groups", f"{os.path.basename(tfvars)} names no managed_namespaces[*].groups")
+        result("AUDIT", "namespace access groups", f"the catalogue names no groups of a tenant of {cluster}")
     check_bindings(groups)
     vaults = {}
     if shared_tfvars:
-        in_shared = shared_groups(shared_tfvars)
         parsed = parse(shared_tfvars)
         editor = (unquoted(parsed.get("key_vault_secrets_editor_role_name"))
                   or f"OneK8s Key Vault Secrets Editor ({resource_group(shared_tfvars, tfvars)})")
         for namespace, roles in groups.items():
             if not roles:
                 continue
-            if in_shared.get(namespace) != roles:
-                result("FAIL", f"{namespace}: shared/ grants the same groups on the vault",
-                       f"cell {roles}, shared {in_shared.get(namespace)}")
-            else:
-                result("PASS", f"{namespace}: shared/ grants the same groups on the vault", ", ".join(sorted(roles)))
-            vaults[namespace] = namespace_vault(tfvars, namespace)
+            # shared/ and tenants/ read the same catalogue entry, so the groups cannot differ.
+            vaults[namespace] = zone_vault(tenants[namespace]["zone"])
             check_vault_roles(namespace, roles, vaults[namespace], editor)
     with tempfile.TemporaryDirectory() as workdir:
         for namespace, roles in groups.items():

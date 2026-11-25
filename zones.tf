@@ -77,9 +77,9 @@ data "azurerm_subnet" "zone_pods" {
 # its pools (AKS drains what is left, PodDisruptionBudgets respected). Placement never names a pool: the
 # applications' pods select `platform/zone`, which every generation carries.
 #
-# An application namespace can be moved to pools of its own (managed_namespaces[*].node_pool): the same
-# per generation, `<country><generation><name><kind>`, labelled and tainted `platform/pool=<namespace>`
-# as well; the namespace's annotations, not the application, select and tolerate them.
+# An application namespace can be moved to pools of its own (namespace_node_pools): the same per
+# generation, `<country><generation><name><kind>`, labelled and tainted `platform/pool=<namespace>` as
+# well; the namespace's annotations (tenants/), not the application, select and tolerate them.
 locals {
   zone_node_pool_kinds = {
     ""        = { arch = "amd64", spot = false }
@@ -99,14 +99,14 @@ locals {
     }
   }
 
-  # An application namespace moved to pools of its own (managed_namespaces[*].node_pool, design
-  # section 2.3): its zone, the infix of its pools' names and their kinds.
+  # An application namespace moved to pools of its own (namespace_node_pools, design section 2.3): its
+  # zone, the infix of its pools' names and their kinds.
   namespace_node_pools = {
-    for name, namespace in var.managed_namespaces : name => {
+    for name, pool in var.namespace_node_pools : name => {
       zone  = one([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")])
-      infix = namespace.node_pool.name
-      kinds = namespace.node_pool.kinds
-    } if namespace.node_pool != null && var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
+      infix = pool.name
+      kinds = pool.kinds
+    } if var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
   }
 
   # The sets of pools of each generation: every zone's shared ones (all four kinds, no namespace), then
@@ -177,45 +177,6 @@ locals {
     }
   }
 
-  # A namespace with pools of its own: Kubernetes' PodNodeSelector and PodTolerationRestriction
-  # admission plugins (on in AKS) give every pod created in it `platform/pool=<namespace>` - its node
-  # selector and toleration - so the application states nothing. Every application namespace of a zone
-  # gets a tolerations whitelist: its zone's taint, spot (platform/capacity and AKS's own), GPU, the node
-  # conditions Kubernetes tolerates by default and its own pool, if any. A pod tolerating another
-  # namespace's pool is refused, so a dedicated pool runs that namespace's pods only.
-  namespace_pool_tolerations = {
-    for name in keys(var.managed_namespaces) : name => [
-      { key = "platform/pool", operator = "Equal", value = name, effect = "NoSchedule" }
-    ]
-  }
-  namespace_zone = {
-    for name in keys(var.managed_namespaces) : name => [for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")][0]
-    if length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
-  }
-  managed_namespace_placement_annotations = {
-    for name in keys(var.managed_namespaces) : name => (
-      var.zone_node_pools == null || try(local.namespace_zone[name], null) == null ? tomap({}) : tomap(merge(
-        {
-          "scheduler.alpha.kubernetes.io/tolerationsWhitelist" = jsonencode(concat(
-            [
-              { key = "platform/zone", operator = "Equal", value = local.namespace_zone[name], effect = "NoSchedule" },
-              { key = "platform/capacity", operator = "Equal", value = "spot", effect = "NoSchedule" },
-              { key = "kubernetes.azure.com/scalesetpriority", operator = "Equal", value = "spot", effect = "NoSchedule" },
-              { key = "platform/accelerator", operator = "Equal", value = "nvidia-gpu", effect = "NoSchedule" },
-              { key = "nvidia.com/gpu", operator = "Exists" },
-            ],
-            [for key in ["not-ready", "unreachable", "memory-pressure", "disk-pressure", "pid-pressure", "network-unavailable", "unschedulable"] : { key = "node.kubernetes.io/${key}", operator = "Exists" }],
-            contains(keys(local.namespace_node_pools), name) ? local.namespace_pool_tolerations[name] : [],
-          ))
-        },
-        contains(keys(local.namespace_node_pools), name) ? {
-          "scheduler.alpha.kubernetes.io/node-selector"      = "platform/pool=${name}"
-          "scheduler.alpha.kubernetes.io/defaultTolerations" = jsonencode(local.namespace_pool_tolerations[name])
-        } : {},
-      ))
-    )
-  }
-
   # The cluster autoscaler of the zones' pools: the priority expander (spot first), and a node removed
   # five minutes after it is no longer needed.
   auto_scaler_profile = var.zone_node_pools == null ? null : {
@@ -237,18 +198,17 @@ check "every_zone_has_a_generation_that_takes_pods" {
 check "namespace_node_pools_are_in_a_zone" {
   assert {
     condition = alltrue([
-      for name, namespace in var.managed_namespaces : namespace.node_pool == null || (
-        var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
-      )
+      for name in keys(var.namespace_node_pools) :
+      var.zone_node_pools != null && length([for zone in keys(var.isolation_zones) : zone if startswith(name, "${zone}-")]) == 1
     ])
-    error_message = "${var.name}: managed_namespaces[*].node_pool is for an application namespace of one isolation zone (`<zone>-<app>`) in a cluster with zone_node_pools."
+    error_message = "${var.name}: namespace_node_pools is for an application namespace of one isolation zone (`<zone>-<app>`) in a cluster with zone_node_pools."
   }
 }
 
 check "zone_node_pool_names_fit" {
   assert {
     condition     = alltrue([for pool in local.zone_agent_pool_list : length(pool.name) <= 12])
-    error_message = "${var.name}: a zone node pool name is longer than the 12 characters AKS allows: ${join(", ", [for pool in local.zone_agent_pool_list : pool.name if length(pool.name) > 12])}. Shorten managed_namespaces[*].node_pool.name or leave out the longer kinds."
+    error_message = "${var.name}: a zone node pool name is longer than the 12 characters AKS allows: ${join(", ", [for pool in local.zone_agent_pool_list : pool.name if length(pool.name) > 12])}. Shorten namespace_node_pools[*].name or leave out the longer kinds."
   }
 }
 
@@ -259,23 +219,9 @@ check "isolation_zones_need_nodes" {
   }
 }
 
-# The other vaults of a shared vault's namespaces - an application's zone vault.
-data "azurerm_key_vault" "namespace" {
-  for_each = toset(values(var.key_vault_namespace_vaults))
-
-  name                = each.key
-  resource_group_name = var.resource_group_name
-}
-
 locals {
-  # The URL of the vault each namespace's share is in.
-  key_vault_namespace_uris = {
-    for namespace in local.key_vault_namespaces : namespace => (
-      contains(keys(var.key_vault_namespace_vaults), namespace)
-      ? data.azurerm_key_vault.namespace[var.key_vault_namespace_vaults[namespace]].vault_uri
-      : local.key_vault_uri
-    )
-  }
+  # The URL of the vault each platform namespace's share is in: the platform vault.
+  key_vault_namespace_uris = { for namespace in local.key_vault_namespaces : namespace => local.key_vault_uri }
 }
 
 # The internal zones' Private DNS zones, in which external-dns keeps the records of the cluster's

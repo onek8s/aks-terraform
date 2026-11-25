@@ -30,9 +30,10 @@ creates - its resource group, its own network, the vaults, the registry - with a
 
 | Path | Purpose |
 | --- | --- |
-| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, the private API server, the zones' node pools (`zones.tf`) and the managed namespaces. |
-| `key_vault.tf` | The cluster's Key Vault, and the identities and conditional role assignments that give each namespace its own share of it. See [Key Vault](#key-vault). |
-| `envs/dev-int-stateless.tfvars`, `envs/dev-int-stateless-az3.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters, in germanywestcentral: the lab's one stateless cell `aks-dev-int-stateless-az3` (availability zone 3, Sweden's zone `int-se`) and `aks-dev-int-stateful` (defined, not deployed). `dev-int-stateless.tfvars` holds what every cell shares - the cost savings, the environment's resources, the private API server - and is applied before the cell's own file (name, network, zone, namespaces). See [Cells of the OneK8s design](#cells-of-the-onek8s-design). |
+| `main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `terraform.tf` | The root module. Wraps [`Azure/avm-res-containerservice-managedcluster/azurerm`][module] 0.8.5 from the registry (Image Integrity, which it has no input for, is set beside it in `image_integrity.tf`): looks up the existing resources by name, creates the cluster identity and its role assignments, the private API server and the zones' node pools (`zones.tf`). No tenant: see [Tenants](#tenants-managed-namespaces). |
+| `key_vault.tf` | The cluster's federated credentials on the platform namespaces' identities of the platform vault. See [Key Vault](#key-vault). |
+| `tenants/` | The environment's tenants, a root module and state of its own (stack `dev-tenants`): one file per tenant in `tenants/catalogue/<env>/<namespace>.yaml`, turned into its managed namespace, access, Flux configurations and federated credential in every cell of its zone. See [Tenants](#tenants-managed-namespaces). |
+| `envs/dev-int-stateless.tfvars`, `envs/dev-int-stateless-az3.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters, in germanywestcentral: the lab's one stateless cell `aks-dev-int-stateless-az3` (availability zone 3, Sweden's zone `int-se`) and `aks-dev-int-stateful` (defined, not deployed). `dev-int-stateless.tfvars` holds what every cell shares - the cost savings, the environment's resources, the private API server - and is applied before the cell's own file (name, network, zones). See [Cells of the OneK8s design](#cells-of-the-onek8s-design). |
 | `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
@@ -161,7 +162,7 @@ Two things have to be granted before that returns anything:
 - A Kubernetes-level role: every group in `entra_admin_group_object_ids` is assigned
   `Azure Kubernetes Service RBAC Cluster Admin` on the cluster, every group in
   `entra_reader_group_object_ids` `Azure Kubernetes Service RBAC Reader`. Anything narrower is a
-  namespace's `groups` - see [Managed namespaces](#managed-namespaces).
+  namespace's `groups` - see [Tenants](#tenants-managed-namespaces).
 
 Because the API server is private, the kubeconfig only resolves from a network that reaches it: the
 labfw VPN in the lab. `az aks command invoke` runs a command in the cluster through the Azure control
@@ -174,24 +175,59 @@ az aks command invoke --resource-group <resource_group_name> \
 
 [entraauthz]: https://learn.microsoft.com/azure/aks/manage-azure-rbac
 
-## Managed namespaces
+## Tenants (managed namespaces)
 
-Namespaces are created by AKS rather than by whatever deploys workloads into them, so that the
-boundary a namespace draws is in place before anything lands in it. List the names in the variables
-file and there is nothing else to write:
+A tenant is an application namespace, `<zone>-<app>`, and it is **not part of a cell**: the cells
+(this root module) build clusters, and `tenants/` - a root module with a state and a pipeline of its
+own (Deploy's `dev-tenants`) - builds the tenants into every cell that holds their zone. A tenant is
+one file, `tenants/catalogue/<env>/<namespace>.yaml`, and nothing else in any repository:
 
-```hcl
-managed_namespaces = {
-  team-payments = {}
-  team-search   = {}
-}
+```yaml
+# tenants/catalogue/dev/int-se-payments.yaml
+zone: int-se
+owner:
+  team: payments
+  cost_center: cc-1234
+  contact: https://github.com/example/payments/issues
+groups:
+  edit: 00000000-0000-0000-0000-000000000000
+flux:
+  url: https://github.com/example/payments-deploy
+  path: ./overlays/dev
 ```
 
-Each one is a [managed namespace][namespaces]: an Azure resource that AKS reconciles into a
-Kubernetes `Namespace`, a default `NetworkPolicy` and - where one is asked for - a default
-`ResourceQuota`. Deleting the namespace inside the cluster does not get rid of it, and Azure role
-assignments can be scoped to the namespace alone - see
-[Who gets into a namespace](#who-gets-into-a-namespace).
+From it `tenants/` makes, in each cell of the zone (`tenants/envs/<env>.tfvars` lists the cells and
+their zones; `cells: [...]` in the file narrows it):
+
+- the [managed namespace][namespaces] with its quota, default network policies, Pod Security Standard
+  and the labels `platform/zone`, `platform/team`, `platform/cost-center` (and annotation
+  `platform/contact`);
+- the team's own Flux configuration `<namespace>` (namespace-scoped, see [Tenants](#tenants) under GitOps);
+- the platform's Flux configuration `<namespace>-access`: a RoleBinding per group role, and `store` -
+  the namespace's `key-vault` service account and SecretStore on its zone's vault, and its default
+  service account (aks-fluxcd-platform `infrastructure/tenant`, the same directory for every tenant);
+- `Azure Kubernetes Service Namespace User` for each group, and the federated credential of the
+  namespace's vault identity for the cell;
+- per zone, the Flux configuration `tenants-<zone>`: the ConfigMap that names the namespaces the zone's
+  gateway watches, which the cell's Traefik configuration reads (`substituteFrom`).
+
+`shared/` reads the same files for the namespace's share of its zone's vault (`writers`, and the
+groups' rights on it). So a new tenant is reviewed as one file, planned and applied by the tenants
+stack alone - its plan shows only tenants - and never changes a cell's plan or the fleet repository.
+Every rule a tenant must meet is a precondition of the stack's `tenants` output: a failing one stops
+the plan and names what is wrong. Apply order for a new tenant: `dev-shared` (its vault share), then
+`dev-tenants`.
+
+The catalogue's schema is `tenants/schema` (a typed variable: a misspelt attribute is refused);
+`namespace_defaults` in `tenants/envs/<env>.tfvars` is what every tenant falls back to.
+
+**Moving tenants out of a cell's state** (the lab, 2026-11; `tenants/imports.tf`): the cell forgets its
+namespace resources (`removed` blocks, nothing destroyed) and `tenants/` imports them. Order: merge,
+plan `dev-shared` (no change expected), apply `dev-tenants` (imports, plus each tenant's `store` and the
+zones' `tenants-<zone>`), merge the fleet's change that drops its per-tenant `tenants/` directories and
+cluster settings, then apply the cell (Traefik reads `tenants-<zone>`). The fleet's old `tenants`
+Kustomizations hand their objects over: the new `<namespace>-access-store` applies them first and
+takes their owner labels, so pruning the old one deletes nothing.
 
 ### What a namespace gets by default
 
@@ -218,25 +254,20 @@ tightening egress for a particular workload is done by narrowing it here, not in
 
 Anything in the table can be overridden on a single namespace:
 
-```hcl
-managed_namespaces = {
-  # Fronted by the ingress controller, which runs in another namespace.
-  team-payments = {
-    network_policy = { ingress = "AllowAll" }
-  }
-  # Calls the Services of other namespaces.
-  team-search = {
-    network_policy = { egress = "AllowAll" }
-    resource_quota = { cpu_limit = "4", memory_limit = "8Gi" }
-  }
-}
+```yaml
+# tenants/catalogue/dev/int-se-search.yaml: calls the Services of other namespaces.
+network_policy:
+  egress: AllowAll
+resource_quota:
+  cpu_limit: "4"
+  memory_limit: 8Gi
 ```
 
-...or for the whole cluster at once through `managed_namespace_defaults`, which is what every
-namespace falls back to:
+...or for every tenant of the environment at once through `namespace_defaults` in
+`tenants/envs/<env>.tfvars`, which is what every tenant falls back to:
 
 ```hcl
-managed_namespace_defaults = {
+namespace_defaults = {
   labels        = { "cost-centre" = "platform" }
   delete_policy = "Delete"
 }
@@ -245,7 +276,7 @@ managed_namespace_defaults = {
 Both `ingress` and `egress` take `AllowAll`, `AllowSameNamespace` or `DenyAll`. `labels` and
 `annotations` merge with the defaults key by key, so a namespace adds to the estate-wide set rather
 than replacing it; everything else is a plain override. A namespace that names no quota figures is
-sent the four figures of `managed_namespace_defaults` rather than none at all.
+sent the four figures of `namespace_defaults` rather than none at all.
 
 Quota figures are written the way a manifest writes them - `"500m"`, `"0.5"` or `"2"` for CPU,
 `"512Mi"` or `"4Gi"` for memory. Azure takes the CPU ones in milliCPU alone, so `"2"` is sent on as
@@ -258,12 +289,10 @@ of what the pods in the namespace request and are limited to, which also means a
 neither a request nor a limit is refused by the quota; a `LimitRange` inside the namespace is what
 gives such pods their figures. A namespace that needs more room says so:
 
-```hcl
-managed_namespaces = {
-  team-search = {
-    resource_quota = { cpu_limit = "8", memory_limit = "16Gi" }
-  }
-}
+```yaml
+resource_quota:
+  cpu_limit: "8"
+  memory_limit: 16Gi
 ```
 
 ### Pod Security Standards
@@ -283,24 +312,17 @@ Each namespace gets all three modes at `restricted`:
 
 `restricted` is genuinely strict - it wants `runAsNonRoot`, `allowPrivilegeEscalation: false`,
 `seccompProfile: RuntimeDefault` and all capabilities dropped - and plenty of off-the-shelf charts
-do not meet it as shipped. That is the point of it being the default: a workload that needs more has
-to say so, in the variables file, where it is reviewed.
+do not meet it as shipped. That is the point of it being the default: a workload that needs more has to say so, in its catalogue file, where it is reviewed.
 
 #### Exceptions
 
 An exception is stated on the namespace that needs it, not by lowering the standard for the cluster:
 
-```hcl
-managed_namespaces = {
-  # A monitoring agent that wants the host network and a privileged container.
-  observability = {
-    pod_security = { enforce = "privileged" }
-  }
-  # Charts that are not quite there yet, held at the middle standard while they catch up.
-  team-search = {
-    pod_security = { enforce = "baseline", warn = "baseline" }
-  }
-}
+```yaml
+# Charts that are not quite there yet, held at the middle standard while they catch up.
+pod_security:
+  enforce: baseline
+  warn: baseline
 ```
 
 Each mode takes `restricted`, `baseline`, `privileged` - the level that permits everything, and so
@@ -315,7 +337,7 @@ off both of the other two: that is an exception nothing refuses and nothing reco
 `version` pins the standard to a Kubernetes release:
 
 ```hcl
-managed_namespace_defaults = {
+namespace_defaults = {
   pod_security = { version = "v1.31" }
 }
 ```
@@ -337,7 +359,7 @@ The labels are set through `pod_security` alone; a `pod-security.kubernetes.io/*
 `Azure Kubernetes Service Namespace User` on the namespace resource, so that its members fetch a
 kubeconfig for that namespace alone (`az aks namespace get-credentials`) and nothing else. The same
 groups get the matching rights on the namespace's secrets in its vault (`shared/`, design D49 and D51).
-See the `managed_namespaces` variable.
+Group values are object IDs, not names.
 
 ### What to watch for
 
@@ -348,18 +370,18 @@ See the `managed_namespaces` variable.
 - **A managed namespace is no longer yours to edit from `kubectl`.** AKS reconciles the namespace
   against what Azure holds and blocks changes to its managed fields and labels through the Kubernetes
   API - `kubectl label namespace team-search pod-security.kubernetes.io/enforce=privileged` does not
-  work - so an exception goes through the variables file. That is the point, but it does mean a team
+  work - so an exception goes through the catalogue file. That is the point, but it does mean a team
   cannot unblock itself at three in the morning.
 - **Names are Kubernetes namespace names**: lowercase letters, digits and hyphens. System namespaces
   cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
   `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
-  Microsoft names.
+  Microsoft names, `flux-system`, and the platform's Flux configuration names (`platform`,
+  `traefik-*`, `tenants-*`). A tenant's name starts with its zone, `<zone>-`.
 - **A namespace grant does not carry over to the cluster.** `Azure Kubernetes Service Cluster User
   Role` and the cluster-wide `entra_admin_group_object_ids` are separate, and a principal that has
   only namespace grants cannot run `az aks get-credentials` or see anything outside its namespace -
   which is the point, but it does mean `kubectl get nodes` comes back forbidden for them.
-- **`delete_policy = "Keep"` leaves the namespace behind.** Removing an entry from the variables
-  file destroys the Azure resource but not the Kubernetes namespace, which is deliberate - a
+- **`delete_policy = "Keep"` leaves the namespace behind.** Removing a tenant's file destroys the Azure resource but not the Kubernetes namespace, which is deliberate - a
   workload should not disappear because a line moved. Clean it up with `kubectl delete namespace`,
   or set `delete_policy = "Delete"` up front for namespaces that are meant to be disposable.
 
@@ -551,15 +573,15 @@ the namespaces are kept apart by the names of the secrets, with [Azure ABAC cond
 role assignments.
 
 **A namespace owns the secrets named `<namespace>--<name>`** - `ext-fi-example--api-key`,
-`ext-fi-gateway--wildcard`. The namespaces with a share are every managed namespace and the ones
-in `key_vault_namespaces`: each zone's gateway and `flux-system`.
+`ext-fi-gateway--wildcard`. The namespaces with a share are every tenant of the catalogue and the
+ones in `key_vault_namespaces`: each zone's gateway and `flux-system`.
 
 There is more than one vault (OneK8s design section 2.5): `shared/` creates the environment's
 **platform vault** (`key_vault_name`) - the gateways' certificates, the clusters' customer-managed
 keys - and **one vault per zone** (`zone_key_vault_names`)
 for the secrets of the zone's applications. An application namespace's share is in its zone's
-vault: `zone` in `shared/`'s `key_vault_namespaces`, and `key_vault_namespace_vaults` in the
-cluster, which tells the Flux repository each namespace's vault as `key_vault_url_<namespace>`.
+vault, the tenant's `zone`; `tenants/` hands the vault's address and the identity to the namespace's
+`<namespace>-access` Flux configuration.
 
 | Who | Role on the vault | Condition |
 | --- | --- | --- |
@@ -623,7 +645,7 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | | Shared - `shared/envs/dev.tfvars` | Per cluster - `envs/dev-<cluster>.tfvars` |
 | --- | --- | --- |
 | Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-int-stateless-az<N>` (`cells`): `address_space` in /24 slots - `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb` - and `pod_address_space`, a /16 of 100.64.0.0/10 with a /20 per slot - `snet-system-pods`, `snet-<zone>-pods`, delegated to AKS - each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `pod_subnet_name`, `isolation_zones` |
-| Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them: the admin groups' `Key Vault Administrator`, the namespaces' writers and groups | Looked up: `key_vault_name`, `key_vault_namespace_vaults`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
+| Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them: the admin groups' `Key Vault Administrator`, the namespaces' writers and groups | Looked up: `key_vault_name`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
 | Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-gwc-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
 | DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
@@ -743,13 +765,13 @@ virtual network.
 
 Every application of a zone shares the zone's pools until an operator moves one to pools of its own -
 for its size, its noise or its licence - without a change to the application (design section 2.3).
-`managed_namespaces.<namespace>.node_pool` names the pools' infix (1 to 5 characters) and their kinds:
+The pools are the cell's - `namespace_node_pools.<namespace>` in the cell's variables names their
+infix (1 to 5 characters) and their kinds - and the tenant asks for them with `dedicated_node_pool:
+true` in its catalogue file (`tenants/` refuses it in a cell without the pools):
 
 ```hcl
-managed_namespaces = {
-  int-se-example = {
-    node_pool = { name = "ex", kinds = ["", "spot"] } # se2ex, se2exspot
-  }
+namespace_node_pools = {
+  int-se-example = { name = "ex", kinds = ["", "spot"] } # se2ex, se2exspot
 }
 ```
 
@@ -762,8 +784,9 @@ merges the node selector into every pod created in it, `scheduler.alpha.kubernet
 `scheduler.alpha.kubernetes.io/tolerationsWhitelist` - its zone, spot, GPU, the node conditions, and its own
 pool if it has one - so a pod of another namespace that tolerates the pool is refused, and a dedicated
 pool runs its namespace's pods only. The running pods move when they are next created (a rollout
-restart); the shared pools' node is removed by the autoscaler once it is empty. Moving back is removing
-`node_pool`: AKS drains and deletes the namespace's pools, and its pods land on the shared ones again.
+restart); the shared pools' node is removed by the autoscaler once it is empty. `tenants/` sets the
+annotations from the pools' labels it reads in each cell. Moving back is `dedicated_node_pool: false`,
+applied with `dev-tenants`, then removing the pools from the cell: AKS drains and deletes the namespace's pools, and its pods land on the shared ones again.
 
 ### Blue/green node pool upgrades
 
@@ -893,26 +916,21 @@ repository (below), and Flux is not installed at all.
 
 ### Tenants
 
-A managed namespace can deploy itself from a Git repository of its own - the team's - by naming it
-in `flux`. The namespace, who gets into it, its share of the Key Vault and its repository are then
-one entry in the variables file:
+A tenant deploys itself from a Git repository of its own - the team's - named in `flux` of its
+catalogue file:
 
-```hcl
-managed_namespaces = {
-  example = {
-    groups = {
-      edit = "00000000-0000-0000-0000-000000000000"
-    }
-    flux = {
-      url         = "https://github.com/onek8s/aks-fluxcd-example"
-      path        = "./apps"
-      secret_name = "aks-fluxcd-example-git"
-    }
-  }
-}
+```yaml
+flux:
+  url: https://github.com/onek8s/aks-fluxcd-example
+  path: ./apps
+  secret_name: aks-fluxcd-example-git
+  cell_paths:                         # another path in a given cell
+    aks-dev-int-stateful: ./stateful
+  substitute:                         # facts its manifests may use as ${...}
+    zone_domain: int-se.dev.onek8s.lol
 ```
 
-That creates a second Flux configuration, named after the namespace, **namespace-scoped** and
+That creates a Flux configuration of the team's own, named after the namespace, **namespace-scoped** and
 installed into the namespace itself. It reconciles `path` on `branch` (default `main`) every
 `sync_interval_seconds` (default 300), retries at the same interval, prunes, and waits for what it
 applied to become ready. Because it is an Azure resource of its own rather than a Kustomization
@@ -924,11 +942,13 @@ own row in the portal's GitOps view of the cluster.
   nothing else. There is no `targetNamespace`: the repository's `kustomization.yaml` sets
   `namespace:` for its objects itself.
 - A private repository is read with `secret_name`, a Secret in the namespace. No credential passes
-  through Terraform or Azure: the Flux repository syncs it from the namespace's share of the Key
-  Vault (onek8s/aks-fluxcd-platform, `tenants/<team>/key-vault.yaml`).
-- The rest of what a tenant needs inside the cluster - the `key-vault` service account and
-  SecretStore, the ExternalSecrets, the Cilium baseline that lets the zone's gateway in - stays in the Flux
-  repository, under `tenants/<team>/`.
+  through Terraform or Azure: the team syncs it with an ExternalSecret against the namespace's
+  `key-vault` store.
+- What the platform puts in every tenant - the `key-vault` service account and SecretStore, the
+  default service account - is one directory of the Flux repository for all of them
+  (`infrastructure/tenant`), applied by the tenant's `<namespace>-access` configuration with its
+  values; the Cilium baseline that lets the zone's gateway in applies by the namespace's label.
+- The manifests may use `${zone}`, `${cluster_name}` (the cell) and the tenant's `substitute`.
 
 [flux]: https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2
 

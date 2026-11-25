@@ -7,8 +7,8 @@ name: Entra test groups
 # group, a member of it, that GitHub Actions of this repository's `dev` environment can sign in as
 # (federated credential, no secret). Idempotent: what exists is reused, a federated credential on an
 # outdated subject is replaced. Prints the object IDs of the groups and the client IDs of the testers:
-# put the groups into managed_namespaces.<ns>.groups (envs/*.tfvars) and key_vault_namespaces.<ns>.groups
-# (shared/envs/dev.tfvars), the testers into tests/isolation/namespace-access-testers.yaml.
+# put the groups into the tenant's `groups` in tenants/catalogue/<env>/<ns>.yaml (or, for the platform viewers,
+# shared/envs/dev.tfvars), the testers into tests/isolation/namespace-access-testers.yaml.
 #
 # The organization puts the immutable owner and repository IDs into its OIDC subjects
 # (azure-landing-zone, docs/deployment.md), so the credential trusts

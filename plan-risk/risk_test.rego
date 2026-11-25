@@ -75,3 +75,22 @@ test_a_replaced_kms_key_is_flagged if {
 test_no_changes_pass if {
 	count(warn) == 0 with input as plan([])
 }
+
+namespace(actions) := {
+	"address": "azapi_resource.namespace[\"aks-dev/int-se-example\"]",
+	"type": "azapi_resource",
+	"change": {
+		"actions": actions,
+		"before": {"type": "Microsoft.ContainerService/managedClusters/managedNamespaces@2026-05-02-preview", "body": {"properties": {}}},
+		"after": {"type": "Microsoft.ContainerService/managedClusters/managedNamespaces@2026-05-02-preview", "body": {"properties": {}}},
+		"after_unknown": {},
+	},
+}
+
+test_a_deleted_namespace_is_flagged if {
+	count(warn) == 1 with input as plan([namespace(["delete"])])
+}
+
+test_a_forgotten_namespace_passes if {
+	count(warn) == 0 with input as plan([namespace(["forget"])])
+}
