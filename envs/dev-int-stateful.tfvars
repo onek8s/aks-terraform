@@ -73,9 +73,9 @@ auto_upgrade = {
   node_os_channel = "SecurityPatch"
 }
 
-# No Gateway API implementation: the stateful cluster has no gateway of its own (design R21), whatever
-# the environment - not a cost saving.
-gateway_implementation = null
+# No Gateways: the stateful cluster has no gateway of its own (design R21), whatever the environment -
+# not a cost saving.
+gateways_enabled = false
 
 # Cluster access. Azure RBAC is on, so these groups are granted their access as role assignments on
 # the cluster: `Azure Kubernetes Service RBAC Cluster Admin` for the admins, `... RBAC Reader` for

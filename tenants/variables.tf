@@ -188,19 +188,3 @@ DESCRIPTION
     error_message = "tenant_path must be a path in the repository starting with ./."
   }
 }
-
-variable "zone_tenants_path" {
-  type        = string
-  default     = "./infrastructure/zone-tenants"
-  description = <<DESCRIPTION
-The directory of the platform's Flux repository with the ConfigMap `tenants-<zone>` (flux-system) that
-names the namespaces a zone's gateway watches (`$${zone}`, `$${gateway_watch_namespaces}`): the cell's
-Traefik configuration reads it with `substituteFrom`, so a new tenant changes nothing of the cell.
-DESCRIPTION
-  nullable    = false
-
-  validation {
-    condition     = startswith(var.zone_tenants_path, "./")
-    error_message = "zone_tenants_path must be a path in the repository starting with ./."
-  }
-}

@@ -148,50 +148,17 @@ DESCRIPTION
   nullable    = false
 }
 
-variable "gateway_implementation" {
-  type        = string
-  default     = "traefik"
+variable "gateways_enabled" {
+  type        = bool
+  default     = true
   description = <<DESCRIPTION
-The Gateway API implementation that serves the cluster's Gateways, one per isolation zone, deployed by the
-Flux repository (design section 4.1): `traefik` (the default, in every environment: Traefik Proxy, one small
-Deployment per Gateway from this repository's `gateways/traefik`, offering HTTP/2 alone and TLS 1.3 alone at
-the edge) or `approuting-istio` (App Routing's Gateway API, the Azure standard offering, upgraded by AKS -
-once it can offer the same at the edge; its istiod requests an untunable 1 CPU and 4 GiB, Azure/AKS#5939);
-null for a cluster without Gateways (the stateful cluster, R21). The Flux repository is told each Gateway's
-class as `gateway_class_name_<zone>`; switching re-creates the Gateways. See the README, "Ingress through
-the Gateway API".
-DESCRIPTION
-
-  validation {
-    condition     = var.gateway_implementation == null || contains(["traefik", "approuting-istio"], coalesce(var.gateway_implementation, "-"))
-    error_message = "gateway_implementation must be traefik, approuting-istio or null."
-  }
-}
-
-variable "traefik_flux_repository" {
-  type = object({
-    url                   = optional(string, "https://github.com/onek8s/aks-terraform")
-    branch                = optional(string, "main")
-    path                  = optional(string, "./gateways/traefik")
-    sync_interval_seconds = optional(number, 300)
-  })
-  default     = {}
-  description = <<DESCRIPTION
-Where the Flux configurations of `gateway_implementation = "traefik"` read Traefik's manifests:
-this repository's `gateways/traefik` on `main` by default, so the Gateway implementation is under
-this repository's control rather than the Flux repository's. A public repository: no credential is
-sent.
+Whether the cluster serves Gateways - one per isolation zone, deployed by the Flux repository (design
+section 4.1) - through App Routing's Gateway API implementation (GatewayClass `approuting-istio`): a
+sidecar-less Istio control plane that AKS upgrades with the cluster, no service mesh. Its istiod requests
+an untunable 1 CPU and 4 GiB on the system pool (Azure/AKS#5939). False for a cluster without Gateways
+(the stateful cluster, R21). See the README, "Ingress through the Gateway API".
 DESCRIPTION
   nullable    = false
-
-  validation {
-    condition     = can(regex("^https://", var.traefik_flux_repository.url)) && startswith(var.traefik_flux_repository.path, "./")
-    error_message = "traefik_flux_repository.url must start with https:// and its path with ./."
-  }
-  validation {
-    condition     = var.traefik_flux_repository.sync_interval_seconds >= 60
-    error_message = "traefik_flux_repository.sync_interval_seconds must be at least 60."
-  }
 }
 
 variable "image_integrity_enabled" {
@@ -421,7 +388,7 @@ platform's Gateway, `platform` in `platform-gateway` - a public load balancer fo
 receivers - and `flux-system` a share of the vault to read the token shared/ keeps there
 (`flux-system--github-webhook-token`, its `flux_github_webhook`). Only for a cell with a public entry
 point: behind the hub's firewall a public load balancer cannot answer, so an internal cell polls.
-Needs `flux_git_repository`, `key_vault_name` and a `gateway_implementation`; the Flux webhooks
+Needs `flux_git_repository`, `key_vault_name` and `gateways_enabled`; the Flux webhooks
 workflow points the repositories' webhooks at it.
 DESCRIPTION
   nullable    = false

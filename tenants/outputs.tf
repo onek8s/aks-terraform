@@ -17,14 +17,14 @@ output "tenants" {
     error_message = "A tenant is an application namespace of its isolation zone, named <zone>-<app> (design section 2.6): ${join(", ", [for name, tenant in local.tenants : name if !startswith(name, "${tenant.zone}-")])}."
   }
   # Microsoft documents system namespaces as not on-boardable, and the platform's Flux configurations
-  # share one name space with the tenants' (`platform`, `traefik-<gateway>`, `tenants-<zone>`).
+  # share one name space with the tenants' (`platform`).
   precondition {
     condition = alltrue([
       for name in keys(local.tenants) :
-      !startswith(name, "kube-") && !startswith(name, "traefik-") && !startswith(name, "tenants-")
+      !startswith(name, "kube-")
       && !contains(["app-routing-system", "gatekeeper-system", "istio-system", "flux-system", "platform"], name)
     ])
-    error_message = "A tenant cannot be a system namespace (kube-*, app-routing-system, gatekeeper-system, istio-system, flux-system) nor share a name with a platform Flux configuration (platform, traefik-*, tenants-*)."
+    error_message = "A tenant cannot be a system namespace (kube-*, app-routing-system, gatekeeper-system, istio-system, flux-system) nor share a name with the platform's Flux configuration (platform)."
   }
   precondition {
     condition = alltrue(flatten([

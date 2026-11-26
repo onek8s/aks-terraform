@@ -1543,46 +1543,6 @@ run "a_zone_without_pools_places_nothing" {
   }
 }
 
-# The namespaces each zone's gateway watches are the tenants', told to the cell's Traefik through a
-# ConfigMap the zone's own Flux configuration keeps: a new tenant changes nothing of the cell.
-run "each_zone_tells_its_gateway_the_namespaces_to_watch" {
-  command = plan
-
-  variables {
-    tenants = {
-      team-search   = { zone = "team" }
-      team-payments = { zone = "team" }
-      ext-fi-orders = { zone = "ext-fi" }
-    }
-  }
-
-  assert {
-    condition     = toset(keys(azapi_resource.zone_flux_configuration)) == toset(["aks-test/team", "aks-test/ext-fi"])
-    error_message = "Every zone of every cell should get its configuration."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].name == "tenants-team"
-    error_message = "A zone's configuration should be tenants-<zone>."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].body.properties.kustomizations.namespaces.postBuild.substitute.gateway_watch_namespaces == "[team-gateway,team-payments,team-search]"
-    error_message = "The gateway should watch its own namespace and its zone's tenants, sorted."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/ext-fi"].body.properties.kustomizations.namespaces.path == "./infrastructure/zone-tenants"
-    error_message = "The ConfigMap should come from zone_tenants_path."
-  }
-}
-
-run "a_zone_without_tenants_watches_its_own_namespace" {
-  command = plan
-
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].body.properties.kustomizations.namespaces.postBuild.substitute.gateway_watch_namespaces == "[team-gateway]"
-    error_message = "A zone without tenants should watch its gateway's namespace alone."
-  }
-}
-
 # A cell of another type syncs another path of the same repository.
 run "a_tenant_can_sync_another_path_in_one_cell" {
   command = plan

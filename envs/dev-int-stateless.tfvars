@@ -12,12 +12,12 @@ location = "germanywestcentral"
 # Non-production cost savings
 #
 # Every setting in this block departs from the module's defaults, which are the production settings
-# of the OneK8s design (acc and prd use the defaults). Together they let a lab cell run on ONE small
-# system node instead of two larger ones (default_node_pool, in each cell's file), at the price of an
+# of the OneK8s design (acc and prd use the defaults). Together they let a lab cell run on two small
+# system nodes instead of two larger ones (default_node_pool, in each cell's file), at the price of an
 # SLA and of pod right-sizing. Do not copy this block to an acceptance or production environment. They
-# depend on each other: the single 8 GiB system node (~5.8 GiB allocatable) holds the platform only
-# without the VPA add-on (and with Traefik, the default gateway in every environment, design section
-# 4.1). Going back to production means all of them together.
+# depend on each other: two 8 GiB system nodes (~5.8 GiB allocatable each) hold the platform and App
+# Routing's istiod (two replicas of 500m and 2 GiB, Azure/AKS#5939) only without the VPA add-on. Going
+# back to production means all of them together.
 # ---------------------------------------------------------------------------------------------------
 
 # AKS Free tier: no uptime SLA, API server not scaled for load. Production: "Standard" (design D31).

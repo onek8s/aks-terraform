@@ -93,12 +93,12 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   (karpenter-provider-azure issue 1351) - a watch-list item in the design. GPUs (D42) would be a classic `<zone>gpu`
   pool (H100 v5, on-demand, taint `platform/accelerator=nvidia-gpu`) - design only; **the user does not want GPU nodes
   in the lab** (quota stays 0).
-- **System pool**: one `Standard_D4alds_v6` node, `os_disk_type = "Ephemeral"`, Azure Linux, SSH off,
+- **System pool**: two `Standard_D4alds_v6` nodes (App Routing's istiod takes 2 x 2 GiB), `os_disk_type = "Ephemeral"`, Azure Linux, SSH off,
   `CriticalAddonsOnly`. It fits only with the lab's cost savings, stated in one "Non-production cost savings" block of
   `envs/dev-int-stateless.tfvars`: Free tier and VPA add-on off (aks-hello's
   VerticalPodAutoscaler is patched out in the example repo). variables.tf defaults are production (Standard,
-  VPA on, 2 x Standard_D4ds_v5; Traefik is the default gateway everywhere) - README "Production defaults and
-  non-production cost savings". The stateful tfvars state `gateway_implementation = null` (R21).
+  VPA on, 2 x Standard_D4ds_v5) - README "Production defaults and
+  non-production cost savings". The stateful tfvars state `gateways_enabled = false` (R21).
 - **No ACNS** (D80, cell rebuilt 2026-10-19): `advanced_networking = null` is the default - no Hubble, FQDN policies or
   eBPF host routing. The fleet's Cilium policies are layer 3 and 4 only (no `toFQDNs`, no DNS rules - both need the
   ACNS DNS proxy); platform namespaces go out on 443 to `world`, labfw decides.
@@ -160,11 +160,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   (asserted by shared/tests/naming.tftest.hcl). The real policy stays out of Git: `dev` environment secret
   `NAMING_POLICY` (JSON), written by Deploy to `naming.auto.tfvars.json` and masked; `scripts/policy-name.sh` for
   workflows. A variable that names a resource still wins.
-- **Edge: HTTP/2 + TLS 1.3 only** (D69-D71): Traefik's ConfigMap `traefik-dynamic` (`gateways/traefik`) sets ALPN
-  `[h2]` and `minVersion: VersionTLS13`; aks-hello serves h2c on port 8081 (Service `appProtocol: kubernetes.io/h2c`).
-  V28 (HTTP/2 upstream) and V30 (TLS 1.2 refused) hold; **V29 fails**: Go lets an `http/1.1` client in without ALPN
-  (golang/go#46310) - a new D70 option is the user's decision, not taken. Policies `h2c-upstream` and `gateway-tls`
-  (azure-landing-zone) deny (2026-10-19).
+- **Edge: App Routing's Istio** (design v4.13, the user: Traefik removed until App Routing can refuse HTTP/1.1 and
+  TLS 1.2 on a listener): the edge offers HTTP/2 and HTTP/1.1, TLS 1.2 and 1.3; the policy `gateway-tls` is gone.
+  Upstream stays h2c: aks-hello serves it on port 8081 (Service `appProtocol: kubernetes.io/h2c`), `h2c-upstream` denies.
 - **Flux GitHub webhook** (D78): root `flux_github_webhook` brings the platform gateway and flux-system's vault share;
   token in shared/. **Off in the lab** (no public entry point behind labfw; Flux polls every minute). GitHub delivers
   over HTTP/1.1: the receiver is the one exemption of `h2c-upstream` (`flux-system/webhook-receiver`).
@@ -222,8 +220,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   (schema `tenants/schema`, rules as preconditions of output `tenants`) and makes, in every cell of the tenant's
   zone (`tenants/envs/<env>.tfvars` `cells`), the managed namespace, `Namespace User` grants, the team's Flux
   configuration `<ns>`, `<ns>-access` (role bindings + `store` = fleet `infrastructure/tenant` with substitutions)
-  and the federated credential; per zone `tenants-<zone>` (fleet `infrastructure/zone-tenants`: ConfigMap
-  `tenants-<zone>` with `gateway_watch_namespaces`, read by the cell's Traefik `substituteFrom`). shared/ reads
+  and the federated credential. shared/ reads
   the same files for the vault shares (`tenant_catalogue_dir`). The cell keeps `namespace_node_pools` (the
   dedicated pools); the tenant says `dedicated_node_pool: true`. A new tenant: one file, apply dev-shared then
   dev-tenants. The isolation tests and aks-ai-agents' docs read the catalogue.
@@ -235,15 +232,12 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   Automatic.** The lab is one cell.
 - **Traffic Manager, not Front Door.** External zones get a public LB per zone per cell; one Traffic Manager profile
   per global hostname (Subnet routing with nested Priority profiles in the design; Weighted in a lab).
-- **Gateway API implementation is a flag, `gateway_implementation`**: `traefik` (the default in every environment since
-  design v4, section 4.1: HTTP/2 and TLS 1.3 alone at the edge; `gateways/traefik`, a Flux
-  configuration `traefik-<gateway>` per Gateway) or `approuting-istio` (once it offers the same at the edge: App Routing's
-  sidecar-less istiod, an Envoy Deployment + LB + HPA min 2 + PDB per Gateway, shaped by the ConfigMap in
-  `parametersRef`; no rate limits / request size limits / EnvoyFilter; istiod requests 2 x 500m/2 GiB, not tunable,
-  Azure/AKS#5939). Traefik refuses a `parametersRef`, so the fleet adds it only in its `approuting-istio` component.
+- **Gateway API implementation: App Routing's `approuting-istio` only** (`gateways_enabled`; Traefik removed): sidecar-less
+  istiod, an Envoy Deployment + LB + HPA min 2 + PDB per Gateway, shaped by the ConfigMap in `parametersRef`; no rate
+  limits / request size limits / EnvoyFilter; istiod requests 2 x 500m/2 GiB, not tunable, Azure/AKS#5939.
 - **Isolation zones** int-fi, int-se (internal clusters only), ext-fi, ext-se (external clusters only): per cell a /24
   node slot each (nodes /25, ILB /27) and a /20 pod slot, own NSG and route table, own Key Vault
-  (`kv-onek8s-gwc-<zone>`), own node pools, own Gateway (class `traefik-<zone>` or `approuting-istio`) and ESO
+  (`kv-onek8s-gwc-<zone>`), own node pools, own Gateway (class `approuting-istio`) and ESO
   (`controllerClass: <zone>`), Cilium CCNP baseline. Internal and external never share a subscription or cluster (D52).
 - **Zone nodes only for applications.** Each zone's gateway pods and ESO run on the system pool, so a zone without
   application pods has zero nodes. The system subnet NSG allows 443 from Internet *and* (a separate rule) from
@@ -286,7 +280,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **AKS's azure-ip-masq-agent** translates pod flows leaving the VNet to the node's address; its optional user
   ConfigMap `azure-ip-masq-agent-config` (kube-system) merges with the reconciled one.
 - **A new zone needs its gateway certificate** `<zone>-gateway--wildcard`, or its Gateway is invalid
-  (`InvalidCertificateRef`) and Traefik answers 404.
+  (`InvalidCertificateRef`).
 - **Behind labfw, a denied source shows only in labfw's log** (Log Analytics, or `labfw logs --action deny --src <IP>`
   over SSH). Upstreams redirect to CDNs the allow-list must name too (`cdn.registry.k8s.io`,
   `production.cloudfront.docker.com`, `external-secrets.io`). labfw applies a policy change ~2 min after the Platform
@@ -323,7 +317,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   pipelines. **k8s-monitoring on AKS** needs the pod annotation `kubernetes.azure.com/set-kube-service-host-fqdn: "true"`
   on every Alloy collector and kube-state-metrics (offline `helm template` misses it); their Cilium DNS rules must allow
   `*.hcp.<region>.azmk8s.io`.
-- **The one 8 GiB system node is nearly full** (~5.8 GiB allocatable, ~2 GiB to spare without istiod and the VPA
+- **The 8 GiB system nodes are nearly full** (~5.8 GiB allocatable each; istiod takes 2 x 2 GiB, the VPA
   add-on): new system-pool workloads need small requests or node-critical priority. kube-bench pinned with `nodeName`
   must request no resources.
 - **An ABAC condition may name only actions its role has** (`InvalidRoleAssignmentCondition`, only at apply).
@@ -349,8 +343,8 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   them. Never enable it on snet-system (2026-10-20 outage).
 - **Cilium takes a LoadBalancer Service's address on every node** and sends a pod straight to its backends: a zone pod
   calling a published name (the gateway ILB) never reached labfw and was dropped unanswered by the zone policies (a
-  timeout). The gateway Services carry `service.cilium.io/node-selector: "!platform/zone"` (Cilium 1.18+; Traefik here,
-  approuting-istio in the fleet), so on zone nodes the flow goes through labfw and back through the ILB (2026-10-20,
+  timeout). The gateway Services carry `service.cilium.io/node-selector: "!platform/zone"` (Cilium 1.18+; the fleet's
+  `gateway` ConfigMap), so on zone nodes the flow goes through labfw and back through the ILB (2026-10-20,
   #223); azure-landing-zone's last collection `<spoke>-published-names-deny` resets what no rule file allows (17-32 ms).
 - **A node pool's `localDNSProfile` change reimages its running nodes** (#229, 2026-10-22: `mode = "Disabled"` stated on
   every pool reimaged the one system node in place, ~11 min, and every running zone node; empty pools took ~1-3 min).

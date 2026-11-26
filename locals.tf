@@ -65,8 +65,6 @@ locals {
     # Each isolation zone's node subnet, each namespace's vault and the internal zones' DNS - see
     # zones.tf.
     local.flux_zone_settings,
-    # The GatewayClass each Gateway names - see traefik.tf.
-    local.flux_gateway_settings,
   )
 
   # The Flux configuration as sent to Azure. A local, because the namespace access configurations

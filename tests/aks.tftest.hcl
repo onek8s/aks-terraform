@@ -981,8 +981,8 @@ run "defaults_are_production_settings" {
     error_message = "The default system pool should be two Standard_D4ds_v5 nodes on Azure Linux."
   }
   assert {
-    condition     = var.gateway_implementation == "traefik"
-    error_message = "The default Gateway API implementation should be Traefik, in every environment (design section 4.1)."
+    condition     = var.gateways_enabled
+    error_message = "A cluster should serve Gateways through App Routing by default (design section 4.1)."
   }
   assert {
     condition     = var.vertical_pod_autoscaler_enabled
@@ -1567,118 +1567,7 @@ run "rejects_an_unknown_log_category" {
 
 # Who owns a namespace and pays for it (design section 2.6): the team and cost centre as labels, the
 # contact and the repository as annotations - what Azure Policy's namespace-ownership rule expects.
-run "traefik_serves_every_gateway_from_a_flux_configuration_of_its_own" {
-  command = plan
-
-  variables {
-    exposure        = "ext"
-    zone_node_pools = {}
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    isolation_zones = {
-      ext-fi = { node_subnet_name = "snet-ext-fi-nodes", pod_subnet_name = "snet-ext-fi-pods" }
-      ext-se = { node_subnet_name = "snet-ext-se-nodes", pod_subnet_name = "snet-ext-se-pods" }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-    gateway_implementation = "traefik"
-  }
-
-  assert {
-    condition     = keys(azapi_resource.traefik_flux_configuration) == ["ext-fi", "ext-se"]
-    error_message = "Each zone's Gateway should get a Traefik Flux configuration."
-  }
-  assert {
-    condition     = azapi_resource.traefik_flux_configuration["ext-fi"].name == "traefik-ext-fi"
-    error_message = "A Traefik Flux configuration should be named traefik-<gateway>."
-  }
-  assert {
-    condition     = azapi_resource.traefik_flux_configuration["ext-fi"].body.properties.gitRepository.url == "https://github.com/onek8s/aks-terraform"
-    error_message = "Traefik should be read from this repository by default."
-  }
-  assert {
-    condition     = azapi_resource.traefik_flux_configuration["ext-fi"].body.properties.kustomizations.gateway.path == "./gateways/traefik"
-    error_message = "Traefik should be read from gateways/traefik."
-  }
-  assert {
-    condition = (
-      azapi_resource.traefik_flux_configuration["ext-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_namespace == "ext-se-gateway" &&
-      azapi_resource.traefik_flux_configuration["ext-se"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_internal == "false"
-    )
-    error_message = "Each Traefik configuration should be told its Gateway's namespace and load balancer."
-  }
-  assert {
-    condition = (
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_ext_fi == "traefik-ext-fi" &&
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_ext_se == "traefik-ext-se"
-    )
-    error_message = "The Flux repository should be told each Gateway's Traefik class."
-  }
-  assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_implementation == "traefik"
-    error_message = "The Flux repository should be told the implementation, for its components."
-  }
-}
-
-run "an_internal_zone_gets_an_internal_traefik_load_balancer" {
-  command = plan
-
-  variables {
-    exposure        = "int"
-    zone_node_pools = {}
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-    gateway_implementation = "traefik"
-  }
-
-  assert {
-    condition = (
-      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_internal == "true" &&
-      azapi_resource.traefik_flux_configuration["int-fi"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_exposure == "int"
-    )
-    error_message = "An internal zone's Traefik should be behind an internal load balancer."
-  }
-}
-
-run "a_zones_traefik_watches_only_the_zones_namespaces" {
-  command = plan
-
-  variables {
-    exposure        = "int"
-    zone_node_pools = {}
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
-      int-se = { node_subnet_name = "snet-int-se-nodes", pod_subnet_name = "snet-int-se-pods" }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-    gateway_implementation = "traefik"
-  }
-
-  assert {
-    condition = alltrue([
-      for zone in ["int-fi", "int-se"] :
-      !contains(keys(azapi_resource.traefik_flux_configuration[zone].body.properties.kustomizations.gateway.postBuild.substitute), "gateway_watch_namespaces")
-      && azapi_resource.traefik_flux_configuration[zone].body.properties.kustomizations.gateway.postBuild.substituteFrom == [{ kind = "ConfigMap", name = "tenants-${zone}", optional = false }]
-    ])
-    error_message = "A zone's Traefik should read the namespaces it watches from the zone's tenants ConfigMap (tenants/), with nothing inline to fall back on."
-  }
-}
-
-run "app_routing_serves_every_gateway_without_traefik" {
+run "the_flux_repository_names_the_gateway_class_itself" {
   command = plan
 
   variables {
@@ -1693,51 +1582,14 @@ run "app_routing_serves_every_gateway_without_traefik" {
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
-    gateway_implementation = "approuting-istio"
   }
 
   assert {
-    condition     = length(azapi_resource.traefik_flux_configuration) == 0
-    error_message = "App Routing needs no Traefik."
-  }
-  assert {
-    condition = (
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_ext_fi == "approuting-istio"
-    )
-    error_message = "Every Gateway should name App Routing's class."
-  }
-  assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_implementation == "approuting-istio"
-    error_message = "The Flux repository should be told the implementation, for its components."
-  }
-}
-
-run "a_cluster_without_a_gateway_implementation_names_no_class" {
-  command = plan
-
-  variables {
-    gateway_implementation = null
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-  }
-
-  assert {
-    condition = length(azapi_resource.traefik_flux_configuration) == 0 && length([
+    condition = length([
       for key in keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute) : key if startswith(key, "gateway_")
     ]) == 0
-    error_message = "Without a gateway_implementation there are no Gateway classes to tell and no Traefik."
+    error_message = "App Routing's class is the only one: the Flux repository is told no Gateway class or implementation."
   }
-}
-
-run "an_unknown_gateway_implementation_is_refused" {
-  command = plan
-
-  variables {
-    gateway_implementation = "nginx"
-  }
-
-  expect_failures = [var.gateway_implementation]
 }
 
 # ----------------------------------------------------------------------------------------------
@@ -1805,34 +1657,6 @@ run "an_unknown_os_disk_type_is_refused" {
   expect_failures = [var.default_node_pool]
 }
 
-run "a_cell_without_the_webhook_has_a_gateway_per_zone_and_nothing_else" {
-  command = plan
-
-  variables {
-    exposure        = "int"
-    zone_node_pools = {}
-    default_node_pool = {
-      availability_zones = ["1"]
-    }
-    isolation_zones = {
-      int-fi = { node_subnet_name = "snet-int-fi-nodes", pod_subnet_name = "snet-int-fi-pods" }
-    }
-    flux_git_repository = {
-      url = "https://github.com/example/cluster-config"
-    }
-    gateway_implementation = "traefik"
-  }
-
-  assert {
-    condition     = keys(azapi_resource.traefik_flux_configuration) == ["int-fi"]
-    error_message = "Without the Flux webhook, one Gateway per zone and nothing else."
-  }
-  assert {
-    condition     = !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "gateway_class_name_platform")
-    error_message = "The Flux repository is told no platform gateway class."
-  }
-}
-
 run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
   command = plan
 
@@ -1849,30 +1673,9 @@ run "the_flux_webhook_brings_the_platform_gateway_and_flux_systems_share" {
     flux_git_repository = {
       url = "https://github.com/example/cluster-config"
     }
-    gateway_implementation = "traefik"
-    flux_github_webhook    = true
+    flux_github_webhook = true
   }
 
-  assert {
-    condition     = keys(azapi_resource.traefik_flux_configuration) == ["ext-fi", "platform"]
-    error_message = "The Flux webhook should bring the platform gateway beside the zone's."
-  }
-  assert {
-    condition = (
-      azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_namespace == "platform-gateway" &&
-      azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_internal == "false" &&
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.gateway_class_name_platform == "traefik-platform"
-    )
-    error_message = "The platform gateway should be public, in platform-gateway, and its class told to the Flux repository."
-  }
-  assert {
-    condition     = azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild.substitute.gateway_watch_namespaces == "[platform-gateway,flux-system]"
-    error_message = "The platform gateway's Traefik should watch platform-gateway and flux-system, where the webhook route is."
-  }
-  assert {
-    condition     = !contains(keys(azapi_resource.traefik_flux_configuration["platform"].body.properties.kustomizations.gateway.postBuild), "substituteFrom")
-    error_message = "The platform gateway's list is the cell's own: it reads no tenants ConfigMap."
-  }
   assert {
     condition = alltrue([
       contains(keys(azurerm_federated_identity_credential.platform_key_vault), "flux-system"),
@@ -1887,27 +1690,21 @@ run "the_flux_webhook_needs_a_vault" {
   command = plan
 
   variables {
-    flux_git_repository    = { url = "https://github.com/example/cluster-config" }
-    gateway_implementation = "traefik"
-    flux_github_webhook    = true
-  }
-
-  assert {
-    condition     = !contains(keys(azapi_resource.traefik_flux_configuration), "platform")
-    error_message = "No platform gateway without a vault to read the webhook's token from."
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    flux_github_webhook = true
   }
 
   expect_failures = [check.flux_github_webhook_has_a_repository_a_vault_and_a_gateway]
 }
 
-run "the_flux_webhook_needs_a_gateway_implementation" {
+run "the_flux_webhook_needs_gateways" {
   command = plan
 
   variables {
-    key_vault_name         = "kv-onek8s-gwc-platform"
-    flux_git_repository    = { url = "https://github.com/example/cluster-config" }
-    gateway_implementation = null
-    flux_github_webhook    = true
+    key_vault_name      = "kv-onek8s-gwc-platform"
+    flux_git_repository = { url = "https://github.com/example/cluster-config" }
+    gateways_enabled    = false
+    flux_github_webhook = true
   }
 
   expect_failures = [check.flux_github_webhook_has_a_repository_a_vault_and_a_gateway]

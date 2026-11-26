@@ -11,8 +11,8 @@
 name                 = "aks-dev-int-stateless-az3"
 virtual_network_name = "vnet-dev-int-stateless-az3"
 
-# The system pool: ONE amd64 node in availability zone 3, Standard_D4alds_v6 (4 vCPU, 8 GiB, VNet
-# encryption) - fits only with the cost savings of the shared file - on an ephemeral OS disk on the size's
+# The system pool: TWO amd64 nodes in availability zone 3, Standard_D4alds_v6 (4 vCPU, 8 GiB, VNet
+# encryption; two, because App Routing's istiod takes 2 x 2 GiB) - fits only with the cost savings of the shared file - on an ephemeral OS disk on the size's
 # local NVMe disk: no managed OS disk, so no Premium SSD. Production: node_count = 2 on the default
 # Standard_D4ds_v5 (16 GiB) - room for istiod and the VPA add-on, and a node to spare during an upgrade
 # (design section 2.3). Azure Linux 3.0, encryption at host, SSH off and the CriticalAddonsOnly taint - only
@@ -26,7 +26,7 @@ default_node_pool = {
   os_disk_type        = "Ephemeral"
   availability_zones  = ["3"]
   enable_auto_scaling = false
-  node_count          = 1
+  node_count          = 2
   max_pods            = 250
 }
 pod_subnet_name = "snet-system-pods"

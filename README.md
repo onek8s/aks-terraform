@@ -207,9 +207,7 @@ their zones; `cells: [...]` in the file narrows it):
   the namespace's `key-vault` service account and SecretStore on its zone's vault, and its default
   service account (aks-fluxcd-platform `infrastructure/tenant`, the same directory for every tenant);
 - `Azure Kubernetes Service Namespace User` for each group, and the federated credential of the
-  namespace's vault identity for the cell;
-- per zone, the Flux configuration `tenants-<zone>`: the ConfigMap that names the namespaces the zone's
-  gateway watches, which the cell's Traefik configuration reads (`substituteFrom`).
+  namespace's vault identity for the cell.
 
 `shared/` reads the same files for the namespace's share of its zone's vault (`writers`, and the
 groups' rights on it). So a new tenant is reviewed as one file, planned and applied by the tenants
@@ -223,9 +221,9 @@ The catalogue's schema is `tenants/schema` (a typed variable: a misspelt attribu
 
 **Moving tenants out of a cell's state** (the lab, 2026-11; `tenants/imports.tf`): the cell forgets its
 namespace resources (`removed` blocks, nothing destroyed) and `tenants/` imports them. Order: merge,
-plan `dev-shared` (no change expected), apply `dev-tenants` (imports, plus each tenant's `store` and the
-zones' `tenants-<zone>`), merge the fleet's change that drops its per-tenant `tenants/` directories and
-cluster settings, then apply the cell (Traefik reads `tenants-<zone>`). The fleet's old `tenants`
+plan `dev-shared` (no change expected), apply `dev-tenants` (imports, plus each tenant's `store`), merge
+the fleet's change that drops its per-tenant `tenants/` directories and cluster settings, then apply the
+cell. The fleet's old `tenants`
 Kustomizations hand their objects over: the new `<namespace>-access-store` applies them first and
 takes their owner labels, so pruning the old one deletes nothing.
 
@@ -376,7 +374,7 @@ Group values are object IDs, not names.
   cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
   `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
   Microsoft names, `flux-system`, and the platform's Flux configuration names (`platform`,
-  `traefik-*`, `tenants-*`). A tenant's name starts with its zone, `<zone>-`.
+  `tenants-*`). A tenant's name starts with its zone, `<zone>-`.
 - **A namespace grant does not carry over to the cluster.** `Azure Kubernetes Service Cluster User
   Role` and the cluster-wide `entra_admin_group_object_ids` are separate, and a principal that has
   only namespace grants cannot run `az aks get-credentials` or see anything outside its namespace -
@@ -424,8 +422,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik or App
-Routing's Gateway API implementation (`gateway_implementation`) - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by App Routing's
+Gateway API implementation (`gateways_enabled`) - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -459,7 +457,6 @@ reported on.
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
 [approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
 [aks5939]: https://github.com/Azure/AKS/issues/5939
-[traefikgw]: https://doc.traefik.io/traefik/providers/kubernetes-gateway/
 [defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
@@ -474,30 +471,15 @@ configuration provides is the API itself; the controller serving it is deployed 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `gateway_implementation = "approuting-istio"`, else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. |
+| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `gateways_enabled` (the default), else `Disabled` (the stateful cluster, R21): [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. |
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - `2026-03-02-preview`, which also knows App Routing Istio. |
 
-`gateway_implementation` picks what serves the Gateways - the same Gateways, listeners, certificates
-and Cilium policies either way; only the GatewayClass they name changes, which the Flux repository
-is told as `gateway_class_name_<gateway>` - and the implementation as `gateway_implementation`, the
-kustomize component that adds what only it takes (App Routing's `parametersRef` ConfigMap, which
-Traefik refuses with `Accepted: False`):
+App Routing serves every Gateway; the Flux repository names its class, `approuting-istio`, itself.
+istiod requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]):
+a lab cell runs two system nodes for it. App Routing's Istio does not let a listener refuse HTTP/1.1
+or TLS 1.2 (design section 4.1): the edge offers HTTP/2 and HTTP/1.1, TLS 1.2 and 1.3.
 
-| `gateway_implementation` | What runs | Cost |
-| --- | --- | --- |
-| `traefik` (the default, every environment: HTTP/2 alone and TLS 1.3 alone at the edge, design section 4.1) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
-| `approuting-istio` (once App Routing can offer the same at the edge) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
-| null | No implementation: the stateful cluster (R21), which states it. | - |
-
-Traefik's manifests live here rather than in the Flux repository so that the choice and everything
-it brings are one change of this repository. Switching re-creates the Gateways under their new class
-(Flux `force`): the cell's gateways are down for a few minutes, so drain the cell in Traffic Manager
-first where that matters. Leaving App Routing leaves its per-Gateway objects behind (istiod, which
-would remove them, is gone): every Deploy apply of a cluster deletes `<gateway>-approuting-istio`
-(Deployment, Service, autoscaler, disruption budget, ServiceAccount) for each Gateway that names
-another class.
-
-With App Routing, for every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
+For every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
 shaped by the ConfigMap the Gateway names in `spec.infrastructure.parametersRef` - within the
 add-on's allow list. The Flux repository runs one such Gateway per isolation zone - `<zone>` in
@@ -856,7 +838,7 @@ pool in each cell's file.
 | --- | --- | --- | --- |
 | `sku_tier` | `Standard` - uptime SLA, API server scaled for load (D31) | `Free` | The control plane SLA; cost analysis. |
 | `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 2.3) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
-| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | A second node during upgrades and failures; room for the VPA add-on. Fits only with the VPA add-on off (and Traefik, the default gateway: istiod's 1 CPU / 4 GiB, [Azure/AKS#5939][aks5939], would not). With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
+| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 2`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | Room for the VPA add-on. Two small nodes hold the platform and istiod's 1 CPU / 4 GiB ([Azure/AKS#5939][aks5939]) only with the VPA add-on off. |
 
 The savings depend on each other - the one 8 GiB system node holds the platform only without the VPA
 add-on - so going back to production means all of them: delete the block and apply; all are in-place updates.
@@ -903,7 +885,6 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
 | `dns_zone_private`, `dns_provider` | Whether the zone is private (`"true"` / `"false"`), and the external-dns provider that writes it: `azure` or `azure-private-dns`. |
 | `dns_identity_client_id` | The identity external-dns writes either zone as. |
-| `gateway_implementation`, `gateway_class_name_<zone>` | The Gateway API implementation and the class each zone's Gateway names. |
 | `cluster_exposure`, `internal_dns_resource_group_name` | The cluster's exposure (D52) and, for an internal cluster, where the internal zones' private DNS is. |
 | `image_verification_client_id`, `image_signing_certificate_name`, `image_signing_subject`, `container_registry_login_server` | With `image_integrity_enabled`: what Ratify verifies with. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
