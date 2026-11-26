@@ -233,7 +233,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **One cell network: Azure CNI Pod Subnet** (dynamic IP allocation, Cilium); overlay is gone (v2.0, D79), node
   subnet is not offered. **Classic zone pools with the cluster autoscaler until NAP supports the pod subnet.** **No AKS
   Automatic.** The lab is one cell.
-- **No Traffic Manager and no Front Door** (design v5.0 trial, the user): every application, external too, runs in
+- **No Traffic Manager and no Front Door** (design v5.0, the user): every application, external too, runs in
   one home cell, reached by its zone's gateway (a public LB per external zone per cell) and moved by the migration
   workflow; its own name is published by the home cell's managed external-dns.
 - **Gateway API implementation: App Routing's `approuting-istio` only** (`gateways_enabled`; Traefik removed): sidecar-less
