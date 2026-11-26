@@ -224,6 +224,15 @@ jobs:
             kubectl get deploy,hpa,pdb,pods -n "$ns" -o wide
             kubectl get pods -n "$ns" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{range .items[*]}{.metadata.name}: securityContext={.spec.securityContext} seccomp={.spec.containers[0].securityContext.seccompProfile}{"\n"}{end}'
             kubectl logs -n "$ns" -l gateway.networking.k8s.io/gateway-name --tail=30 --prefix
+            # What Envoy makes of each route's backends: the upstream clusters' protocol and TLS, and
+            # their connection and request errors (a 502 "protocol error" shows here).
+            pod=$(kubectl get pods -n "$ns" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{.items[0].metadata.name}')
+            if [ -n "$pod" ]; then
+              kubectl exec -n "$ns" "$pod" -c istio-proxy -- pilot-agent request GET 'config_dump?resource=dynamic_active_clusters' \
+                | jq -c '.configs[]?.dynamic_active_clusters[]?.cluster | select(.name | test("^outbound\\|[0-9]+\\|\\|.*\\.(int|ext)-(fi|se)-")) | {name, transport_socket: (.transport_socket.name // null), transport_socket_matches: [.transport_socket_matches[]?.name], protocol_options: .typed_extension_protocol_options}'
+              kubectl exec -n "$ns" "$pod" -c istio-proxy -- pilot-agent request GET stats \
+                | grep -E '^cluster\.outbound\|[0-9]+\|\|[^|]*\.(int|ext)-(fi|se)-[^.]*\.svc\.cluster\.local\.(upstream_cx_protocol_error|upstream_cx_total|upstream_rq_total|upstream_rq_5xx|upstream_cx_connect_fail|upstream_rq_rx_reset|upstream_rq_tx_reset|ssl\.connection_error|ssl\.handshake)'
+            fi
             kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -n 15
           done
           # External Secrets Operator: the platform's and one per zone, and every store and secret.
@@ -266,8 +275,12 @@ jobs:
           kubectl get ciliumnetworkpolicies -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions}{"\n"}{end}'
           kubectl get networkpolicy -A
           # external-dns and Flux's webhook receivers.
-          kubectl logs -n external-dns -l app.kubernetes.io/instance=external-dns-ext --tail=40 --prefix
-          kubectl logs -n external-dns -l app.kubernetes.io/instance=external-dns-int --tail=40 --prefix
+          # App Routing's managed external-dns: a Deployment per ClusterExternalDNS, named after it.
+          kubectl get clusterexternaldnses.approuting.kubernetes.azure.com -o yaml
+          kubectl get deploy,pods -n external-dns -o wide
+          for deploy in $(kubectl get deploy -n external-dns -o name); do
+            kubectl logs -n external-dns "$deploy" --all-containers --tail=40 --prefix
+          done
           kubectl get receivers.notification.toolkit.fluxcd.io -A
           kubectl get receivers.notification.toolkit.fluxcd.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.webhookPath} {.status.conditions}{"\n"}{end}'
           # The `example` team, in each zone that runs it: its Flux configuration, what runs and why not.

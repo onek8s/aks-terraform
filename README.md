@@ -881,7 +881,7 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | `key_vault_url`, `key_vault_url_<namespace>`, `key_vault_client_id_<namespace>` | The platform vault, each namespace's vault, and for each namespace with a share the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_int_fi_gateway`. |
 | `dns_zone_name`, `dns_zone_id` | The zone of `dns_zone_name`, and its resource ID. |
 | `dns_identity_client_id` | The identity App Routing's managed external-dns writes the zones as. |
-| `cluster_exposure`, `internal_dns_zone_ids` | The cluster's exposure (D52) and, for an internal cluster, the internal zones' Private DNS zones as a YAML flow sequence of resource IDs. |
+| `cluster_exposure`, `internal_dns_zone_ids` | The cluster's exposure (D52) and, for an internal cluster, the internal zones' Private DNS zones as a YAML flow sequence of resource IDs in single quotes (Flux drops the source's quotes before it substitutes, so the ConfigMap keeps a string). |
 | `image_verification_client_id`, `image_signing_certificate_name`, `image_signing_subject`, `container_registry_login_server` | With `image_integrity_enabled`: what Ratify verifies with. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 
