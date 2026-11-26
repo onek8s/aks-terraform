@@ -175,6 +175,12 @@ container_registry_builds = {
     repository = "https://github.com/onek8s/aks-hello.git"
     commit     = "a74539a019122b97ab4e4900900190d97f2907c1"
   }
+  # The h2c port accepts the gateway's `:scheme` https (0.8.1): App Routing's Istio forwards it, and Kestrel
+  # reset such streams - every route answered 502 with 0.8.0 (design v5.0)
+  "aks-hello:0.8.1" = {
+    repository = "https://github.com/onek8s/aks-hello.git"
+    commit     = "f462bdc29cee75938c07b5d59cb148b3b867008c"
+  }
 }
 
 # Every image the registry builds is signed with this certificate in the platform vault (the Sign
