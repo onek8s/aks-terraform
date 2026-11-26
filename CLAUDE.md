@@ -160,7 +160,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   (asserted by shared/tests/naming.tftest.hcl). The real policy stays out of Git: `dev` environment secret
   `NAMING_POLICY` (JSON), written by Deploy to `naming.auto.tfvars.json` and masked; `scripts/policy-name.sh` for
   workflows. A variable that names a resource still wins.
-- **Edge: App Routing's Istio** (design v4.13, the user: Traefik removed until App Routing can refuse HTTP/1.1 and
+- **Edge: App Routing's Istio** (design v5.0, the user: Traefik removed until App Routing can refuse HTTP/1.1 and
   TLS 1.2 on a listener): the edge offers HTTP/2 and HTTP/1.1, TLS 1.2 and 1.3; the policy `gateway-tls` is gone.
   Upstream stays h2c: aks-hello serves it on port 8081 (Service `appProtocol: kubernetes.io/h2c`), `h2c-upstream` denies.
 - **Flux GitHub webhook** (D78): root `flux_github_webhook` brings the platform gateway and flux-system's vault share;
@@ -177,7 +177,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   (`published-names-deny`). `lab/scale/kustomization.yaml` is the Git-only replica switch.
   Internal names by home cell: `hello.<zone>.dev.onek8s.lol` next to `hello-<cluster>...`; the home route
   is in a path of its own (aks-fluxcd-example `firewall-egress/home`) that only the tenant's `flux.home.cell`
-  applies (tenants/), so the route is the DNS switch (design v4.13: no `platform/home-cell` filter).
+  applies (tenants/), so the route is the DNS switch (design v5.0: no `platform/home-cell` filter).
   DNS by App Routing's managed external-dns (`ClusterExternalDNS` `external-dns-int`/`-ext`, the fleet's
   `infrastructure/external-dns`), as `<cluster identity>-dns` through `external-dns/external-dns`.
 - **Egress agent**: model gpt-4.1-mini on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID); Claude models are
@@ -233,7 +233,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **One cell network: Azure CNI Pod Subnet** (dynamic IP allocation, Cilium); overlay is gone (v2.0, D79), node
   subnet is not offered. **Classic zone pools with the cluster autoscaler until NAP supports the pod subnet.** **No AKS
   Automatic.** The lab is one cell.
-- **No Traffic Manager and no Front Door** (design v4.13 trial, the user): every application, external too, runs in
+- **No Traffic Manager and no Front Door** (design v5.0 trial, the user): every application, external too, runs in
   one home cell, reached by its zone's gateway (a public LB per external zone per cell) and moved by the migration
   workflow; its own name is published by the home cell's managed external-dns.
 - **Gateway API implementation: App Routing's `approuting-istio` only** (`gateways_enabled`; Traefik removed): sidecar-less

@@ -494,7 +494,7 @@ of its own:
   network only. The cluster identity holds `Network Contributor` on the whole network (the zones' node
   pools), which is all AKS needs.
 - **An external zone's**, and the platform gateway's, is public: an application's own name, in the
-  public zone, points at it in the application's home cell (design v4.13: no Traffic Manager).
+  public zone, points at it in the application's home cell (design v5.0: no Traffic Manager).
 
 Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
 Cilium baseline lets in - from the zone's own gateway only.
