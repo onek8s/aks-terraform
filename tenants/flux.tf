@@ -20,20 +20,38 @@ locals {
           syncIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
           url                   = pair.tenant.flux.url
         }, pair.tenant.flux.secret_name == null ? {} : { localAuthRef = pair.tenant.flux.secret_name })
-        kustomizations = {
-          apps = {
-            path                   = lookup(pair.tenant.flux.cell_paths, pair.cell, pair.tenant.flux.path)
-            prune                  = true
-            syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
-            retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
-            wait                   = true
-            # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
-            # tenant names. Nothing secret, nothing that reaches beyond the namespace.
-            postBuild = {
-              substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+        kustomizations = merge(
+          {
+            apps = {
+              path                   = lookup(pair.tenant.flux.cell_paths, pair.cell, pair.tenant.flux.path)
+              prune                  = true
+              syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
+              retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
+              wait                   = true
+              # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
+              # tenant names. Nothing secret, nothing that reaches beyond the namespace.
+              postBuild = {
+                substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+              }
             }
-          }
-        }
+          },
+          # The routes only the home cell serves (its internal names): the route is the DNS switch, so
+          # exactly one cell publishes each name (design section 3.1).
+          try(pair.tenant.flux.home.cell, null) == pair.cell ? {
+            home = {
+              path                   = pair.tenant.flux.home.path
+              prune                  = true
+              syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
+              retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
+              wait                   = true
+              # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
+              # tenant names. Nothing secret, nothing that reaches beyond the namespace.
+              postBuild = {
+                substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+              }
+            }
+          } : {},
+        )
         namespace  = pair.namespace
         scope      = "namespace"
         sourceKind = "GitRepository"

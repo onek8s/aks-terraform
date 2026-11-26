@@ -1594,3 +1594,62 @@ run "the_catalogue_files_are_tenants" {
     error_message = "A file should say what it needs and get the defaults for the rest."
   }
 }
+
+# An internal application's home cell alone serves its internal name: the route is the DNS switch
+# (design section 3.1).
+run "the_home_cell_alone_gets_the_home_routes" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = {
+          url  = "https://github.com/example/team-search"
+          home = { cell = "aks-test", path = "./home" }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.team_flux_configuration["aks-test/team-search"].body.properties.kustomizations.home.path == "./home"
+    error_message = "The home cell should get the home Kustomization."
+  }
+}
+
+run "a_tenant_without_a_home_has_its_apps_only" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = { url = "https://github.com/example/team-search" }
+      }
+    }
+  }
+
+  assert {
+    condition     = keys(azapi_resource.team_flux_configuration["aks-test/team-search"].body.properties.kustomizations) == ["apps"]
+    error_message = "Without flux.home there is no home Kustomization."
+  }
+}
+
+run "the_home_cell_must_be_one_of_the_tenants_cells" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = {
+          url  = "https://github.com/example/team-search"
+          home = { cell = "aks-elsewhere", path = "./home" }
+        }
+      }
+    }
+  }
+
+  expect_failures = [output.tenants]
+}

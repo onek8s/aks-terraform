@@ -175,8 +175,11 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   cross-zone flows: the Service name never answers (Cilium/labfw), the published name only with an application
   rule for `hello.<zone>.dev.onek8s.lol` in the caller's rule file - none written yet, so labfw resets both at once
   (`published-names-deny`). `lab/scale/kustomization.yaml` is the Git-only replica switch.
-  Internal names by home cell: `hello.<zone>.dev.onek8s.lol` next to `hello-<cluster>...`; routes carry
-  `platform/home-cell` and external-dns-int publishes only its own cluster's.
+  Internal names by home cell: `hello.<zone>.dev.onek8s.lol` next to `hello-<cluster>...`; the home route
+  is in a path of its own (aks-fluxcd-example `firewall-egress/home`) that only the tenant's `flux.home.cell`
+  applies (tenants/), so the route is the DNS switch (design v4.13: no `platform/home-cell` filter).
+  DNS by App Routing's managed external-dns (`ClusterExternalDNS` `external-dns-int`/`-ext`, the fleet's
+  `infrastructure/external-dns`), as `<cluster identity>-dns` through `external-dns/external-dns`.
 - **Egress agent**: model gpt-4.1-mini on Foundry `ais-onek8s-dev-agents` (swedencentral, Entra ID); Claude models are
   attested there but have 0 Foundry quota (`deploy = false`). Only denials ingested since its checkpoint, at most 3 h
   back; state in the Actions cache; known flows never reach the model. Keep its instructions step by step.

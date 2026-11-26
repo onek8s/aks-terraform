@@ -133,6 +133,16 @@ output "tenants" {
     ])
     error_message = "flux.secret_name must be the name of a Kubernetes Secret: lowercase letters, digits, hyphens and dots, starting and ending with a letter or digit."
   }
+  # The home cell is one of the tenant's cells, and its path is in the repository (design section 3.1).
+  precondition {
+    condition = alltrue([
+      for name, tenant in local.tenants : try(tenant.flux.home, null) == null || try(
+        anytrue([for pair in values(local.cell_tenants) : pair.namespace == name && pair.cell == tenant.flux.home.cell]) && startswith(tenant.flux.home.path, "./"),
+        false,
+      )
+    ])
+    error_message = "flux.home.cell must be one of the tenant's cells and flux.home.path a path in the repository starting with ./: ${join(", ", [for name, tenant in local.tenants : name if try(tenant.flux.home, null) != null && !try(anytrue([for pair in values(local.cell_tenants) : pair.namespace == name && pair.cell == tenant.flux.home.cell]), false)])}."
+  }
 }
 
 output "namespace_ids" {

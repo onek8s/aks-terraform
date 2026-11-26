@@ -300,9 +300,9 @@ variable "dns_zone_private" {
 Whether the zone of `dns_zone_name` is an Azure Private DNS zone - a domain that resolves only inside
 the networks the zone is linked to - rather than a public Azure DNS zone: the one switch between the
 two, set alike here and in shared/, which creates a private zone and links it to the clusters'
-network. external-dns writes it with its `azure-private-dns` provider instead of `azure`, and is
-granted `Private DNS Zone Contributor` instead of `DNS Zone Contributor`; the Gateway's load balancer is
-internal. The Flux repository is told which (`dns_zone_private`, `dns_provider`).
+network. App Routing's managed external-dns tells the two apart by the zone's resource ID
+(`dns_zone_id`, told to the Flux repository) and is granted `Private DNS Zone Contributor` instead of
+`DNS Zone Contributor`; the Gateway's load balancer is internal.
 DESCRIPTION
   nullable    = false
 }
@@ -879,9 +879,9 @@ variable "internal_dns_zone_names" {
   default     = []
   description = <<DESCRIPTION
 Azure Private DNS zones in resource_group_name - the internal isolation zones' names, created by
-shared/ - in which the cluster's external-dns keeps the records of its internal gateways.
+shared/ - in which App Routing's managed external-dns keeps the records of the internal gateways.
 Its identity is granted Private DNS Zone Contributor on each; the Flux repository is told their
-resource group as `internal_dns_resource_group_name`.
+resource IDs as `internal_dns_zone_ids`.
 DESCRIPTION
   nullable    = false
 }

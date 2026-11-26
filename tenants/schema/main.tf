@@ -47,6 +47,13 @@ variable "tenants" {
       secret_name           = optional(string)
       sync_interval_seconds = optional(number, 300)
       substitute            = optional(map(string), {})
+      # An internal application's home cell (design section 3.1) and the path of its routes that only
+      # the home cell serves - its internal name. A Kustomization of its own, in that cell alone: moving
+      # the application changes the cell, the old cell prunes the routes and the new one creates them.
+      home = optional(object({
+        cell = string
+        path = string
+      }))
     }))
     # Read by shared/, which keeps the namespace's identity and its grants on the zone's vault.
     key_vault = optional(object({

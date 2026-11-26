@@ -747,10 +747,7 @@ run "flux_is_told_where_the_vault_and_the_zone_are" {
       !contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_example"),
       contains(keys(azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute), "key_vault_client_id_int_fi_gateway"),
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_name == "contoso.com",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_resource_group_name == "rg-aks-test",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_subscription_id == "55555555-5555-5555-5555-555555555555",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_provider == "azure",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_private == "false",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_id == data.azurerm_dns_zone.this[0].id,
       azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.quote == "\"",
     ])
     error_message = "The platform Kustomization should be told the vault URL, each platform namespace's identity (no tenant's: tenants/ tells them) and where the zone is."
@@ -907,7 +904,7 @@ run "the_kubelet_pulls_from_the_registry" {
   }
 }
 
-run "a_private_zone_is_looked_up_and_written_with_the_private_provider" {
+run "a_private_zone_is_looked_up_and_named_by_its_resource_id" {
   command = plan
 
   variables {
@@ -924,10 +921,9 @@ run "a_private_zone_is_looked_up_and_written_with_the_private_provider" {
       length(data.azurerm_dns_zone.this) == 0,
       length(data.azurerm_private_dns_zone.zone) == 1,
       azurerm_role_assignment.external_dns[0].role_definition_name == "Private DNS Zone Contributor",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_provider == "azure-private-dns",
-      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_private == "true",
+      azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.dns_zone_id == data.azurerm_private_dns_zone.zone[0].id,
     ])
-    error_message = "A private zone should be looked up in Azure Private DNS, granted as Private DNS Zone Contributor, and Flux told to use the azure-private-dns provider."
+    error_message = "A private zone should be looked up in Azure Private DNS, granted as Private DNS Zone Contributor, and Flux told its resource ID."
   }
 }
 
@@ -1422,8 +1418,8 @@ run "the_internal_zones_are_granted_to_external_dns" {
     error_message = "external-dns should write the internal zones."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_resource_group_name == "rg-aks-test"
-    error_message = "The Flux repository should be told where the internal zones are."
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_ids == "[${data.azurerm_private_dns_zone.internal["int-fi.test.contoso.com"].id}]"
+    error_message = "The Flux repository should be told the internal zones' resource IDs."
   }
 }
 

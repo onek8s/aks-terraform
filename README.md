@@ -536,10 +536,10 @@ created here:
   `<cluster identity>-dns` is granted `Private DNS Zone Contributor` too. Everything else is in one
   zone, `dns_zone_name`, public or private (`dns_zone_private`). `<cluster
   identity>-dns` is federated with `external-dns/external-dns` and granted `DNS Zone Contributor` on
-  a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told which
-  (`dns_zone_private`, and the external-dns provider in `dns_provider`: `azure` or
-  `azure-private-dns`). external-dns keeps a record per listener hostname, pointing at the Gateway's
-  address. The zone is
+  a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told the
+  zones' resource IDs (`dns_zone_id`, `internal_dns_zone_ids`) for App Routing's managed external-dns
+  (`ClusterExternalDNS`, which the App Routing add-on brings with `gateways_enabled`). It keeps a record
+  per route hostname, pointing at the Gateway's address. The zone is
   looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise; `shared/`
   creates it (`dns_zone_create`, a private one linked to the clusters' network), or it exists
   already. Choosing between public and private is that one setting, alike in `shared/` and in every
@@ -630,7 +630,7 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them: the admin groups' `Key Vault Administrator`, the namespaces' writers and groups | Looked up: `key_vault_name`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
 | Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-gwc-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
-| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
+| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. App Routing's managed external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-int-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone. The tier follows the environment (`container_registry_sku`, design D62): Premium with a private endpoint and no public network access in `prd`, Basic on its public endpoint (Entra ID only) everywhere else - Azure offers private endpoints on Premium alone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
 | Hostnames every cluster serves | `global_hostnames`: `hello.ext-fi.dev.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the app's hostname in each cell - an A record of that cell's ext-fi gateway - alike and leaves out one whose probe fails | Each cell serves the hostname on its ext-fi Gateway; the route that names it tells its external-dns to leave the record alone |
@@ -882,10 +882,9 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | Variable | Value |
 | --- | --- |
 | `key_vault_url`, `key_vault_url_<namespace>`, `key_vault_client_id_<namespace>` | The platform vault, each namespace's vault, and for each namespace with a share the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_int_fi_gateway`. |
-| `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
-| `dns_zone_private`, `dns_provider` | Whether the zone is private (`"true"` / `"false"`), and the external-dns provider that writes it: `azure` or `azure-private-dns`. |
-| `dns_identity_client_id` | The identity external-dns writes either zone as. |
-| `cluster_exposure`, `internal_dns_resource_group_name` | The cluster's exposure (D52) and, for an internal cluster, where the internal zones' private DNS is. |
+| `dns_zone_name`, `dns_zone_id` | The zone of `dns_zone_name`, and its resource ID. |
+| `dns_identity_client_id` | The identity App Routing's managed external-dns writes the zones as. |
+| `cluster_exposure`, `internal_dns_zone_ids` | The cluster's exposure (D52) and, for an internal cluster, the internal zones' Private DNS zones as a YAML flow sequence of resource IDs. |
 | `image_verification_client_id`, `image_signing_certificate_name`, `image_signing_subject`, `container_registry_login_server` | With `image_integrity_enabled`: what Ratify verifies with. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 

@@ -23,8 +23,11 @@ flux:
   path: ./firewall-egress
   # Read every minute, like the platform's repository.
   sync_interval_seconds: 60
-  # The zone's domain for the team's routes; home_cell: the cell that publishes the team's internal
-  # names (design section 3.1) - az3, the only cell of int-se.
+  # The zone's domain for the team's routes.
   substitute:
     zone_domain: int-se.dev.onek8s.lol
-    home_cell: aks-dev-int-stateless-az3
+  # The home cell, which alone serves the team's internal name hello.int-se... (design section 3.1) -
+  # az3, the only cell of int-se - from a path of its own.
+  home:
+    cell: aks-dev-int-stateless-az3
+    path: ./firewall-egress/home

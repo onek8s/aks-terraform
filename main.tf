@@ -193,8 +193,11 @@ module "aks" {
     gateway_api = {
       installation = "Standard"
     }
+    # The App Routing add-on itself serves no Ingress (no default NGINX controller, below): it brings the
+    # operator behind the Gateway API implementation and its managed external-dns, ClusterExternalDNS,
+    # which the Flux repository configures per exposure.
     web_app_routing = {
-      enabled = false
+      enabled = var.gateways_enabled
       gateway_api_implementations = {
         app_routing_istio = {
           mode = var.gateways_enabled ? "Enabled" : "Disabled"
