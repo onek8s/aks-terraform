@@ -166,7 +166,7 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **Flux GitHub webhook** (D78): root `flux_github_webhook` brings the platform gateway and flux-system's vault share;
   token in shared/. **Off in the lab** (no public entry point behind labfw; Flux polls every minute). GitHub delivers
   over HTTP/1.1: the receiver is the one exemption of `h2c-upstream` (`flux-system/webhook-receiver`).
-- **Apps**: aks-hello 0.8.0 (2 replicas, rollout guardrails) in `int-se-example` from aks-fluxcd-example
+- **Apps**: aks-hello 0.8.1 (2 replicas, rollout guardrails) in `int-se-example` from aks-fluxcd-example
   `firewall-egress/` and in `int-fi-example` from `firewall-egress-int-fi/`, each on its zone's nodes, fetching a
   forecast (api.open-meteo.com) and its public IP (api.ipify.org) - allowed only once azure-landing-zone's
   `firewall-applications/dev-int/<ns>.yaml` names them (open-meteo yes, ipify not: egress agent PR
@@ -290,6 +290,14 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `production.cloudfront.docker.com`, `external-secrets.io`). labfw applies a policy change ~2 min after the Platform
   apply (`systemctl kill -s HUP labfw` at once). The fleet's HelmReleases retry forever (`retries: -1`).
 - **Kestrel's default `Http1AndHttp2` is HTTP/1.1 only on a plain port**: h2c needs an `Http2`-only port.
+- **App Routing's Envoy forwards the client's `:scheme` (https) on its h2c connection to the pod**; Kestrel resets
+  such a stream with PROTOCOL_ERROR (gateway: 502 `upstream_reset_before_response_started{protocol_error}`)
+  unless `AllowAlternateSchemes` is on - aks-hello 0.8.1 (2026-11-26). Cluster status prints each gateway's
+  upstream clusters (`config_dump`) and per-host errors (`/clusters`); Istio's stats matcher drops cluster stats.
+- **App Routing's managed external-dns** (`ClusterExternalDNS`): a Deployment `<resourceName>-external-dns` in
+  `resourceNamespace`; it sets no seccomp profile, so its namespace enforces PSS baseline. A CR reconciled while its
+  service account is missing gets a warning event (namespace `default`) and is **never retried**: change the object
+  (fleet #77). Moving off the Helm releases deleted the shared service account `external-dns` for a few minutes.
 - **Cilium DNS rules (ACNS only) must cover the pod's search suffixes** (incl. `<id>.<x>.internal.cloudapp.net`), or
   musl stops resolving. Without ACNS a policy may carry neither DNS rules nor `toFQDNs`.
 - **A `Microsoft.Kubernetes.Data` policy rule may test only `type`, `location` and `tags`** of the cluster
@@ -316,7 +324,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
   `az k8s-configuration flux update --suspend` alone is refused - PATCH the property with `az rest`.
 - **Flux `valuesFrom.targetPath` parses like `helm --set`** (a numeric ID became `1.872197e+06`): merge a whole YAML
   document; ESO's template data is `map[string]string` (use `index`, not `hasKey`). A substituted `true` becomes a
-  YAML boolean - keep such settings non-boolean.
+  YAML boolean - keep such settings non-boolean. Flux substitutes into YAML it re-serialized, without the source's
+  quotes: a `[a,b]` value became a list in the cluster-settings ConfigMap (`internal_dns_zone_ids` carries its own
+  single quotes, #249).
 - **Grafana Fleet Management pipelines match the cluster name**: after a rename the collectors get only the survey
   pipelines. **k8s-monitoring on AKS** needs the pod annotation `kubernetes.azure.com/set-kube-service-host-fqdn: "true"`
   on every Alloy collector and kube-state-metrics (offline `helm template` misses it); their Cilium DNS rules must allow
