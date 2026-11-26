@@ -229,9 +229,10 @@ jobs:
             pod=$(kubectl get pods -n "$ns" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{.items[0].metadata.name}')
             if [ -n "$pod" ]; then
               kubectl exec -n "$ns" "$pod" -c istio-proxy -- pilot-agent request GET 'config_dump?resource=dynamic_active_clusters' \
-                | jq -c '.configs[]?.dynamic_active_clusters[]?.cluster | select(.name | test("^outbound\\|[0-9]+\\|\\|.*\\.(int|ext)-(fi|se)-")) | {name, transport_socket: (.transport_socket.name // null), transport_socket_matches: [.transport_socket_matches[]?.name], protocol_options: .typed_extension_protocol_options}'
-              kubectl exec -n "$ns" "$pod" -c istio-proxy -- pilot-agent request GET stats \
-                | grep -E '^cluster\.outbound\|[0-9]+\|\|[^|]*\.(int|ext)-(fi|se)-[^.]*\.svc\.cluster\.local\.(upstream_cx_protocol_error|upstream_cx_total|upstream_rq_total|upstream_rq_5xx|upstream_cx_connect_fail|upstream_rq_rx_reset|upstream_rq_tx_reset|ssl\.connection_error|ssl\.handshake)'
+                | jq -c '.configs[]? | (.cluster // .dynamic_active_clusters[]?.cluster) | select(.name | test("^outbound\\|[0-9]+\\|\\|.*\\.(int|ext)-(fi|se)-")) | {name, transport_socket: (.transport_socket.name // null), transport_socket_matches: [.transport_socket_matches[]? | {name, match, transport_socket: .transport_socket.name}], protocol_options: .typed_extension_protocol_options}'
+              # Per backend host: connections, requests and errors (always kept, whatever Istio's stats matcher drops).
+              kubectl exec -n "$ns" "$pod" -c istio-proxy -- pilot-agent request GET clusters \
+                | grep -E '^outbound\|[0-9]+\|\|[^|]*\.(int|ext)-(fi|se)-[^:]*::[0-9.:]+::(cx_total|cx_connect_fail|rq_total|rq_error|rq_success|health_flags)::'
             fi
             kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -n 15
           done
@@ -277,7 +278,9 @@ jobs:
           # external-dns and Flux's webhook receivers.
           # App Routing's managed external-dns: a Deployment per ClusterExternalDNS, named after it.
           kubectl get clusterexternaldnses.approuting.kubernetes.azure.com -o yaml
-          kubectl get deploy,pods -n external-dns -o wide
+          kubectl get deploy,replicasets,pods -n external-dns -o wide
+          kubectl get deploy -n external-dns -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions}{"\n"}{end}'
+          kubectl get events -n external-dns --sort-by=.lastTimestamp | tail -n 20
           for deploy in $(kubectl get deploy -n external-dns -o name); do
             kubectl logs -n external-dns "$deploy" --all-containers --tail=40 --prefix
           done
