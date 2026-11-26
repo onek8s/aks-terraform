@@ -215,35 +215,7 @@ run "the_resource_group_and_the_network_can_be_created" {
   }
 }
 
-run "a_global_hostname_is_a_traffic_manager_profile_over_the_clusters" {
-  command = plan
-
-  variables {
-    dns_zone_name                = "contoso.com"
-    dns_zone_create              = false
-    dns_zone_resource_group_name = "rg-dns"
-    global_hostnames = {
-      hello = {
-        endpoints   = ["public-aks-test-a.contoso.com", "public-aks-test-b.contoso.com"]
-        health_path = "/healthz"
-      }
-    }
-  }
-
-  assert {
-    condition = alltrue([
-      azurerm_traffic_manager_profile.global["hello"].name == "contoso-com-test-hello",
-      azurerm_traffic_manager_profile.global["hello"].traffic_routing_method == "Weighted",
-      azurerm_traffic_manager_profile.global["hello"].monitor_config[0].path == "/healthz",
-      one(azurerm_traffic_manager_profile.global["hello"].monitor_config[0].custom_header).value == "hello.contoso.com",
-      azurerm_traffic_manager_external_endpoint.global["hello/public-aks-test-b.contoso.com"].target == "public-aks-test-b.contoso.com",
-      azurerm_dns_cname_record.global["hello"].name == "hello",
-    ])
-    error_message = "hello.contoso.com should be a CNAME to a weighted profile over both clusters, probed as hello.contoso.com."
-  }
-}
-
-run "a_private_zone_is_looked_up_and_gets_no_traffic_manager" {
+run "a_private_zone_is_looked_up_in_private_dns" {
   command = plan
 
   variables {
@@ -251,17 +223,12 @@ run "a_private_zone_is_looked_up_and_gets_no_traffic_manager" {
     dns_zone_private             = true
     dns_zone_create              = false
     dns_zone_resource_group_name = "rg-dns"
-    global_hostnames = {
-      hello = { endpoints = ["public-aks-test-a.contoso.com"] }
-    }
   }
 
   assert {
-    condition     = length(data.azurerm_private_dns_zone.this) == 1 && length(data.azurerm_dns_zone.this) == 0 && length(azurerm_traffic_manager_profile.global) == 0
-    error_message = "A private zone should be looked up in Azure Private DNS, and get no Traffic Manager CNAME."
+    condition     = length(data.azurerm_private_dns_zone.this) == 1 && length(data.azurerm_dns_zone.this) == 0
+    error_message = "A private zone should be looked up in Azure Private DNS."
   }
-
-  expect_failures = [check.global_hostnames_need_a_public_zone]
 }
 
 run "a_private_zone_created_here_is_linked_to_the_clusters_network" {
@@ -422,53 +389,6 @@ run "the_external_exposure_has_no_internal_dns" {
   }
 
   expect_failures = [var.exposure]
-}
-
-run "the_internal_exposure_publishes_nothing_through_traffic_manager" {
-  command = plan
-
-  variables {
-    exposure                     = "int"
-    dns_zone_name                = "contoso.com"
-    dns_zone_create              = false
-    dns_zone_resource_group_name = "rg-dns"
-    isolation_zones = {
-      int-fi = { exposure = "int", index = 1 }
-    }
-    global_hostnames = {
-      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"], zone = "ext-fi" }
-    }
-  }
-
-  assert {
-    condition     = length(azurerm_traffic_manager_profile.global) == 0 && length(azurerm_dns_cname_record.global) == 0
-    error_message = "The internal exposure creates no Traffic Manager profile, even with a global hostname listed."
-  }
-}
-
-run "traffic_manager_only_for_a_deployed_external_zone" {
-  command = plan
-
-  variables {
-    exposure                     = "ext"
-    dns_zone_name                = "contoso.com"
-    dns_zone_create              = false
-    dns_zone_resource_group_name = "rg-dns"
-    isolation_zones = {
-      ext-fi = { exposure = "ext", index = 3 }
-      ext-se = { exposure = "ext", index = 4, enabled = false }
-    }
-    global_hostnames = {
-      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"], zone = "ext-fi" }
-      "hello.ext-se.dev" = { endpoints = ["hello-a.ext-se.dev.contoso.com"], zone = "ext-se" }
-      "hello.ext-dk.dev" = { endpoints = ["hello-a.ext-dk.dev.contoso.com"], zone = "ext-dk" }
-    }
-  }
-
-  assert {
-    condition     = keys(azurerm_traffic_manager_profile.global) == ["hello.ext-fi.dev"]
-    error_message = "A profile only for the global hostname of an enabled external zone."
-  }
 }
 
 run "a_disabled_country_keeps_its_index_and_gets_nothing" {
@@ -773,27 +693,6 @@ run "rejects_a_cell_that_is_not_a_slash_16_to_20" {
   }
 
   expect_failures = [var.cells]
-}
-
-run "a_global_hostname_below_the_zone_has_a_profile_name_without_dots" {
-  command = plan
-
-  variables {
-    dns_zone_name   = "contoso.com"
-    dns_zone_create = false
-    global_hostnames = {
-      "hello.ext-fi.dev" = { endpoints = ["hello-a.ext-fi.dev.contoso.com"] }
-    }
-  }
-
-  assert {
-    condition     = azurerm_traffic_manager_profile.global["hello.ext-fi.dev"].name == "contoso-com-test-hello-ext-fi-dev"
-    error_message = "A profile's name has no dots."
-  }
-  assert {
-    condition     = azurerm_dns_cname_record.global["hello.ext-fi.dev"].name == "hello.ext-fi.dev"
-    error_message = "The record keeps the hostname."
-  }
 }
 
 # Image signing: a code signing certificate whose key never leaves the vault, and the verifier's

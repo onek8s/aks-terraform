@@ -36,13 +36,12 @@ locals {
     user_assigned_identity  = "id-{location_code}-{environment}-{name}"
     disk_encryption_set     = "des-{name}"
     consumption_budget      = "budget-{environment}"
-    traffic_manager_profile = "{domain}-{environment}-{name}"
     ai_services             = "ais-onek8s-{environment}-{name}"
   }
   templates = merge(local.default_templates, var.naming.templates)
 
   # What Azure takes as a name of each type: its pattern, which includes the length. The global ones
-  # (Key Vault, registry, AI Services subdomain, Traffic Manager's DNS label) are the strictest.
+  # (Key Vault, registry, AI Services subdomain) are the strictest.
   name_rules = {
     resource_group          = "^[-\\w.()]{0,89}[-\\w()]$"
     virtual_network         = "^[a-zA-Z0-9][-\\w.]{0,62}\\w$"
@@ -56,7 +55,6 @@ locals {
     user_assigned_identity  = "^[a-zA-Z0-9][-\\w]{2,127}$"
     disk_encryption_set     = "^[-\\w]{1,80}$"
     consumption_budget      = "^[-\\w]{1,63}$"
-    traffic_manager_profile = "^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
     ai_services             = "^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}[a-zA-Z0-9]$"
   }
   # Types whose names take letters and digits only: the template's hyphens go.
@@ -66,17 +64,16 @@ locals {
   # template with the placeholders filled in, runs of hyphens (an empty placeholder's) made one and
   # trimmed off both ends.
   requests = merge(var.names, var.environment == null ? {} : merge(
-    { "conventions/shared-ratify" = { type = "user_assigned_identity", name = "shared-ratify", domain = "" } },
-    { for namespace in var.key_vault_namespaces : "conventions/shared-kv/${namespace}" => { type = "user_assigned_identity", name = "shared-kv-${namespace}", domain = "" } },
+    { "conventions/shared-ratify" = { type = "user_assigned_identity", name = "shared-ratify" } },
+    { for namespace in var.key_vault_namespaces : "conventions/shared-kv/${namespace}" => { type = "user_assigned_identity", name = "shared-kv-${namespace}" } },
   ))
   filled = {
-    for key, request in local.requests : key => replace(replace(replace(replace(replace(replace(
+    for key, request in local.requests : key => replace(replace(replace(replace(replace(
       lookup(local.templates, request.type, ""),
       "{environment}", coalesce(var.environment, "-")),
       "{exposure}", coalesce(var.exposure, "-")),
       "{location_code}", coalesce(local.location_code, "-")),
       "{location}", var.location),
-      "{domain}", replace(coalesce(request.domain, "-"), ".", "-")),
     "{name}", coalesce(request.name, "-"))
   }
   all_names = {
@@ -95,7 +92,7 @@ locals {
     [for type in keys(var.naming.templates) : "unknown resource type ${type}" if !contains(keys(local.default_templates), type)],
     [for key, request in var.names : "unknown resource type ${request.type} (${key})" if !contains(keys(local.default_templates), request.type)],
     flatten([for type, template in var.naming.templates : [
-      for placeholder in regexall("\\{[^}]*\\}", replace(template, "/\\{(environment|exposure|location|location_code|name|domain)\\}/", "")) :
+      for placeholder in regexall("\\{[^}]*\\}", replace(template, "/\\{(environment|exposure|location|location_code|name)\\}/", "")) :
       "unknown placeholder ${placeholder} in the template of ${type}"
     ]]),
     [for location, code in var.naming.location_codes : "location code ${code} of ${location}: 1 to 6 lowercase letters and digits" if !can(regex("^[a-z0-9]{1,6}$", code))],

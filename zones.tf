@@ -248,8 +248,10 @@ locals {
     {
       for namespace, uri in local.key_vault_namespace_uris : "key_vault_url_${replace(namespace, "-", "_")}" => uri
     },
+    # The internal zones' Private DNS zones by resource ID, as a YAML flow sequence (`[<id>,...]`): the
+    # internal ClusterExternalDNS's dnsZoneResourceIDs.
     length(data.azurerm_private_dns_zone.internal) == 0 ? {} : {
-      internal_dns_resource_group_name = var.resource_group_name
+      internal_dns_zone_ids = "[${join(",", [for zone in values(data.azurerm_private_dns_zone.internal) : zone.id])}]"
     },
     var.exposure == null ? {} : {
       cluster_exposure = var.exposure

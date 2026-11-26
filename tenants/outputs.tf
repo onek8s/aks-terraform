@@ -17,14 +17,14 @@ output "tenants" {
     error_message = "A tenant is an application namespace of its isolation zone, named <zone>-<app> (design section 2.6): ${join(", ", [for name, tenant in local.tenants : name if !startswith(name, "${tenant.zone}-")])}."
   }
   # Microsoft documents system namespaces as not on-boardable, and the platform's Flux configurations
-  # share one name space with the tenants' (`platform`, `traefik-<gateway>`, `tenants-<zone>`).
+  # share one name space with the tenants' (`platform`).
   precondition {
     condition = alltrue([
       for name in keys(local.tenants) :
-      !startswith(name, "kube-") && !startswith(name, "traefik-") && !startswith(name, "tenants-")
+      !startswith(name, "kube-")
       && !contains(["app-routing-system", "gatekeeper-system", "istio-system", "flux-system", "platform"], name)
     ])
-    error_message = "A tenant cannot be a system namespace (kube-*, app-routing-system, gatekeeper-system, istio-system, flux-system) nor share a name with a platform Flux configuration (platform, traefik-*, tenants-*)."
+    error_message = "A tenant cannot be a system namespace (kube-*, app-routing-system, gatekeeper-system, istio-system, flux-system) nor share a name with the platform's Flux configuration (platform)."
   }
   precondition {
     condition = alltrue(flatten([
@@ -132,6 +132,16 @@ output "tenants" {
       for tenant in values(local.tenants) : tenant.flux == null || try(tenant.flux.secret_name == null || can(regex("^[a-z0-9]([-.a-z0-9]{0,251}[a-z0-9])?$", tenant.flux.secret_name)), false)
     ])
     error_message = "flux.secret_name must be the name of a Kubernetes Secret: lowercase letters, digits, hyphens and dots, starting and ending with a letter or digit."
+  }
+  # The home cell is one of the tenant's cells, and its path is in the repository (design section 3.1).
+  precondition {
+    condition = alltrue([
+      for name, tenant in local.tenants : try(tenant.flux.home, null) == null || try(
+        anytrue([for pair in values(local.cell_tenants) : pair.namespace == name && pair.cell == tenant.flux.home.cell]) && startswith(tenant.flux.home.path, "./"),
+        false,
+      )
+    ])
+    error_message = "flux.home.cell must be one of the tenant's cells and flux.home.path a path in the repository starting with ./: ${join(", ", [for name, tenant in local.tenants : name if try(tenant.flux.home, null) != null && !try(anytrue([for pair in values(local.cell_tenants) : pair.namespace == name && pair.cell == tenant.flux.home.cell]), false)])}."
   }
 }
 

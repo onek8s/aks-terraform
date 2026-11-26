@@ -1,4 +1,4 @@
-# Three kinds of Flux configuration, all in the cell's Flux extension (the cell's, installed with its
+# Two kinds of Flux configuration, all in the cell's Flux extension (the cell's, installed with its
 # platform configuration):
 #
 # - `<namespace>`: the team's own repository, namespace-scoped in its namespace - the extension applies
@@ -8,8 +8,6 @@
 #   namespace_access_path/<role>) and `store` (tenant_path: the namespace's default ServiceAccount, and
 #   the `key-vault` ServiceAccount and SecretStore of its vault share). One configuration per namespace
 #   because Azure refuses two Kustomizations of one configuration on the same path.
-# - `tenants-<zone>`: the ConfigMap that names the namespaces the zone's gateway watches, which the
-#   cell's Traefik configuration reads (`substituteFrom`), so a new tenant changes nothing of the cell.
 
 locals {
   team_flux_configurations = {
@@ -22,20 +20,38 @@ locals {
           syncIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
           url                   = pair.tenant.flux.url
         }, pair.tenant.flux.secret_name == null ? {} : { localAuthRef = pair.tenant.flux.secret_name })
-        kustomizations = {
-          apps = {
-            path                   = lookup(pair.tenant.flux.cell_paths, pair.cell, pair.tenant.flux.path)
-            prune                  = true
-            syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
-            retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
-            wait                   = true
-            # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
-            # tenant names. Nothing secret, nothing that reaches beyond the namespace.
-            postBuild = {
-              substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+        kustomizations = merge(
+          {
+            apps = {
+              path                   = lookup(pair.tenant.flux.cell_paths, pair.cell, pair.tenant.flux.path)
+              prune                  = true
+              syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
+              retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
+              wait                   = true
+              # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
+              # tenant names. Nothing secret, nothing that reaches beyond the namespace.
+              postBuild = {
+                substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+              }
             }
-          }
-        }
+          },
+          # The routes only the home cell serves (its internal names): the route is the DNS switch, so
+          # exactly one cell publishes each name (design section 3.1).
+          try(pair.tenant.flux.home.cell, null) == pair.cell ? {
+            home = {
+              path                   = pair.tenant.flux.home.path
+              prune                  = true
+              syncIntervalInSeconds  = pair.tenant.flux.sync_interval_seconds
+              retryIntervalInSeconds = pair.tenant.flux.sync_interval_seconds
+              wait                   = true
+              # The few facts a team's manifests may use as `$${...}`: its zone, the cell's name and what the
+              # tenant names. Nothing secret, nothing that reaches beyond the namespace.
+              postBuild = {
+                substitute = merge({ zone = pair.tenant.zone }, pair.tenant.flux.substitute, { cluster_name = pair.cell })
+              }
+            }
+          } : {},
+        )
         namespace  = pair.namespace
         scope      = "namespace"
         sourceKind = "GitRepository"
@@ -100,35 +116,6 @@ locals {
       }
     }
   }
-
-  zone_flux_configurations = {
-    for key, zone in local.cell_zones : key => {
-      properties = {
-        gitRepository = local.platform_git_repository[zone.cell]
-        kustomizations = {
-          namespaces = {
-            path                   = var.zone_tenants_path
-            prune                  = true
-            syncIntervalInSeconds  = local.platform_repository[zone.cell].sync_interval_seconds
-            retryIntervalInSeconds = local.platform_repository[zone.cell].sync_interval_seconds
-            wait                   = true
-            postBuild = {
-              substitute = {
-                zone = zone.zone
-                # A YAML flow sequence, brackets included: namespace names need no quotes.
-                gateway_watch_namespaces = "[${join(",", zone.watch_namespaces)}]"
-                # The ConfigMap quotes the sequence with it, so it stays a string.
-                quote = "\""
-              }
-            }
-          }
-        }
-        namespace  = "flux-system"
-        scope      = "cluster"
-        sourceKind = "GitRepository"
-      }
-    }
-  }
 }
 
 resource "azapi_resource" "team_flux_configuration" {
@@ -154,16 +141,4 @@ resource "azapi_resource" "platform_flux_configuration" {
   # The namespace is there before a binding or the store is put into it, and the store's identity is
   # federated with the cell before ESO asks for a token.
   depends_on = [azapi_resource.namespace, azurerm_federated_identity_credential.key_vault]
-}
-
-resource "azapi_resource" "zone_flux_configuration" {
-  for_each = local.zone_flux_configurations
-
-  name      = "tenants-${local.cell_zones[each.key].zone}"
-  parent_id = local.cluster_ids[local.cell_zones[each.key].cell]
-  type      = "Microsoft.KubernetesConfiguration/fluxConfigurations@${local.kubernetes_configuration_api_version}"
-  body      = each.value
-
-  # Every namespace it names is there first.
-  depends_on = [azapi_resource.namespace]
 }

@@ -176,10 +176,9 @@ module "aks" {
   disk_encryption_set_id = local.disk_encryption_set_id
   dns_prefix             = var.name
   # Ingress is the Kubernetes Gateway API: AKS installs the managed Gateway API CRDs (standard
-  # channel) and, with gateway_implementation = "approuting-istio", App Routing's Gateway API
-  # implementation - a sidecar-less Istio control plane serving the GatewayClass `approuting-istio`, no
-  # service mesh. With "traefik" it stays off and Traefik is deployed through Flux (traefik.tf). The
-  # Gateways themselves, their listeners, load balancers and certificates are deployed through Flux.
+  # channel) and, with gateways_enabled, App Routing's Gateway API implementation - a sidecar-less
+  # Istio control plane serving the GatewayClass `approuting-istio`, no service mesh. The Gateways
+  # themselves, their listeners, load balancers and certificates are deployed through Flux.
   #
   # Every other managed ingress AKS offers stays off: the Application Gateway for Containers ALB
   # Controller add-on and App Routing's NGINX controller. All of it is stated rather than left out,
@@ -194,11 +193,14 @@ module "aks" {
     gateway_api = {
       installation = "Standard"
     }
+    # The App Routing add-on itself serves no Ingress (no default NGINX controller, below): it brings the
+    # operator behind the Gateway API implementation and its managed external-dns, ClusterExternalDNS,
+    # which the Flux repository configures per exposure.
     web_app_routing = {
-      enabled = false
+      enabled = var.gateways_enabled
       gateway_api_implementations = {
         app_routing_istio = {
-          mode = var.gateway_implementation == "approuting-istio" ? "Enabled" : "Disabled"
+          mode = var.gateways_enabled ? "Enabled" : "Disabled"
         }
       }
       nginx = {
@@ -404,8 +406,8 @@ check "cluster_cidrs_do_not_overlap_the_network" {
 # vault and is reached by GitHub through the platform gateway.
 check "flux_github_webhook_has_a_repository_a_vault_and_a_gateway" {
   assert {
-    condition     = !var.flux_github_webhook || (local.flux_github_webhook_enabled && var.gateway_implementation != null)
-    error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${!local.flux_enabled ? "no flux_git_repository to reconcile" : !local.key_vault_enabled ? "no key_vault_name to read its token from" : "no gateway_implementation for the platform gateway GitHub reaches it through"}."
+    condition     = !var.flux_github_webhook || (local.flux_github_webhook_enabled && var.gateways_enabled)
+    error_message = "${var.name} asks for a Flux GitHub webhook, but it has ${!local.flux_enabled ? "no flux_git_repository to reconcile" : !local.key_vault_enabled ? "no key_vault_name to read its token from" : "no gateways_enabled for the platform gateway GitHub reaches it through"}."
   }
 }
 

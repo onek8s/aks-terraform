@@ -35,23 +35,6 @@ locals {
     ]) : pair.key => pair
   }
 
-  # Every zone of every cell, keyed `<cell>/<zone>`, with the namespaces its gateway watches: its own and
-  # each of its tenants' in that cell.
-  cell_zones = {
-    for pair in flatten([
-      for cell, settings in var.cells : [
-        for zone in settings.zones : {
-          key  = "${cell}/${zone}"
-          cell = cell
-          zone = zone
-          watch_namespaces = concat(["${zone}-gateway"], sort([
-            for key, pair in local.cell_tenants : pair.namespace if pair.cell == cell && pair.tenant.zone == zone
-          ]))
-        }
-      ]
-    ]) : pair.key => pair
-  }
-
   zones = toset([for tenant in values(local.tenants) : tenant.zone])
 
   # What each cell says about itself, read back from Azure.

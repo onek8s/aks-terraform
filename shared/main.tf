@@ -122,7 +122,6 @@ locals {
     { for cell in keys(local.cells) : "route_table/${cell}" => { type = "route_table", name = cell } if var.hub != null },
     { for key, table in local.cell_zone_route_tables : "route_table/${key}" => { type = "route_table", name = "${table.cell}-${table.zone}" } },
     { for key, subnet in local.cell_subnets : "network_security_group/${key}" => { type = "network_security_group", name = "${subnet.cell}-${trimprefix(subnet.name, "snet-")}" } },
-    { for name in keys(local.global_hostnames) : "traffic_manager_profile/${name}" => { type = "traffic_manager_profile", name = replace(name, ".", "-"), domain = coalesce(var.dns_zone_name, "-") } },
   )
 
   names = merge(module.conventions.names, {
@@ -447,85 +446,6 @@ data "azurerm_private_dns_zone" "this" {
 
 locals {
   dns_zone = one(concat(azurerm_dns_zone.this, azurerm_private_dns_zone.this, data.azurerm_dns_zone.this, data.azurerm_private_dns_zone.this))
-}
-
-# Hostnames every external cell of the environment serves at once - hello.ext-fi.dev.onek8s.lol -
-# behind an Azure Traffic Manager profile each: DNS answers with one cluster's public
-# address or another's, weighted alike, and leaves out a cluster whose health probe fails. Each
-# cluster's own public hostname (`public-<cluster>.<zone>`, published by its external-dns) is an
-# endpoint, and the global hostname is a CNAME to the profile. The clusters' external-dns leave the
-# global hostname alone (aks-fluxcd-platform excludes it), so this is its only record.
-#
-# The probe asks for the global hostname itself, with HTTPS - Traffic Manager does not check the
-# certificate - on the path every cluster serves it on. A short TTL lets a client move to another
-# cluster soon after one goes away.
-locals {
-  # Only for a deployed external zone: none in the internal exposure, none for a hostname whose zone
-  # is not among the enabled isolation zones.
-  global_hostnames = var.dns_zone_name == null || var.dns_zone_private || var.exposure == "int" ? {} : {
-    for name, hostname in var.global_hostnames : name => hostname
-    if hostname.zone == null || try(local.isolation_zones[hostname.zone].exposure == "ext", false)
-  }
-  global_hostname_endpoints = merge([
-    for name, hostname in local.global_hostnames : {
-      for endpoint in hostname.endpoints : "${name}/${endpoint}" => { name = name, target = endpoint }
-    }
-  ]...)
-}
-
-check "global_hostnames_need_a_public_zone" {
-  assert {
-    condition     = !var.dns_zone_private || length(var.global_hostnames) == 0
-    error_message = "global_hostnames are Traffic Manager CNAMEs, which a private zone cannot point at: none is created."
-  }
-}
-
-resource "azurerm_traffic_manager_profile" "global" {
-  for_each = local.global_hostnames
-
-  # Traffic Manager names are global (the DNS label below): the policy's `traffic_manager_profile`,
-  # by default the zone, the environment and the hostname - whose dots a profile's name may not have.
-  name                   = local.names["traffic_manager_profile/${each.key}"]
-  resource_group_name    = local.resource_group_name
-  traffic_routing_method = "Weighted"
-
-  dns_config {
-    relative_name = local.names["traffic_manager_profile/${each.key}"]
-    ttl           = each.value.ttl
-  }
-
-  monitor_config {
-    protocol                     = "HTTPS"
-    port                         = 443
-    path                         = each.value.health_path
-    interval_in_seconds          = 30
-    timeout_in_seconds           = 10
-    tolerated_number_of_failures = 2
-
-    custom_header {
-      name  = "host"
-      value = "${each.key}.${var.dns_zone_name}"
-    }
-  }
-}
-
-resource "azurerm_traffic_manager_external_endpoint" "global" {
-  for_each = local.global_hostname_endpoints
-
-  name       = replace(each.value.target, ".", "-")
-  profile_id = azurerm_traffic_manager_profile.global[each.value.name].id
-  target     = each.value.target
-  weight     = 1
-}
-
-resource "azurerm_dns_cname_record" "global" {
-  for_each = local.global_hostnames
-
-  name                = each.key
-  zone_name           = local.dns_zone.name
-  resource_group_name = local.dns_zone.resource_group_name
-  ttl                 = each.value.ttl
-  target_resource_id  = azurerm_traffic_manager_profile.global[each.key].id
 }
 
 check "a_namespace_is_a_tenant_or_the_platforms" {

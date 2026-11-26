@@ -195,8 +195,8 @@ variable "dns_zone_private" {
   description = <<DESCRIPTION
 Whether dns_zone_name is an Azure Private DNS zone, whose names resolve only in the clusters' network
 it is linked to, rather than a public Azure DNS zone. The one switch between the two: the clusters
-say the same in their own `dns_zone_private`. global_hostnames and the Let's Encrypt DNS-01 challenge
-need a public zone.
+say the same in their own `dns_zone_private`. The Let's Encrypt DNS-01 challenge and the external
+zones' names need a public zone.
 DESCRIPTION
   nullable    = false
 }
@@ -306,28 +306,6 @@ DESCRIPTION
   }
 }
 
-variable "global_hostnames" {
-  type = map(object({
-    endpoints   = list(string)
-    health_path = optional(string, "/")
-    ttl         = optional(number, 10)
-    zone        = optional(string)
-  }))
-  default     = {}
-  description = <<DESCRIPTION
-Hostnames in dns_zone_name that every listed cluster serves at once, keyed by the name below the zone
-(`hello` for hello.onek8s.lol): an Azure Traffic Manager profile each, weighting the `endpoints` -
-each cluster's own public hostname, such as `public-aks-dev-ext-stateless-az1.onek8s.lol` - alike and
-leaving out one whose probe of `health_path` fails, and a CNAME of the hostname to it. The clusters'
-external-dns have to leave the hostname alone.
-
-`zone` names the external isolation zone that serves the hostname: no profile is made while that
-zone is not deployed - not in isolation_zones, disabled, or the resources serve the internal
-exposure - nor for any hostname when exposure is `int`.
-DESCRIPTION
-  nullable    = false
-}
-
 variable "key_vault_purge_protection_enabled" {
   type        = bool
   default     = false
@@ -369,7 +347,6 @@ variable "exposure" {
 The exposure these shared resources serve - OneK8s design decision D52: `int` or `ext`. Internal and
 external workloads have a subscription and clusters each, so one apply of this configuration serves
 the clusters of one exposure in its subscription: every isolation zone is of that exposure, only an
-external one publishes global_hostnames (Traffic Manager: an internal one creates none of them), only an
 internal one has internal_dns_zones. Null checks nothing.
 DESCRIPTION
 
@@ -401,7 +378,7 @@ zone's /24 in each cell's address space (1 to 14; 0 is the system pool's, 15 is 
 changes once it is in use - a new country's zones take new ones.
 
 `enabled = false` disables a country's zone without giving up its index: no subnets, NSGs or private
-DNS for it in any cell, and no Traffic Manager profile for its global hostnames. Its vault
+DNS for it in any cell. Its vault
 (zone_key_vault_names) and namespaces (key_vault_namespaces) are left out by not listing them, as
 are the zone in the clusters' tfvars, the fleet's zones.yaml and the landing zone's policies.
 DESCRIPTION
@@ -682,8 +659,8 @@ variable "naming" {
   default     = {}
   description = <<DESCRIPTION
 The estate's naming policy (modules/conventions, variable `naming`): a template per resource type
-with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}`, `{name}` and
-`{domain}`, merged over the defaults - the lab's names - and the regions' short codes. Every name this
+with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}` and `{name}`,
+merged over the defaults - the lab's names - and the regions' short codes. Every name this
 configuration makes comes from it, unless a variable names the resource itself. The clusters' stacks
 take the same policy, so they look up what this one created. A real estate's policy stays out of the
 repository - see the README, "Naming policy".

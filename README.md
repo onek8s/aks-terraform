@@ -34,7 +34,7 @@ creates - its resource group, its own network, the vaults, the registry - with a
 | `key_vault.tf` | The cluster's federated credentials on the platform namespaces' identities of the platform vault. See [Key Vault](#key-vault). |
 | `tenants/` | The environment's tenants, a root module and state of its own (stack `dev-tenants`): one file per tenant in `tenants/catalogue/<env>/<namespace>.yaml`, turned into its managed namespace, access, Flux configurations and federated credential in every cell of its zone. See [Tenants](#tenants-managed-namespaces). |
 | `envs/dev-int-stateless.tfvars`, `envs/dev-int-stateless-az3.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters, in germanywestcentral: the lab's one stateless cell `aks-dev-int-stateless-az3` (availability zone 3, Sweden's zone `int-se`) and `aks-dev-int-stateful` (defined, not deployed). `dev-int-stateless.tfvars` holds what every cell shares - the cost savings, the environment's resources, the private API server - and is applied before the cell's own file (name, network, zones). See [Cells of the OneK8s design](#cells-of-the-onek8s-design). |
-| `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
+| `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone and the container registry and the images it builds. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -207,9 +207,7 @@ their zones; `cells: [...]` in the file narrows it):
   the namespace's `key-vault` service account and SecretStore on its zone's vault, and its default
   service account (aks-fluxcd-platform `infrastructure/tenant`, the same directory for every tenant);
 - `Azure Kubernetes Service Namespace User` for each group, and the federated credential of the
-  namespace's vault identity for the cell;
-- per zone, the Flux configuration `tenants-<zone>`: the ConfigMap that names the namespaces the zone's
-  gateway watches, which the cell's Traefik configuration reads (`substituteFrom`).
+  namespace's vault identity for the cell.
 
 `shared/` reads the same files for the namespace's share of its zone's vault (`writers`, and the
 groups' rights on it). So a new tenant is reviewed as one file, planned and applied by the tenants
@@ -223,9 +221,9 @@ The catalogue's schema is `tenants/schema` (a typed variable: a misspelt attribu
 
 **Moving tenants out of a cell's state** (the lab, 2026-11; `tenants/imports.tf`): the cell forgets its
 namespace resources (`removed` blocks, nothing destroyed) and `tenants/` imports them. Order: merge,
-plan `dev-shared` (no change expected), apply `dev-tenants` (imports, plus each tenant's `store` and the
-zones' `tenants-<zone>`), merge the fleet's change that drops its per-tenant `tenants/` directories and
-cluster settings, then apply the cell (Traefik reads `tenants-<zone>`). The fleet's old `tenants`
+plan `dev-shared` (no change expected), apply `dev-tenants` (imports, plus each tenant's `store`), merge
+the fleet's change that drops its per-tenant `tenants/` directories and cluster settings, then apply the
+cell. The fleet's old `tenants`
 Kustomizations hand their objects over: the new `<namespace>-access-store` applies them first and
 takes their owner labels, so pruning the old one deletes nothing.
 
@@ -376,7 +374,7 @@ Group values are object IDs, not names.
   cannot be on-boarded at all - `kube-system` and anything else starting with `kube-`,
   `gatekeeper-system`, `istio-system`, `app-routing-system` - and Terraform refuses the ones
   Microsoft names, `flux-system`, and the platform's Flux configuration names (`platform`,
-  `traefik-*`, `tenants-*`). A tenant's name starts with its zone, `<zone>-`.
+  `tenants-*`). A tenant's name starts with its zone, `<zone>-`.
 - **A namespace grant does not carry over to the cluster.** `Azure Kubernetes Service Cluster User
   Role` and the cluster-wide `entra_admin_group_object_ids` are separate, and a principal that has
   only namespace grants cannot run `az aks get-credentials` or see anything outside its namespace -
@@ -424,8 +422,8 @@ pinned version back, and Azure rejects a downgrade. Pin the version and set
 ## Monitoring and ingress
 
 Monitoring is handled by third party solutions running inside the cluster, so **nothing is sent to
-Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by Traefik or App
-Routing's Gateway API implementation (`gateway_implementation`) - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
+Azure Monitor**. Ingress is the [Kubernetes Gateway API][gatewayapi], served by App Routing's
+Gateway API implementation (`gateways_enabled`) - see [Ingress through the Gateway API](#ingress-through-the-gateway-api). The Azure features that would
 otherwise duplicate them are off on every cluster, with no variable to turn them back on:
 
 | Disabled | What it would have done |
@@ -459,7 +457,6 @@ reported on.
 [approuting]: https://learn.microsoft.com/azure/aks/app-routing
 [approutinggw]: https://learn.microsoft.com/azure/aks/app-routing-gateway-api
 [aks5939]: https://github.com/Azure/AKS/issues/5939
-[traefikgw]: https://doc.traefik.io/traefik/providers/kubernetes-gateway/
 [defender]: https://learn.microsoft.com/azure/defender-for-cloud/defender-for-containers-introduction
 [diagnostics]: https://learn.microsoft.com/azure/aks/monitor-aks-reference
 [insights]: https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview
@@ -474,30 +471,15 @@ configuration provides is the API itself; the controller serving it is deployed 
 | Setting | What it does |
 | --- | --- |
 | `ingressProfile.gatewayAPI.installation = "Standard"` | The [managed Gateway API CRDs][managedgw], standard channel. AKS installs and upgrades them, so nothing else in the cluster may bring its own. |
-| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `gateway_implementation = "approuting-istio"`, else `Disabled`: [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. |
+| `ingressProfile.webAppRouting.gatewayAPIImplementations.appRoutingIstio.mode` | `Enabled` with `gateways_enabled` (the default), else `Disabled` (the stateful cluster, R21): [App Routing's Gateway API implementation][approutinggw], a sidecar-less Istio control plane (`istiod` in `aks-istio-system`) serving the GatewayClass `approuting-istio`. No service mesh, no sidecars, no Istio CRDs; AKS upgrades it in place with the cluster. |
 | `ingressProfile.applicationLoadBalancer.enabled = false` | No Application Gateway for Containers add-on. Stated rather than left out, so a cluster that had it loses it; it keeps the module on a preview API - `2026-03-02-preview`, which also knows App Routing Istio. |
 
-`gateway_implementation` picks what serves the Gateways - the same Gateways, listeners, certificates
-and Cilium policies either way; only the GatewayClass they name changes, which the Flux repository
-is told as `gateway_class_name_<gateway>` - and the implementation as `gateway_implementation`, the
-kustomize component that adds what only it takes (App Routing's `parametersRef` ConfigMap, which
-Traefik refuses with `Accepted: False`):
+App Routing serves every Gateway; the Flux repository names its class, `approuting-istio`, itself.
+istiod requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]):
+a lab cell runs two system nodes for it. App Routing's Istio does not let a listener refuse HTTP/1.1
+or TLS 1.2 (design section 4.1): the edge offers HTTP/2 and HTTP/1.1, TLS 1.2 and 1.3.
 
-| `gateway_implementation` | What runs | Cost |
-| --- | --- | --- |
-| `traefik` (the default, every environment: HTTP/2 alone and TLS 1.3 alone at the edge, design section 4.1) | [Traefik Proxy][traefikgw] per Gateway, a Helm release with its own GatewayClass `traefik-<gateway>`, deployed from this repository's [`gateways/traefik`](gateways/traefik) by a Flux configuration per Gateway, `traefik-<gateway>` (`traefik.tf`). It reads the Gateway API objects from the API server itself; its own Cilium policy lets it. | 2 x 25m / 64 MiB of requests per Gateway, no control plane. |
-| `approuting-istio` (once App Routing can offer the same at the edge) | App Routing's istiod, which runs an Envoy Deployment per Gateway (below). | istiod alone requests 500m and 2 GiB per replica, at least two, not customizable ([Azure/AKS#5939][aks5939]): a second system node in every lab cell. |
-| null | No implementation: the stateful cluster (R21), which states it. | - |
-
-Traefik's manifests live here rather than in the Flux repository so that the choice and everything
-it brings are one change of this repository. Switching re-creates the Gateways under their new class
-(Flux `force`): the cell's gateways are down for a few minutes, so drain the cell in Traffic Manager
-first where that matters. Leaving App Routing leaves its per-Gateway objects behind (istiod, which
-would remove them, is gone): every Deploy apply of a cluster deletes `<gateway>-approuting-istio`
-(Deployment, Service, autoscaler, disruption budget, ServiceAccount) for each Gateway that names
-another class.
-
-With App Routing, for every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
+For every Gateway of class `approuting-istio`, istiod creates an Envoy Deployment, a `LoadBalancer`
 Service, an autoscaler (at least two replicas) and a disruption budget in the Gateway's namespace,
 shaped by the ConfigMap the Gateway names in `spec.infrastructure.parametersRef` - within the
 add-on's allow list. The Flux repository runs one such Gateway per isolation zone - `<zone>` in
@@ -511,8 +493,8 @@ of its own:
   (`service.beta.kubernetes.io/azure-load-balancer-internal-subnet`), reachable from inside the
   network only. The cluster identity holds `Network Contributor` on the whole network (the zones' node
   pools), which is all AKS needs.
-- **An external zone's**, and the platform gateway's, is public: Azure Traffic Manager
-  (`global_hostnames` in `shared/`) points an application's one hostname at it in every cell.
+- **An external zone's**, and the platform gateway's, is public: an application's own name, in the
+  public zone, points at it in the application's home cell (design v5.0: no Traffic Manager).
 
 Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
 Cilium baseline lets in - from the zone's own gateway only.
@@ -554,15 +536,15 @@ created here:
   `<cluster identity>-dns` is granted `Private DNS Zone Contributor` too. Everything else is in one
   zone, `dns_zone_name`, public or private (`dns_zone_private`). `<cluster
   identity>-dns` is federated with `external-dns/external-dns` and granted `DNS Zone Contributor` on
-  a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told which
-  (`dns_zone_private`, and the external-dns provider in `dns_provider`: `azure` or
-  `azure-private-dns`). external-dns keeps a record per listener hostname, pointing at the Gateway's
-  address. The zone is
+  a public zone, `Private DNS Zone Contributor` on a private one; the Flux repository is told the
+  zones' resource IDs (`dns_zone_id`, `internal_dns_zone_ids`) for App Routing's managed external-dns
+  (`ClusterExternalDNS`, which the App Routing add-on brings with `gateways_enabled`). It keeps a record
+  per route hostname, pointing at the Gateway's address. The zone is
   looked up in `resource_group_name` unless `dns_zone_resource_group_name` says otherwise; `shared/`
   creates it (`dns_zone_create`, a private one linked to the clusters' network), or it exists
   already. Choosing between public and private is that one setting, alike in `shared/` and in every
   cluster. The Let's Encrypt DNS-01 challenge needs a public zone for the certificate's names,
-  and so do `global_hostnames`. In `dev` the zone is the public `onek8s.lol`, the only domain.
+  and so do the external zones' names. In `dev` the zone is the public `onek8s.lol`, the only domain.
 
 ## Key Vault
 
@@ -633,8 +615,7 @@ They are the **internal** exposure's: the design keeps internal and external wor
 subscriptions and clusters (decision D52), with the countries as isolation zones inside them - a zone is
 defined for the environment (its vault, DNS and certificate) and run by the cells whose tfvars name it.
 `sub-aks-dev` plays `sub-aks-dev-int`; an external subscription would run `shared/` and the same cluster
-configuration once more with `exposure = "ext"` and the external zones (Traffic Manager only for a
-deployed external zone). The one exception is the public zone `onek8s.lol`, which is created once with
+configuration once more with `exposure = "ext"` and the external zones. The one exception is the public zone `onek8s.lol`, which is created once with
 the Azure CLI in `rg-onek8s-dns`, outside every state, so that its name servers - which the registrar
 points at - outlive any rebuild.
 
@@ -646,12 +627,11 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | --- | --- | --- |
 | Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-int-stateless-az<N>` (`cells`): `address_space` in /24 slots - `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb` - and `pod_address_space`, a /16 of 100.64.0.0/10 with a /20 per slot - `snet-system-pods`, `snet-<zone>-pods`, delegated to AKS - each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `pod_subnet_name`, `isolation_zones` |
 | Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them: the admin groups' `Key Vault Administrator`, the namespaces' writers and groups | Looked up: `key_vault_name`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
-| Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
+| Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network) | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-gwc-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
-| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone, and owns its own records in it (`txtOwnerId`) |
+| DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. App Routing's managed external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-int-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone. The tier follows the environment (`container_registry_sku`, design D62): Premium with a private endpoint and no public network access in `prd`, Basic on its public endpoint (Entra ID only) everywhere else - Azure offers private endpoints on Premium alone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
-| Hostnames every cluster serves | `global_hostnames`: `hello.ext-fi.dev.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the app's hostname in each cell - an A record of that cell's ext-fi gateway - alike and leaves out one whose probe fails | Each cell serves the hostname on its ext-fi Gateway; the route that names it tells its external-dns to leave the record alone |
 | The cluster | | `aks-dev-<cluster>`, run by `id-gwc-dev-aks-<cluster>`; its node resource group, which AKS deletes with it |
 
 The names say which is which: a shared resource carries `shared` - or, for the zones, the
@@ -701,12 +681,11 @@ its type. Its defaults are the lab's names, so the lab's tfvars name almost noth
 | `private_endpoint`, `network_interface` | `pe-{name}`, `nic-{name}` | `pe-kv-onek8s-gwc-platform`, `nic-pe-kv-onek8s-gwc-platform` |
 | `disk_encryption_set` | `des-{name}` | `des-aks-dev-int-stateless-az3` |
 | `consumption_budget` | `budget-{environment}` | `budget-dev` |
-| `traffic_manager_profile` | `{domain}-{environment}-{name}` | (`onek8s-lol-dev-hello-ext-fi-dev`, external only) |
 | `ai_services` | `ais-onek8s-{environment}-{name}` | `ais-onek8s-dev-agents` |
 
 The placeholders are `{environment}`, `{exposure}` (empty without one), `{location}`,
 `{location_code}` (the region's short code, `naming.location_codes` over the built-in list),
-`{name}` and `{domain}` (Traffic Manager's DNS zone). An empty placeholder leaves no stray hyphen; a
+and `{name}`. An empty placeholder leaves no stray hyphen; a
 registry name loses everything but letters and digits; every name is checked against its type's Azure
 rules at plan time, and an unknown type or placeholder fails the plan (output `names`). A variable that
 names a resource itself (`resource_group_name`, `key_vault_name`, `zone_key_vault_names`,
@@ -717,7 +696,7 @@ stated in its tfvars as before - the cluster stack takes the same policy for its
 disk encryption set, and `environment` when the cluster's name does not carry it in its second segment.
 
 **A real estate's policy is not kept here.** Some of these names are global - Key Vault, the
-registry, the AI Services subdomain, Traffic Manager - and a published convention tells anyone which
+registry, the AI Services subdomain - and a published convention tells anyone which
 name the next vault will take. Keep the policy as JSON outside Git and give it to both stacks:
 
 ```json
@@ -856,7 +835,7 @@ pool in each cell's file.
 | --- | --- | --- | --- |
 | `sku_tier` | `Standard` - uptime SLA, API server scaled for load (D31) | `Free` | The control plane SLA; cost analysis. |
 | `vertical_pod_autoscaler_enabled` | `true` - pod right-sizing (section 2.3) | `false` | In-place right-sizing of the applications' pods; ~2.4 GiB of requests saved. |
-| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 1`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | A second node during upgrades and failures; room for the VPA add-on. Fits only with the VPA add-on off (and Traefik, the default gateway: istiod's 1 CPU / 4 GiB, [Azure/AKS#5939][aks5939], would not). With one system node AKS's `cilium-operator` puts its second replica on a small zone spot node. |
+| `default_node_pool` | `node_count = 2`, `Standard_D4ds_v5` (16 GiB), `os_sku = "AzureLinux"` | `node_count = 2`, `Standard_D4alds_v6` (8 GiB) on an ephemeral OS disk (no Premium SSD) | Room for the VPA add-on. Two small nodes hold the platform and istiod's 1 CPU / 4 GiB ([Azure/AKS#5939][aks5939]) only with the VPA add-on off. |
 
 The savings depend on each other - the one 8 GiB system node holds the platform only without the VPA
 add-on - so going back to production means all of them: delete the block and apply; all are in-place updates.
@@ -900,11 +879,9 @@ Flux [post-build variables][postbuild], so they are never copied into it by hand
 | Variable | Value |
 | --- | --- |
 | `key_vault_url`, `key_vault_url_<namespace>`, `key_vault_client_id_<namespace>` | The platform vault, each namespace's vault, and for each namespace with a share the identity its `key-vault` service account reads it as - the namespace's hyphens as underscores, `key_vault_client_id_int_fi_gateway`. |
-| `dns_zone_name`, `dns_zone_resource_group_name`, `dns_zone_subscription_id` | The zone of `dns_zone_name`. |
-| `dns_zone_private`, `dns_provider` | Whether the zone is private (`"true"` / `"false"`), and the external-dns provider that writes it: `azure` or `azure-private-dns`. |
-| `dns_identity_client_id` | The identity external-dns writes either zone as. |
-| `gateway_implementation`, `gateway_class_name_<zone>` | The Gateway API implementation and the class each zone's Gateway names. |
-| `cluster_exposure`, `internal_dns_resource_group_name` | The cluster's exposure (D52) and, for an internal cluster, where the internal zones' private DNS is. |
+| `dns_zone_name`, `dns_zone_id` | The zone of `dns_zone_name`, and its resource ID. |
+| `dns_identity_client_id` | The identity App Routing's managed external-dns writes the zones as. |
+| `cluster_exposure`, `internal_dns_zone_ids` | The cluster's exposure (D52) and, for an internal cluster, the internal zones' Private DNS zones as a YAML flow sequence of resource IDs. |
 | `image_verification_client_id`, `image_signing_certificate_name`, `image_signing_subject`, `container_registry_login_server` | With `image_integrity_enabled`: what Ratify verifies with. |
 | `cluster_name`, `azure_tenant_id` | Always sent. |
 

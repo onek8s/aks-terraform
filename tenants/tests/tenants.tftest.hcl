@@ -1543,46 +1543,6 @@ run "a_zone_without_pools_places_nothing" {
   }
 }
 
-# The namespaces each zone's gateway watches are the tenants', told to the cell's Traefik through a
-# ConfigMap the zone's own Flux configuration keeps: a new tenant changes nothing of the cell.
-run "each_zone_tells_its_gateway_the_namespaces_to_watch" {
-  command = plan
-
-  variables {
-    tenants = {
-      team-search   = { zone = "team" }
-      team-payments = { zone = "team" }
-      ext-fi-orders = { zone = "ext-fi" }
-    }
-  }
-
-  assert {
-    condition     = toset(keys(azapi_resource.zone_flux_configuration)) == toset(["aks-test/team", "aks-test/ext-fi"])
-    error_message = "Every zone of every cell should get its configuration."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].name == "tenants-team"
-    error_message = "A zone's configuration should be tenants-<zone>."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].body.properties.kustomizations.namespaces.postBuild.substitute.gateway_watch_namespaces == "[team-gateway,team-payments,team-search]"
-    error_message = "The gateway should watch its own namespace and its zone's tenants, sorted."
-  }
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/ext-fi"].body.properties.kustomizations.namespaces.path == "./infrastructure/zone-tenants"
-    error_message = "The ConfigMap should come from zone_tenants_path."
-  }
-}
-
-run "a_zone_without_tenants_watches_its_own_namespace" {
-  command = plan
-
-  assert {
-    condition     = azapi_resource.zone_flux_configuration["aks-test/team"].body.properties.kustomizations.namespaces.postBuild.substitute.gateway_watch_namespaces == "[team-gateway]"
-    error_message = "A zone without tenants should watch its gateway's namespace alone."
-  }
-}
-
 # A cell of another type syncs another path of the same repository.
 run "a_tenant_can_sync_another_path_in_one_cell" {
   command = plan
@@ -1633,4 +1593,63 @@ run "the_catalogue_files_are_tenants" {
     )
     error_message = "A file should say what it needs and get the defaults for the rest."
   }
+}
+
+# An internal application's home cell alone serves its internal name: the route is the DNS switch
+# (design section 3.1).
+run "the_home_cell_alone_gets_the_home_routes" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = {
+          url  = "https://github.com/example/team-search"
+          home = { cell = "aks-test", path = "./home" }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.team_flux_configuration["aks-test/team-search"].body.properties.kustomizations.home.path == "./home"
+    error_message = "The home cell should get the home Kustomization."
+  }
+}
+
+run "a_tenant_without_a_home_has_its_apps_only" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = { url = "https://github.com/example/team-search" }
+      }
+    }
+  }
+
+  assert {
+    condition     = keys(azapi_resource.team_flux_configuration["aks-test/team-search"].body.properties.kustomizations) == ["apps"]
+    error_message = "Without flux.home there is no home Kustomization."
+  }
+}
+
+run "the_home_cell_must_be_one_of_the_tenants_cells" {
+  command = plan
+
+  variables {
+    tenants = {
+      team-search = {
+        zone = "team"
+        flux = {
+          url  = "https://github.com/example/team-search"
+          home = { cell = "aks-elsewhere", path = "./home" }
+        }
+      }
+    }
+  }
+
+  expect_failures = [output.tenants]
 }

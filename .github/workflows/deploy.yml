@@ -9,8 +9,8 @@ name: Deploy
 #
 #   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the cells' networks,
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
-#                        internal zones' private DNS, the container registry and its images and the
-#                        external zones' Traffic Manager profiles. Applied first.
+#                        internal zones' private DNS and the container registry and its images.
+#                        Applied first.
 #   dev-int-stateless-az3    the repository root with envs/dev-int-stateless.tfvars + envs/dev-int-stateless-az3.tfvars:
 #                        aks-dev-int-stateless-az3, the lab's one cell (internal, int-se, germanywestcentral,
 #                        availability zone 3, behind labfw; Azure CNI Pod Subnet, classic zone pools).
@@ -351,14 +351,8 @@ jobs:
           tenant-id: ${{ env.ARM_TENANT_ID }}
           subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
 
-      # App Routing's istiod creates an Envoy Deployment, a LoadBalancer Service (a public IP), an
-      # autoscaler, a disruption budget and a ServiceAccount, all `<gateway>-approuting-istio`, for
-      # every Gateway of class approuting-istio. Once a Gateway names another class (gateway_implementation
-      # = "traefik"), istiod is gone and nothing removes them: the Envoy pods crash without their
-      # control plane, and the Service keeps a public IP whose selector (`gateway-name`) also matches
-      # Traefik's pods. Deleted here by name, only for Gateways that no longer name approuting-istio -
-      # never Traefik's own objects. Idempotent; runs on every apply of a cluster, changes or not.
-      - name: Remove App Routing's leftovers from Gateways of another class
+      # The cluster's credentials for the clean-up steps below.
+      - name: Get the cluster's credentials
         if: inputs.action == 'apply' && !endsWith(inputs.stack, '-shared') && !endsWith(inputs.stack, '-tenants')
         run: |
           set -euo pipefail
@@ -368,18 +362,6 @@ jobs:
           az aks get-credentials -g "$resource_group" -n "$cluster" --file "$RUNNER_TEMP/kubeconfig" --only-show-errors
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           kubelogin convert-kubeconfig -l azurecli
-          kubectl get gateways.gateway.networking.k8s.io -A \
-            -o jsonpath='{range .items[?(@.spec.gatewayClassName!="approuting-istio")]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' |
-            while read -r namespace gateway; do
-              [ -n "$gateway" ] || continue
-              echo "== ${namespace}/${gateway}-approuting-istio"
-              kubectl -n "$namespace" delete --ignore-not-found --wait=false \
-                deployment/"${gateway}-approuting-istio" \
-                service/"${gateway}-approuting-istio" \
-                horizontalpodautoscaler/"${gateway}-approuting-istio" \
-                poddisruptionbudget/"${gateway}-approuting-istio" \
-                serviceaccount/"${gateway}-approuting-istio"
-            done
 
       # A stateless cluster (persistent_storage_enabled = false) runs no CSI driver, yet AKS still creates
       # its StorageClasses `default` and `managed-csi-premium-v2`. The landing zone's no-persistent-storage

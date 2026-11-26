@@ -213,11 +213,9 @@ jobs:
             kubectl logs -n "${pod%%/*}" "${pod#*/}" --all-containers --tail=30 --prefix
           done
           kubectl get constraints -o json | jq -r '.items[] | select(((.metadata | tostring | test("cf426bb8")) or (.kind | test("(?i)ratify|notation|imageintegrity"))) and (.kind | test("(?i)printmutations") | not)) | "\(.kind)/\(.metadata.name) \(.spec.enforcementAction): \(.status.totalViolations // 0) violations, audited \(.status.auditTimestamp // "never")", "  match: \(.spec.match | tostring)", "  parameters: \(.spec.parameters | tostring)", (.status.violations[]? | "  \(.namespace)/\(.name): \(.message)")'
-          # The gateways: one Gateway per isolation zone and the platform's, served by Traefik (a Helm
-          # release and Flux configuration traefik-<gateway> each) or App Routing's Istio control
-          # plane - their Deployments, autoscalers, load balancers and routes.
+          # The gateways: one Gateway per isolation zone and the platform's, served by App Routing's Istio
+          # control plane - their Deployments, autoscalers, load balancers and routes.
           kubectl get pods,hpa,configmap -n aks-istio-system -o wide 2>/dev/null || true
-          kubectl get helmreleases.helm.toolkit.fluxcd.io -n flux-system -o wide | grep -E "NAME|traefik" || true
           kubectl get gatewayclass,gateway,httproute -A
           kubectl get gateway -A -o yaml
           kubectl get httproute -A -o yaml
@@ -315,18 +313,17 @@ jobs:
             lb=$(dig +short @10.0.12.1 "$host" | tail -n 1)
             out=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$host:443:${lb:-0.0.0.0}" "https://$host/")
             echo "== https://$host/ as a VPN client: DNS $host -> ${lb:-nothing}, HTTP $out (certificate checked)"
-            # The edge's protocols (design D70, D71; V29, V30): HTTP/2 and TLS 1.3 only
+            # The edge's protocols, recorded (design 4.1): App Routing's Istio offers HTTP/2 and HTTP/1.1, TLS 1.2
+            # and 1.3; HTTP/2 and TLS 1.3 are what a current client negotiates
             if [ -n "$lb" ]; then
               r=(--resolve "$host:443:$lb" -s -m 15 -o /dev/null)
               h2=$(curl "${r[@]}" --http2 -w '%{http_version} %{http_code}' "https://$host/")
-              h1=$(curl "${r[@]}" --http1.1 -w '%{http_version} %{http_code}' "https://$host/" 2>&1); h1rc=$?
-              noalpn=$(curl "${r[@]}" --http1.1 --no-alpn -w '%{http_version} %{http_code}' "https://$host/" 2>&1)
-              tls12=$(curl "${r[@]}" --tls-max 1.2 -w '%{http_code}' "https://$host/" 2>&1); tls12rc=$?
+              h1=$(curl "${r[@]}" --http1.1 -w '%{http_version} %{http_code}' "https://$host/" 2>&1)
+              tls12=$(curl "${r[@]}" --tls-max 1.2 -w '%{http_code}' "https://$host/" 2>&1)
               tls=$(echo | timeout 15 openssl s_client -connect "$lb:443" -servername "$host" -alpn h2 2>/dev/null | grep -E '^(New|Protocol|ALPN|Negotiated|Server Temp Key)' | tr '\n' ';')
               echo "   edge $host: h2 -> $h2 $([ "${h2%% *}" = 2 ] && echo PASS || echo FAIL)"
-              echo "   edge $host: ALPN http/1.1 -> rc $h1rc $h1 $([ "$h1rc" -ne 0 ] && echo PASS refused || echo FAIL answered)"
-              echo "   edge $host: TLS 1.2 max -> rc $tls12rc $tls12 $([ "$tls12rc" -ne 0 ] && echo PASS refused || echo FAIL answered)"
-              echo "   edge $host: no ALPN (V29 residual, recorded) -> $noalpn"
+              echo "   edge $host: ALPN http/1.1 (recorded) -> $h1"
+              echo "   edge $host: TLS 1.2 max (recorded) -> $tls12"
               echo "   edge $host: openssl $tls $(echo "$tls" | grep -q 'TLSv1.3' && echo PASS || echo FAIL)"
             fi
           done

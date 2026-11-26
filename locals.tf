@@ -41,14 +41,11 @@ locals {
       for namespace in local.key_vault_namespaces :
       "key_vault_client_id_${replace(namespace, "-", "_")}" => data.azurerm_user_assigned_identity.key_vault[namespace].client_id
     },
-    # The DNS zones the listener hostnames are published in, and the identity that writes them.
+    # The DNS zone the listener hostnames are published in, by its resource ID - App Routing's managed
+    # external-dns (ClusterExternalDNS) names its zones so - and the identity that writes it.
     local.external_dns_enabled ? {
-      dns_zone_name                = var.dns_zone_name
-      dns_zone_resource_group_name = local.dns_zone_resource_group_name
-      dns_zone_subscription_id     = split("/", local.dns_zone_id)[2]
-      # Whether the zone is public or private, and the external-dns provider that writes it.
-      dns_zone_private       = tostring(var.dns_zone_private)
-      dns_provider           = var.dns_zone_private ? "azure-private-dns" : "azure"
+      dns_zone_name          = var.dns_zone_name
+      dns_zone_id            = local.dns_zone_id
       dns_identity_client_id = azurerm_user_assigned_identity.external_dns[0].client_id
     } : {},
     # Where the disks of the `portable-disk` StorageClass go, so that they outlive the cluster - see
@@ -65,8 +62,6 @@ locals {
     # Each isolation zone's node subnet, each namespace's vault and the internal zones' DNS - see
     # zones.tf.
     local.flux_zone_settings,
-    # The GatewayClass each Gateway names - see traefik.tf.
-    local.flux_gateway_settings,
   )
 
   # The Flux configuration as sent to Azure. A local, because the namespace access configurations
