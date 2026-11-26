@@ -1418,7 +1418,7 @@ run "the_internal_zones_are_granted_to_external_dns" {
     error_message = "external-dns should write the internal zones."
   }
   assert {
-    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_ids == "[${data.azurerm_private_dns_zone.internal["int-fi.test.contoso.com"].id}]"
+    condition     = azapi_resource.flux_configuration[0].body.properties.kustomizations.platform.postBuild.substitute.internal_dns_zone_ids == "'[${data.azurerm_private_dns_zone.internal["int-fi.test.contoso.com"].id}]'"
     error_message = "The Flux repository should be told the internal zones' resource IDs."
   }
 }

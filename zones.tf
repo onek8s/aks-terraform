@@ -249,9 +249,11 @@ locals {
       for namespace, uri in local.key_vault_namespace_uris : "key_vault_url_${replace(namespace, "-", "_")}" => uri
     },
     # The internal zones' Private DNS zones by resource ID, as a YAML flow sequence (`[<id>,...]`): the
-    # internal ClusterExternalDNS's dnsZoneResourceIDs.
+    # internal ClusterExternalDNS's dnsZoneResourceIDs. In single quotes: Flux substitutes into the
+    # YAML it re-serialized, without the source's quotes, so the fleet's cluster-settings ConfigMap
+    # gets the quotes from the value and keeps a string; its own substitution then yields the list.
     length(data.azurerm_private_dns_zone.internal) == 0 ? {} : {
-      internal_dns_zone_ids = "[${join(",", [for zone in values(data.azurerm_private_dns_zone.internal) : zone.id])}]"
+      internal_dns_zone_ids = "'[${join(",", [for zone in values(data.azurerm_private_dns_zone.internal) : zone.id])}]'"
     },
     var.exposure == null ? {} : {
       cluster_exposure = var.exposure
