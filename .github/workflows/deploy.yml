@@ -9,8 +9,8 @@ name: Deploy
 #
 #   dev-shared           shared/ with shared/envs/dev.tfvars: the resource group, the cells' networks,
 #                        the platform and zone Key Vaults, the namespaces' shared identities, the
-#                        internal zones' private DNS, the container registry and its images and the
-#                        external zones' Traffic Manager profiles. Applied first.
+#                        internal zones' private DNS and the container registry and its images.
+#                        Applied first.
 #   dev-int-stateless-az3    the repository root with envs/dev-int-stateless.tfvars + envs/dev-int-stateless-az3.tfvars:
 #                        aks-dev-int-stateless-az3, the lab's one cell (internal, int-se, germanywestcentral,
 #                        availability zone 3, behind labfw; Azure CNI Pod Subnet, classic zone pools).

@@ -204,9 +204,9 @@ run "refuses_a_policy_that_makes_a_name_azure_refuses" {
 run "refuses_an_unknown_placeholder" {
   command = plan
 
-  # Refused even for a type nothing here is named by yet (no Traffic Manager in the internal exposure).
+  # Refused even for a type nothing here is named by (disk encryption sets are the clusters').
   variables {
-    naming = { templates = { traffic_manager_profile = "tm-{region}-{name}" } }
+    naming = { templates = { disk_encryption_set = "des-{region}-{name}" } }
   }
 
   expect_failures = [output.names]

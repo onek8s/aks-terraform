@@ -45,8 +45,8 @@ variable "naming" {
   description = <<DESCRIPTION
 The estate's naming policy (modules/conventions, variable `naming`) - the same as shared/'s, so the
 cluster finds the environment's shared identities under the names shared/ gave them: a template per
-resource type with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}`,
-`{name}` and `{domain}`, merged over the defaults (the lab's names), and the regions' short codes. Here
+resource type with the placeholders `{environment}`, `{exposure}`, `{location}`, `{location_code}`
+and `{name}`, merged over the defaults (the lab's names), and the regions' short codes. Here
 it names the cluster's identities (`user_assigned_identity`; the namespaces' and external-dns's
 add `-kv-<namespace>` and `-dns`) and its disk encryption set. The cluster's own name and the names of
 what it looks up are stated in their variables. A real estate's policy stays out of the repository -

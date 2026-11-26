@@ -34,7 +34,7 @@ creates - its resource group, its own network, the vaults, the registry - with a
 | `key_vault.tf` | The cluster's federated credentials on the platform namespaces' identities of the platform vault. See [Key Vault](#key-vault). |
 | `tenants/` | The environment's tenants, a root module and state of its own (stack `dev-tenants`): one file per tenant in `tenants/catalogue/<env>/<namespace>.yaml`, turned into its managed namespace, access, Flux configurations and federated credential in every cell of its zone. See [Tenants](#tenants-managed-namespaces). |
 | `envs/dev-int-stateless.tfvars`, `envs/dev-int-stateless-az3.tfvars`, `envs/dev-int-stateful.tfvars` | The `dev` environment's clusters, in germanywestcentral: the lab's one stateless cell `aks-dev-int-stateless-az3` (availability zone 3, Sweden's zone `int-se`) and `aks-dev-int-stateful` (defined, not deployed). `dev-int-stateless.tfvars` holds what every cell shares - the cost savings, the environment's resources, the private API server - and is applied before the cell's own file (name, network, zones). See [Cells of the OneK8s design](#cells-of-the-onek8s-design). |
-| `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone, the container registry and the images it builds, and the Traffic Manager profiles of the hostnames every cluster serves. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
+| `shared/` | The environment's shared resources, a root module and state of its own: the resource group and network, the Key Vault, the identities the namespaces read it as, the private DNS zone and the container registry and the images it builds. `shared/envs/dev.tfvars` is the `dev` environment's. See [Shared resources](#shared-resources). |
 | `modules/conventions/` | What the two root modules have to work out the same way: the [naming policy](#naming-policy) and its region codes, the shared identities' names, the ABAC conditions of a namespace's share of the vault. |
 | `scripts/policy-name.sh` | The naming policy's name of one resource, for the workflows that need a name no variables file states. |
 | `tests/aks.tftest.hcl` | `terraform test` suite. The providers are mocked, so it plans the whole configuration - role assignment scopes, upgrade windows, every input validation - without a subscription. |
@@ -493,8 +493,8 @@ of its own:
   (`service.beta.kubernetes.io/azure-load-balancer-internal-subnet`), reachable from inside the
   network only. The cluster identity holds `Network Contributor` on the whole network (the zones' node
   pools), which is all AKS needs.
-- **An external zone's**, and the platform gateway's, is public: Azure Traffic Manager
-  (`global_hostnames` in `shared/`) points an application's one hostname at it in every cell.
+- **An external zone's**, and the platform gateway's, is public: an application's own name, in the
+  public zone, points at it in the application's home cell (design v4.13: no Traffic Manager).
 
 Traffic reaches the pods from the zone's gateway pods inside the cluster, which the platform's
 Cilium baseline lets in - from the zone's own gateway only.
@@ -544,7 +544,7 @@ created here:
   creates it (`dns_zone_create`, a private one linked to the clusters' network), or it exists
   already. Choosing between public and private is that one setting, alike in `shared/` and in every
   cluster. The Let's Encrypt DNS-01 challenge needs a public zone for the certificate's names,
-  and so do `global_hostnames`. In `dev` the zone is the public `onek8s.lol`, the only domain.
+  and so do the external zones' names. In `dev` the zone is the public `onek8s.lol`, the only domain.
 
 ## Key Vault
 
@@ -615,8 +615,7 @@ They are the **internal** exposure's: the design keeps internal and external wor
 subscriptions and clusters (decision D52), with the countries as isolation zones inside them - a zone is
 defined for the environment (its vault, DNS and certificate) and run by the cells whose tfvars name it.
 `sub-aks-dev` plays `sub-aks-dev-int`; an external subscription would run `shared/` and the same cluster
-configuration once more with `exposure = "ext"` and the external zones (Traffic Manager only for a
-deployed external zone). The one exception is the public zone `onek8s.lol`, which is created once with
+configuration once more with `exposure = "ext"` and the external zones. The one exception is the public zone `onek8s.lol`, which is created once with
 the Azure CLI in `rg-onek8s-dns`, outside every state, so that its name servers - which the registrar
 points at - outlive any rebuild.
 
@@ -628,12 +627,11 @@ while they stay. `shared/` is applied first; the clusters look its resources up 
 | --- | --- | --- |
 | Resource group and networks | `rg-aks-dev`; per cell `vnet-dev-int-stateless-az<N>` (`cells`): `address_space` in /24 slots - `snet-system` and per isolation zone (`isolation_zones`) `snet-<zone>-nodes` and `snet-<zone>-ilb` - and `pod_address_space`, a /16 of 100.64.0.0/10 with a /20 per slot - `snet-system-pods`, `snet-<zone>-pods`, delegated to AKS - each behind its own NSG, VNet encryption on; `vnet-aks-dev` for the stateful cluster | Looked up: `resource_group_name`, `virtual_network_name`, `node_subnet_name`, `pod_subnet_name`, `isolation_zones` |
 | Key Vaults | The platform vault `kv-onek8s-gwc-platform` (purge protection, for the customer-managed keys) and one per enabled zone, `kv-onek8s-gwc-<zone>` - both named by the [naming policy](#naming-policy) unless `key_vault_name` / `zone_key_vault_names` name them - with every grant on them: the admin groups' `Key Vault Administrator`, the namespaces' writers and groups | Looked up: `key_vault_name`, `customer_managed_keys` - the cluster's own keys are created in the platform vault |
-| Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network), only an external one `global_hostnames` | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
+| Exposure | `exposure`: `int` in dev - every zone, vault and cell of the stack is of one exposure (OneK8s decision D52: internal and external workloads have a subscription and clusters each); only an internal stack has `internal_dns_zones` (private, linked to every cell's network) | `exposure`: the cluster's zones and managed namespaces are of it; only an internal cluster names `internal_dns_zone_names`, on which external-dns is granted |
 | What a namespace reads the vault as | `id-gwc-dev-shared-kv-<namespace>`, one per namespace, with its read access to its own share | A federated credential named `aks-<cluster>` on each, for the namespace's `key-vault` service account |
 | DNS zone | `onek8s.lol`, public, looked up in `rg-onek8s-dns` (`dns_zone_create = false`, `dns_zone_private = false`). A private zone would be created here and linked to `vnet-aks-dev` | Looked up: `dns_zone_name`. App Routing's managed external-dns runs as `id-gwc-dev-aks-<cluster>-dns`, granted on the zone |
 | Disks of persistent volumes | Created in `rg-aks-dev` by whichever cluster's Azure Disk CSI driver the claim is made in, for the platform's `portable-disk` StorageClass | `portable_disks_enabled`: the cluster identity's role `Portable disks (aks-dev-int-stateful)` on the group, for disks and snapshots only. The stateless clusters - `persistent_storage_enabled = false`, no CSI drivers - have none |
 | Container registry | `acronek8sdev` (`container_registry_name`): the images, which the registry builds itself with ACR tasks from the apps' public repositories at a pinned commit (`container_registry_builds`, such as `aks-hello:0.2.0` from github.com/onek8s/aks-hello) - nobody pushes, and no app repository holds an Azure credential. Not part of the landing zone. The tier follows the environment (`container_registry_sku`, design D62): Premium with a private endpoint and no public network access in `prd`, Basic on its public endpoint (Entra ID only) everywhere else - Azure offers private endpoints on Premium alone | Looked up: `container_registry_name`. `AcrPull` for the kubelet identity, so pods need no image pull secret |
-| Hostnames every cluster serves | `global_hostnames`: `hello.ext-fi.dev.onek8s.lol`, a CNAME to an Azure Traffic Manager profile that weights the app's hostname in each cell - an A record of that cell's ext-fi gateway - alike and leaves out one whose probe fails | Each cell serves the hostname on its ext-fi Gateway; the route that names it tells its external-dns to leave the record alone |
 | The cluster | | `aks-dev-<cluster>`, run by `id-gwc-dev-aks-<cluster>`; its node resource group, which AKS deletes with it |
 
 The names say which is which: a shared resource carries `shared` - or, for the zones, the
@@ -683,12 +681,11 @@ its type. Its defaults are the lab's names, so the lab's tfvars name almost noth
 | `private_endpoint`, `network_interface` | `pe-{name}`, `nic-{name}` | `pe-kv-onek8s-gwc-platform`, `nic-pe-kv-onek8s-gwc-platform` |
 | `disk_encryption_set` | `des-{name}` | `des-aks-dev-int-stateless-az3` |
 | `consumption_budget` | `budget-{environment}` | `budget-dev` |
-| `traffic_manager_profile` | `{domain}-{environment}-{name}` | (`onek8s-lol-dev-hello-ext-fi-dev`, external only) |
 | `ai_services` | `ais-onek8s-{environment}-{name}` | `ais-onek8s-dev-agents` |
 
 The placeholders are `{environment}`, `{exposure}` (empty without one), `{location}`,
 `{location_code}` (the region's short code, `naming.location_codes` over the built-in list),
-`{name}` and `{domain}` (Traffic Manager's DNS zone). An empty placeholder leaves no stray hyphen; a
+and `{name}`. An empty placeholder leaves no stray hyphen; a
 registry name loses everything but letters and digits; every name is checked against its type's Azure
 rules at plan time, and an unknown type or placeholder fails the plan (output `names`). A variable that
 names a resource itself (`resource_group_name`, `key_vault_name`, `zone_key_vault_names`,
@@ -699,7 +696,7 @@ stated in its tfvars as before - the cluster stack takes the same policy for its
 disk encryption set, and `environment` when the cluster's name does not carry it in its second segment.
 
 **A real estate's policy is not kept here.** Some of these names are global - Key Vault, the
-registry, the AI Services subdomain, Traffic Manager - and a published convention tells anyone which
+registry, the AI Services subdomain - and a published convention tells anyone which
 name the next vault will take. Keep the policy as JSON outside Git and give it to both stacks:
 
 ```json

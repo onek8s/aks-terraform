@@ -20,8 +20,8 @@ name: Isolation tests
 #   - Forbidden manifests (R8, R10, R11, R15, R17, R22, R23, R26, R29): each manifest of the policy table is
 #     sent as a server-side dry run. Rules in effect `deny` must refuse it; rules still in audit (the
 #     build tenant, until phase 3) are reported as AUDIT, and must at least be in the cluster.
-#   - From the internet (R22, R24): the external application's names answer /healthz over HTTPS, in
-#     the cell and behind Traffic Manager; plain HTTP does not.
+#   - From the internet (R22, R24): the external application's names - its own, from its home cell,
+#     and the cell's - answer /healthz over HTTPS; plain HTTP does not.
 #   - Supply chain (R9, R15): the registry has no admin user and no anonymous pull, and the cell's
 #     kubelet identity may only pull from it; Image Integrity's Ratify runs as the identity
 #     aks-terraform federates and its configuration is healthy; every image in the registry and every

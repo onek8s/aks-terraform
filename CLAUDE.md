@@ -10,7 +10,7 @@ something here changes; history lives in Git and in the design's tags (v1.15 is 
 | Repo | Role |
 |---|---|
 | `onek8s.github.io` | The requirements and the design. `requirements/0.x` (`0.2-requirements.md`, `0.3-acceptance-criteria.md`) are human-owned: a change needs olljanat's approval. `design/<part>.<page>-*.md` (e.g. `design/2.3-node-pools.md`, `design/7.2-decisions.md`, `design/7.3-open-questions.md`) is AI-owned, reviewed by olljanat-ai. Code follows the design; change it when a decision changes it. Sections were renumbered on 2026-10-17 (#58, #61; mappings in that repo's CLAUDE.md) - older notes and commits cite the old numbers. |
-| `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5), what an environment's clusters share (`shared/`: cell VNets + NSGs + route tables, platform and zone Key Vaults, private DNS, Traffic Manager, ACR) and the tenants (`tenants/`, a state of its own: one catalogue file per tenant). All deployment and status workflows live here. |
+| `aks-terraform` (this one) | The clusters (root module on the registry AVM AKS module 0.8.5), what an environment's clusters share (`shared/`: cell VNets + NSGs + route tables, platform and zone Key Vaults, private DNS, ACR) and the tenants (`tenants/`, a state of its own: one catalogue file per tenant). All deployment and status workflows live here. |
 | `aks-fluxcd-platform` | What Flux deploys into every cluster: isolation zones (Gateway, ESO, Cilium), the autoscaler's priority expander, external-dns, tenants. `clusters/<cluster>/` per cluster. |
 | `aks-fluxcd-example` | An application team's repo (namespace `<zone>-example`, app aks-hello). |
 | `azure-landing-zone` | Build tenant, ALZ, hub (labfw), AKS policy assignments, the per-application firewall rules. No AKS clusters. |
@@ -233,8 +233,9 @@ or a loop over the runs API (long foreground `sleep` is blocked).
 - **One cell network: Azure CNI Pod Subnet** (dynamic IP allocation, Cilium); overlay is gone (v2.0, D79), node
   subnet is not offered. **Classic zone pools with the cluster autoscaler until NAP supports the pod subnet.** **No AKS
   Automatic.** The lab is one cell.
-- **Traffic Manager, not Front Door.** External zones get a public LB per zone per cell; one Traffic Manager profile
-  per global hostname (Subnet routing with nested Priority profiles in the design; Weighted in a lab).
+- **No Traffic Manager and no Front Door** (design v4.13 trial, the user): every application, external too, runs in
+  one home cell, reached by its zone's gateway (a public LB per external zone per cell) and moved by the migration
+  workflow; its own name is published by the home cell's managed external-dns.
 - **Gateway API implementation: App Routing's `approuting-istio` only** (`gateways_enabled`; Traefik removed): sidecar-less
   istiod, an Envoy Deployment + LB + HPA min 2 + PDB per Gateway, shaped by the ConfigMap in `parametersRef`; no rate
   limits / request size limits / EnvoyFilter; istiod requests 2 x 500m/2 GiB, not tunable, Azure/AKS#5939.

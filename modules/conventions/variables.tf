@@ -39,14 +39,13 @@ policy states only where it departs from them. A template is a resource name wit
   `{location}`      the Azure region (`germanywestcentral`)
   `{location_code}` the region's short code (`gwc`, from location_codes)
   `{name}`          what tells this resource from the others of its type (`platform`, a zone, a cell)
-  `{domain}`        the DNS zone, dots as hyphens (Traffic Manager profiles only)
 
 An empty placeholder leaves no stray hyphen: runs of hyphens become one and none is left at either end.
 A type whose names allow no hyphens (`container_registry`) loses every character but letters and
 digits. Every name is checked against its type's Azure rules at plan time.
 
 A real estate's policy is not kept in this repository: some of these names are global - Key Vault,
-container registry, AI Services subdomain, Traffic Manager - and a published convention lets anyone
+container registry, AI Services subdomain - and a published convention lets anyone
 take the next one first. Pass it as a variables file outside Git (`naming.auto.tfvars.json`, ignored
 here) or, in the Deploy workflow, as the `dev` environment's secret NAMING_POLICY - see the README,
 "Naming policy".
@@ -56,11 +55,10 @@ DESCRIPTION
 
 variable "names" {
   type = map(object({
-    type   = string
-    name   = optional(string, "")
-    domain = optional(string, "")
+    type = string
+    name = optional(string, "")
   }))
   default     = {}
-  description = "The names the caller needs, by a key of its own: each a resource `type` of the policy, with its `{name}` (and `{domain}`). The `names` output answers with the same keys."
+  description = "The names the caller needs, by a key of its own: each a resource `type` of the policy, with its `{name}`. The `names` output answers with the same keys."
   nullable    = false
 }

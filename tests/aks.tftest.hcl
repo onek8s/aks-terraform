@@ -232,7 +232,7 @@ run "refuses_a_naming_policy_with_an_unknown_placeholder" {
   command = plan
 
   variables {
-    naming = { templates = { traffic_manager_profile = "tm-{region}" } }
+    naming = { templates = { key_vault = "kv-{region}" } }
   }
 
   expect_failures = [output.names]
