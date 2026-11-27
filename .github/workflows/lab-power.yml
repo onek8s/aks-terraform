@@ -134,12 +134,15 @@ jobs:
             done
           }
           wait_flux_suspended() { # <cluster> true|false : until every Flux Kustomization in the cluster says so, 5 min
+            # A parent (`platform-platform`) whose apply was still running when it was suspended applies its children once more
+            # and takes the patched field back (2026-11-27: nine of them), so whatever is not there yet is patched again.
             local i other
             for i in $(seq 1 20); do
               other="$(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq -r --argjson want "$2" '[.items[] | select((.spec.suspend // false) != $want) | .metadata.namespace + "/" + .metadata.name] | join(" ")')"
               [ -z "$other" ] && { echo "$1: every Flux Kustomization suspend=$2"; return 0; }
-              echo "$1: not yet suspend=$2: $other"
+              echo "$1: not yet suspend=$2, patched again: $other"
               sleep 15
+              flux_suspend_children "$1" "$2"
             done
             echo "::error::$1: Flux Kustomizations not at suspend=$2: $other"; return 1
           }
