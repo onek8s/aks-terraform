@@ -69,6 +69,11 @@ output "ai_foundry" {
   value       = var.ai_foundry == null ? null : { resource = azurerm_cognitive_account.agents[0].name, model = try(azapi_resource.agents_model[0].name, null), openai_models = keys(azurerm_cognitive_deployment.agents_openai) }
 }
 
+output "flux_webhook_urls" {
+  description = "Per cell, the URL on api_management that its Flux webhook receivers answer below, as `<url>/hook/<digest>`: what a GitHub or Azure DevOps webhook points at. Empty without api_management."
+  value       = { for cell, api in azurerm_api_management_api.flux_webhook : cell => "${data.azurerm_api_management.flux_webhooks[0].gateway_url}/${api.path}" }
+}
+
 output "names" {
   description = "Every name this configuration took from the naming policy (var.naming), by what it names - the variables that name a resource themselves are not among them."
   value       = merge(module.conventions.names, module.endpoint_names.names)

@@ -45,6 +45,16 @@ provider "azurerm" {
   features {}
 }
 
+# The existing API Management instance's subscription (`api_management`). Without one it is the
+# environment's subscription and does nothing.
+provider "azurerm" {
+  alias                           = "api_management"
+  resource_provider_registrations = "none"
+  subscription_id                 = coalesce(try(local.api_management.subscription_id, null), var.subscription_id, "00000000-0000-0000-0000-000000000000")
+
+  features {}
+}
+
 provider "azapi" {
   subscription_id = var.subscription_id
 }

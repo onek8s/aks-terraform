@@ -172,6 +172,29 @@ DESCRIPTION
   nullable    = false
 }
 
+variable "api_management" {
+  type = object({
+    id   = string
+    path = optional(string, "flux")
+  })
+  default     = null
+  description = <<DESCRIPTION
+An API Management instance that exists already, by resource ID (any subscription the deploying
+identity may write APIs in), to publish every cell's Flux webhook receiver on: an API per cell at
+`<path>/<cell>`, its POST `/hook/{digest}` sent on to `https://flux-webhook-<cell>.<dns_zone_name>`
+(api_management.tf). Needs `flux_github_webhook` and `dns_zone_name`. Null: no APIM (the lab).
+DESCRIPTION
+
+  validation {
+    condition     = var.api_management == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.ApiManagement/service/[^/]+$", try(var.api_management.id, "")))
+    error_message = "api_management.id must be an API Management instance's resource ID."
+  }
+  validation {
+    condition     = var.api_management == null || can(regex("^[a-z0-9][a-z0-9-]*$", try(var.api_management.path, "")))
+    error_message = "api_management.path must be lower-case letters, digits and hyphens."
+  }
+}
+
 variable "isolation_test_namespaces" {
   type        = list(string)
   default     = []
