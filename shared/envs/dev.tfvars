@@ -216,6 +216,10 @@ platform_viewer_group_object_ids = ["75353964-033e-4ea2-8ec4-f44e89fee6a6"]
 # polls (every minute). An environment with external cells turns it on for their platform gateways.
 flux_github_webhook = false
 
+# No API Management in front of the receivers either (api_management, api_management.tf): APIM costs
+# too much for the lab. Elsewhere name an existing instance:
+#   api_management = { id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ApiManagement/service/<apim>" }
+
 # The Isolation tests read this namespace's fixture secret as its own identity (R10)
 isolation_test_namespaces = ["int-se-example"]
 

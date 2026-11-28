@@ -8,6 +8,10 @@ mock_provider "azurerm" {
 }
 
 mock_provider "azurerm" {
+  alias = "api_management"
+}
+
+mock_provider "azurerm" {
   mock_data "azurerm_resource_group" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aks-test"
@@ -1322,4 +1326,64 @@ run "a_team_namespace_gets_the_webhook_token_in_its_share" {
     condition     = azurerm_key_vault_secret.flux_github_webhook_namespace["example"].name == "example--github-webhook-token"
     error_message = "The example namespace should get the webhook token in its own share of the vault."
   }
+}
+
+run "no_api_management_routes_without_an_instance" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_api_management_api.flux_webhook) == 0 && length(data.azurerm_api_management.flux_webhooks) == 0
+    error_message = "Without api_management nothing should be published on API Management."
+  }
+}
+
+run "an_existing_api_management_gets_a_webhook_route_per_cell" {
+  command = plan
+
+  variables {
+    flux_github_webhook = true
+    key_vault_namespaces = {
+      flux-system = {}
+    }
+    dns_zone_name = "contoso.com"
+    cells = {
+      dev-int-stateless-az1 = { address_space = "10.100.0.0/16", pod_address_space = "100.64.0.0/16" }
+      dev-int-stateless-az2 = { address_space = "10.101.0.0/16", pod_address_space = "100.65.0.0/16" }
+    }
+    isolation_zones = {
+      int-se = { exposure = "int", index = 2 }
+    }
+    api_management = {
+      id = "/subscriptions/99999999-9999-9999-9999-999999999999/resourceGroups/rg-apim/providers/Microsoft.ApiManagement/service/apim-shared"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      length(azurerm_api_management_api.flux_webhook) == 2,
+      azurerm_api_management_api.flux_webhook["dev-int-stateless-az1"].api_management_name == "apim-shared",
+      azurerm_api_management_api.flux_webhook["dev-int-stateless-az1"].resource_group_name == "rg-apim",
+      azurerm_api_management_api.flux_webhook["dev-int-stateless-az1"].path == "flux/dev-int-stateless-az1",
+      azurerm_api_management_api.flux_webhook["dev-int-stateless-az1"].service_url == "https://flux-webhook-dev-int-stateless-az1.contoso.com",
+      azurerm_api_management_api.flux_webhook["dev-int-stateless-az2"].subscription_required == false,
+      azurerm_api_management_api_operation.flux_webhook["dev-int-stateless-az2"].method == "POST",
+      azurerm_api_management_api_operation.flux_webhook["dev-int-stateless-az2"].url_template == "/hook/{digest}",
+    ])
+    error_message = "Every cell should get an API on the named instance that sends POST /hook/{digest} to its platform gateway."
+  }
+}
+
+run "api_management_needs_the_webhook_token" {
+  command = plan
+
+  variables {
+    cells = {
+      dev-int-stateless-az1 = { address_space = "10.100.0.0/16", pod_address_space = "100.64.0.0/16" }
+    }
+    api_management = {
+      id = "/subscriptions/99999999-9999-9999-9999-999999999999/resourceGroups/rg-apim/providers/Microsoft.ApiManagement/service/apim-shared"
+    }
+  }
+
+  expect_failures = [azurerm_api_management_api.flux_webhook]
 }

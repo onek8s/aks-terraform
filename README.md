@@ -873,6 +873,13 @@ hub's firewall a public load balancer cannot answer, so the `dev` cells - intern
 poll every minute. GitHub delivers over HTTP/1.1, which the gateway's `h2`-only ALPN does not refuse
 (design V29), so the receiver is the platform's one HTTP/1.1 path.
 
+`shared/`'s `api_management` (off by default, none in the lab: APIM costs too much for it) publishes
+the receivers on an API Management instance that exists already, named by resource ID: an API per cell
+at `flux/<cell>` whose POST `/hook/{digest}` goes on to the cell's `flux-webhook-<cell>.<dns_zone_name>`,
+with no subscription key. Its output `flux_webhook_urls` is what a GitHub or Azure DevOps webhook points
+at, followed by the Receiver's path; Azure DevOps posts to a `generic` Receiver (Flux has no Azure
+DevOps type). APIM has to reach each cell's platform gateway.
+
 The `platform` Kustomization is also given the Azure facts the repository cannot know on its own, as
 Flux [post-build variables][postbuild], so they are never copied into it by hand:
 

@@ -6,6 +6,10 @@
 mock_provider "azurerm" {
   alias = "hub"
 }
+
+mock_provider "azurerm" {
+  alias = "api_management"
+}
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
     defaults = {
